@@ -342,6 +342,41 @@
   animation: senku-pulse-dot 1.8s ease-in-out infinite;
 }
 
+/* Run 26 — jump-to-message flash. A bright emerald ring + tint that
+   HOLDS for the first third so the eye catches it, then fades out
+   over the rest (the store clears the class at 2.4s). For tall blocks
+   whose ring edges sit off-screen, the tint itself carries the
+   "this is the one" signal. */
+@keyframes senku-msg-flash {
+  0% {
+    box-shadow:
+      inset 0 0 0 2.5px rgb(52 211 153 / 0.9),
+      0 0 0 7px rgb(52 211 153 / 0.18);
+    background-color: rgb(52 211 153 / 0.16);
+  }
+  33% {
+    box-shadow:
+      inset 0 0 0 2.5px rgb(52 211 153 / 0.85),
+      0 0 0 7px rgb(52 211 153 / 0.16);
+    background-color: rgb(52 211 153 / 0.14);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 2.5px rgb(52 211 153 / 0),
+      0 0 0 7px rgb(52 211 153 / 0);
+    background-color: transparent;
+  }
+}
+.senku-msg-flash {
+  animation: senku-msg-flash 2.2s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .senku-msg-flash {
+    animation: none;
+    box-shadow: inset 0 0 0 2px rgb(52 211 153 / 0.45);
+  }
+}
+
 /* ── Claude Code "Thinking" animation ───────────────────────
    Motion replicated frame-by-frame from the Claude Code thinking
    GIF (12 frames, 1.00s loop, measured programmatically):

@@ -1,8 +1,12 @@
 "use client";
 
 // SenkuAPI — ⌘K command palette (the power-user launcher).
-// Fuzzy search across actions, models, providers and recent chats.
-// ↑/↓ navigate · ↵ run · esc close. Open with ⌘K / Ctrl+K anywhere.
+// Fuzzy search across actions, models, providers and recent chats —
+// and, since Run 26, LIVE full-text search over the content of every
+// message in every saved conversation ("In your messages"): pick a
+// hit and its chat opens with the matched message scrolled into view
+// and flashed once. ↑/↓ navigate · ↵ run · esc close. Open with
+// ⌘K / Ctrl+K anywhere.
 
 import {
   useCallback,
@@ -19,6 +23,7 @@ import {
   Globe,
   Image as ImageIcon,
   Images,
+  Loader2,
   MessageSquare,
   Pencil,
   RefreshCw,
@@ -26,6 +31,7 @@ import {
   Settings,
   Sparkles,
   Swords,
+  User,
   Zap,
 } from "lucide-react";
 import { useSenku } from "@/lib/store";
@@ -40,7 +46,23 @@ interface PaletteItem {
   icon: ReactNode;
   keywords?: string;
   active?: boolean;
+  /** Run 26 — optional second line (search-hit snippets). When set,
+   *  the row renders two lines; plain items stay single-line. */
+  sub?: ReactNode;
   run: () => void | Promise<void>;
+}
+
+/** One row of /api/messages/search — offsets let the client highlight
+ *  the matched span without shipping/parsing any HTML. */
+interface MessageHit {
+  messageId: string;
+  chatId: string;
+  chatTitle: string;
+  role: string;
+  createdAt: string;
+  snippet: string;
+  matchStart: number;
+  matchEnd: number;
 }
 
 /** Subsequence fuzzy match with contiguous-run bonus. */
@@ -95,6 +117,8 @@ export function CommandPalette({
     newChat,
     selectChat,
     syncModels,
+    // Run 26 — jump-to-message after picking a content-search hit.
+    flashMessage,
   } = useSenku();
   const { toast } = useToast();
 
@@ -102,6 +126,42 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // Run 26 — live full-text message search. Debounced (220ms),
+  // abortable (stale responses can never land), silent on failure
+  // (the palette is still a launcher when the network is down).
+  const [messageHits, setMessageHits] = useState<MessageHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setMessageHits([]);
+      setSearching(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    setSearching(true);
+    const t = window.setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/messages/search?q=${encodeURIComponent(q)}`,
+          { signal: ctrl.signal }
+        );
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as { results?: MessageHit[] };
+        setMessageHits(Array.isArray(data.results) ? data.results : []);
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") setMessageHits([]);
+      } finally {
+        if (!ctrl.signal.aborted) setSearching(false);
+      }
+    }, 220);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(t);
+      setSearching(false);
+    };
+  }, [query]);
 
   // The palette is mounted fresh on every open (parent renders it
   // conditionally), so state starts clean — no reset logic needed.
@@ -365,9 +425,39 @@ export function CommandPalette({
       .map((r) => r.it);
   }, [items, query]);
 
+  // Run 26 — content-search hits lead the list (they are the only
+  // results that actually match INSIDE conversations), then the
+  // fuzzy-matched launcher items. Cursor/refs/enter all read this
+  // combined list.
+  const display: PaletteItem[] = useMemo(() => {
+    if (messageHits.length === 0) return filtered;
+    const dateFmt = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    const hitItems: PaletteItem[] = messageHits.slice(0, 6).map((h) => ({
+      id: `msg-${h.messageId}`,
+      group: "In your messages",
+      label: h.chatTitle,
+      hint: dateFmt.format(new Date(h.createdAt)),
+      icon:
+        h.role === "user" ? (
+          <User className="h-4 w-4" />
+        ) : (
+          <Sparkles className="h-4 w-4" />
+        ),
+      sub: <HitSnippet snippet={h.snippet} start={h.matchStart} end={h.matchEnd} />,
+      run: async () => {
+        await selectChat(h.chatId);
+        flashMessage(h.messageId);
+      },
+    }));
+    return [...hitItems, ...filtered];
+  }, [filtered, messageHits, selectChat, flashMessage]);
+
   // clamped cursor — derived, never stale after filtering
-  const activeIndex = filtered.length
-    ? Math.min(active, filtered.length - 1)
+  const activeIndex = display.length
+    ? Math.min(active, display.length - 1)
     : 0;
 
   // keep the active item in view
@@ -389,15 +479,15 @@ export function CommandPalette({
       close();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => (filtered.length ? (a + 1) % filtered.length : 0));
+      setActive((a) => (display.length ? (a + 1) % display.length : 0));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) =>
-        filtered.length ? (a - 1 + filtered.length) % filtered.length : 0
+        display.length ? (a - 1 + display.length) % display.length : 0
       );
     } else if (e.key === "Enter") {
       e.preventDefault();
-      void runItem(filtered[activeIndex]);
+      void runItem(display[activeIndex]);
     }
   };
 
@@ -430,7 +520,7 @@ export function CommandPalette({
               setQuery(e.target.value);
               setActive(0);
             }}
-            placeholder="Search actions, models, providers, chats…"
+            placeholder="Search actions, models, chats, messages…"
             aria-label="Command palette search"
             className="h-13 w-full bg-transparent py-4 text-[15px] text-zinc-100 outline-none placeholder:text-zinc-500"
           />
@@ -445,12 +535,19 @@ export function CommandPalette({
 
         {/* results */}
         <div className="senku-scroll max-h-[46vh] overflow-y-auto p-2">
-          {filtered.length === 0 ? (
-            <p className="px-3 py-8 text-center text-[13px] text-zinc-500">
-              No results for “{query.trim()}”
-            </p>
+          {display.length === 0 ? (
+            searching ? (
+              <p className="flex items-center justify-center gap-2 px-3 py-8 text-[13px] text-zinc-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                Searching messages…
+              </p>
+            ) : (
+              <p className="px-3 py-8 text-center text-[13px] text-zinc-500">
+                No results for “{query.trim()}”
+              </p>
+            )
           ) : (
-            filtered.map((it, i) => {
+            display.map((it, i) => {
               const showHeader = it.group !== lastGroup;
               lastGroup = it.group;
               return (
@@ -479,8 +576,15 @@ export function CommandPalette({
                     >
                       {it.icon}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-zinc-200">
-                      {it.label}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13.5px] text-zinc-200">
+                        {it.label}
+                      </span>
+                      {it.sub && (
+                        <span className="mt-0.5 block line-clamp-2 text-[11.5px] leading-snug text-zinc-500">
+                          {it.sub}
+                        </span>
+                      )}
                     </span>
                     {it.active && (
                       <span className="shrink-0 rounded-full bg-emerald-400/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
@@ -516,5 +620,31 @@ export function CommandPalette({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Run 26 — search-hit snippet with the matched span highlighted.
+ *  Pure string slicing over offsets from the API — no HTML is ever
+ *  parsed, so message content can never inject markup. */
+function HitSnippet({
+  snippet,
+  start,
+  end,
+}: {
+  snippet: string;
+  start: number;
+  end: number;
+}) {
+  if (start < 0 || end <= start || end > snippet.length) {
+    return <>{snippet}</>;
+  }
+  return (
+    <>
+      {snippet.slice(0, start)}
+      <mark className="rounded-[3px] bg-emerald-400/15 px-0.5 text-emerald-200">
+        {snippet.slice(start, end)}
+      </mark>
+      {snippet.slice(end)}
+    </>
   );
 }

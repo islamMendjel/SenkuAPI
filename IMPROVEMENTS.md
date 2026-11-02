@@ -2624,3 +2624,62 @@ comparison answers came out as pipe-text soup).
   touched files); console clean.
 - A welcome-screen model roster was considered and REJECTED — Run 20's
   engine bay was already removed on user feedback; the welcome stays pure.
+
+## Run 26 — 2026-11-03: THE MEMORY, SEARCHABLE — full-text search over every message you've ever sent or received
+
+**Directive (verbatim):** "very good job, again look at the site first, then innovate. Think
+about the user experience and think outside the box. Make one bold change that improves
+conversions or the look and feel, not a small tweak. Use any tool you have. You must cook
+and ship a change every time." + standing guardrails ("dont make redundant things / only
+improvements and upgrades, correcting wrong things and adding usefull things, cook but not
+break or downgrade").
+
+**First: the reported breakage.** "its not previewing anything" — the sandbox Preview Panel
+was blank because the dev server process had been killed between sessions (port 3000 not
+listening; dev.log showed no crash, just a dead process). Restarted, verified HTTP 200 +
+agent-browser render + clean console + mobile intact. Root cause was environmental, zero
+code was broken.
+
+**Then: observe before innovating.** Full walkthrough — ⌘K palette (works: actions, model
+switch, providers, gallery, limiter), sidebar, chat timeline, Canvas (sandboxed previews,
+honest view-only for js/py), right rail, code-block headers (Preview only on the 5
+previewable langs — correct by design). One genuine gap surfaced: **the palette searches
+chat TITLES only** (last 8) and the sidebar input filters titles too — message CONTENT was
+unreachable. 23 conversations of real knowledge, and no way to find anything said inside
+them. (`/api/search` turned out to be web search — not conversation search.)
+
+**The bold change — content search with jump-to-message:**
+- **API.** `GET /api/messages/search?q=` — Prisma full-text `contains` over Message.content,
+  SAVED chats only (temporary chats are scratch space, not memory), newest first, capped 30.
+  Returns snippets (±90 chars, whitespace collapsed) with exact `matchStart/matchEnd`
+  offsets — the client highlights by slicing strings, so message content can never inject
+  HTML. `q < 2` → 400.
+- **Palette ("In your messages").** Debounced 220 ms, AbortController-guarded (stale
+  responses can never land), silent on failure (the launcher keeps working offline). Hits
+  lead the list: chat title, role icon (user = User, assistant = Sparkles), date hint, and
+  a two-line snippet with the matched span in emerald. Pick one → its chat opens → the
+  matched message scrolls to center and flashes. Placeholder now honest: "Search actions,
+  models, chats, messages…".
+- **Jump + flash.** Store gains `highlightMessageId` + `flashMessage` (cleared by every
+  navigation so a stale id never flashes in the wrong chat). ChatTimeline wraps each
+  message in a `data-message-id` anchor; the flash centers via double-rAF (the enter-chat
+  bottom-scroll settles first) and plays a 2.2 s emerald ring+tint that HOLDS for the first
+  third, then fades (brightened after the first on-site test — a signal you have to squint
+  at is not a signal). Reduced-motion gets a static ring. `prefers-reduced-motion` honest.
+- **Discoverability.** Welcome hint now reads "Press ⌘K to search every message, model &
+  action" — the feature advertises itself.
+
+**Verified (all real):**
+- API: `q=debounce` → 4 hits (user + assistant) with correct offsets; `q=d` → 400.
+- Desktop: palette shows "In your messages" with emerald-highlighted snippets; Enter →
+  right chat opens, matched message centered, `.senku-msg-flash` present, cleared after
+  2.4 s (programmatic). User-message hit AND assistant-message hit both verified.
+- Negative case: "my five" (phrase that doesn't exist) → zero content hits, fuzzy fallback
+  intact; "flashx" still resolves the model — the launcher path is unbroken.
+- Mobile 390px: palette search + jump + flash all work; Run 25.1's single-row composer
+  untouched.
+- Golden path re-verified after the store/timeline changes: live "Say OK" → streamed GLM
+  5.3 reply (2.2k tokens, 131k→134k) — no regression.
+- Welcome + hint render correctly; console clean; dev.log 200s only; lint 0 errors; tsc 8
+  pre-existing (none in touched files). Test message sent in a TEMPORARY chat — excluded
+  from search by design, nothing to clean up.

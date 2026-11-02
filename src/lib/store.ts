@@ -132,6 +132,17 @@ export interface ChatListItem {
   updatedAt: string;
 }
 
+/** Run 27 — Chrome's beforeinstallprompt event. Not in the standard
+ *  DOM typings, so the PWA registrar and the profile menu share this
+ *  minimal, honest shape. */
+export interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{
+    outcome: "accepted" | "dismissed";
+    platform: string;
+  }>;
+}
+
 interface UserInfo {
   name: string;
   email: string;
@@ -219,6 +230,25 @@ interface SenkuState {
   imageCount: number;
   openGallery: () => void;
   closeGallery: () => void;
+
+  /** Run 26 — when set, the timeline scrolls this message into view
+   *  and flashes it once (jump-to-message from ⌘K content search).
+   *  The timeline clears it after the flash plays; every conversation
+   *  navigation (newChat/selectChat) also clears it so a stale id
+   *  from a previous chat can never flash in the wrong place. */
+  highlightMessageId: string | null;
+  flashMessage: (id: string | null) => void;
+
+  /** Run 27 — PWA install. `installPrompt` stashes Chrome's
+   *  beforeinstallprompt event (fired once criteria — manifest, icons,
+   *  service worker, HTTPS — are met) so the profile menu can offer a
+   *  one-click "Install App". `pwaStandalone` is true when the app is
+   *  already running installed (display-mode: standalone or iOS
+   *  navigator.standalone) — the install entry hides itself then. */
+  installPrompt: BeforeInstallPromptEvent | null;
+  pwaStandalone: boolean;
+  setInstallPrompt: (ev: BeforeInstallPromptEvent | null) => void;
+  setPwaStandalone: (v: boolean) => void;
 
   /** Upload files for extraction — each becomes a chip showing what
    *      the gateway read (or why it couldn't be read). */
@@ -332,6 +362,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
   turnStyle: null,
   canvasOpen: false,
   canvasSource: null,
+  highlightMessageId: null,
   galleryOpen: false,
   imageCount: 0,
 
@@ -677,6 +708,15 @@ export const useSenku = create<SenkuState>((set, get) => ({
   openGallery: () => set({ galleryOpen: true }),
   closeGallery: () => set({ galleryOpen: false }),
 
+  // Run 26 — jump-to-message target for ⌘K content-search hits.
+  flashMessage: (id) => set({ highlightMessageId: id }),
+
+  // Run 27 — PWA install plumbing (see interface for the contract).
+  installPrompt: null,
+  pwaStandalone: false,
+  setInstallPrompt: (ev) => set({ installPrompt: ev }),
+  setPwaStandalone: (v) => set({ pwaStandalone: v }),
+
   newChat: () =>
     // Every new chat resets to the default model (glm-5.3) —
     // the user can then switch freely for that conversation.
@@ -685,6 +725,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
       messages: [],
       pendingAttachments: [],
       galleryOpen: false,
+      highlightMessageId: null,
       viewEpoch: s.viewEpoch + 1,
       model: s.models.includes(DEFAULT_MODEL)
         ? DEFAULT_MODEL
@@ -705,6 +746,9 @@ export const useSenku = create<SenkuState>((set, get) => ({
         temporary: false,
         // Run 23 — entering a conversation always leaves the gallery.
         galleryOpen: false,
+        // Run 26 — flash target arrives separately (flashMessage AFTER
+        // the fetch resolves); a plain navigation never inherits one.
+        highlightMessageId: null,
         // Run 22 guard: image chats store "image-forge" as their model
         // (honest in exports/search) but the composer may never ADOPT
         // it — a text follow-up would request a model the pool doesn't

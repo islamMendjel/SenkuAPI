@@ -19,6 +19,7 @@ import Image from "next/image";
 import {
   ChevronRight,
   CircleHelp,
+  Download,
   FileJson,
   FileText,
   Folder,
@@ -30,6 +31,7 @@ import {
   Pencil,
   Search,
   Settings,
+  Smartphone,
   Trash2,
 } from "lucide-react";
 import { useSenku, type ChatListItem } from "@/lib/store";
@@ -77,8 +79,48 @@ export function Sidebar({
     openGallery,
     closeGallery,
     setSidebarOpen,
+    // Run 27 — one-click "Install App" from the profile menu.
+    installPrompt,
+    pwaStandalone,
+    setInstallPrompt,
   } = useSenku();
   const { toast } = useToast();
+
+  // Run 27 — install affordance. Chrome/Edge/Brave fire
+  // beforeinstallprompt (captured in the store by PWARegistrar) and
+  // the item becomes a real one-click install. iOS Safari has NO
+  // programmatic prompt — there the item is an honest hint pointing
+  // at Share → "Add to Home Screen". Either way it hides itself once
+  // the app already runs installed (standalone).
+  const isIOS =
+    typeof navigator !== "undefined" &&
+    (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      // iPadOS 13+ masquerades as desktop Safari
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+
+  const handleInstallClick = async () => {
+    if (installPrompt) {
+      const ev = installPrompt;
+      setInstallPrompt(null); // prompt() is one-shot per event
+      try {
+        await ev.prompt();
+        const { outcome } = await ev.userChoice;
+        toast({
+          description:
+            outcome === "accepted"
+              ? "Installing SenkuAPI — it will land on your home screen / desktop."
+              : "Install dismissed — you can install any time from this menu.",
+        });
+      } catch {
+        toast({ description: "Install was cancelled." });
+      }
+      return;
+    }
+    toast({
+      description:
+        'In Safari: tap Share (⬆︎), then "Add to Home Screen" — the app installs from there.',
+    });
+  };
 
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [recentOpen, setRecentOpen] = useState(true);
@@ -467,7 +509,7 @@ export function Sidebar({
       </nav>
 
       {/* User card + settings popover */}
-      <div className="border-t border-zinc-800/80 p-3">
+      <div className="border-t border-zinc-800/80 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#7c5cff] to-[#4aa8ff] text-[13px] font-semibold text-white">
             {user.name.charAt(0).toUpperCase()}
@@ -502,6 +544,19 @@ export function Sidebar({
                 <Settings className="h-4 w-4 text-zinc-400" />
                 Settings
               </DropdownMenuItem>
+              {!pwaStandalone && (installPrompt || isIOS) && (
+                <DropdownMenuItem
+                  className="gap-2.5 py-2 text-[13px]"
+                  onClick={() => void handleInstallClick()}
+                >
+                  {installPrompt ? (
+                    <Download className="h-4 w-4 text-emerald-400" />
+                  ) : (
+                    <Smartphone className="h-4 w-4 text-zinc-400" />
+                  )}
+                  {installPrompt ? "Install App" : "Add to Home Screen"}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 className="gap-2.5 py-2 text-[13px]"
                 onClick={() =>

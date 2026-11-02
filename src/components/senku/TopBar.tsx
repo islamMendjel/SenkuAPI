@@ -84,7 +84,7 @@ export function TopBar({
     : "Token limiter status";
 
   return (
-    <header className="relative z-10 flex h-12 shrink-0 items-center justify-between gap-2 px-2 sm:px-4">
+    <header className="relative z-10 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center justify-between gap-2 px-2 pt-[env(safe-area-inset-top)] sm:px-4">
       {/* left: sidebar toggle + ⌘K launcher */}
       <div className="flex items-center gap-1">
         <button

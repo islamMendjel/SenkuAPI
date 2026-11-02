@@ -28,6 +28,8 @@ import { InputBar } from "@/components/senku/InputBar";
 import { TokenLimiterDialog } from "@/components/senku/TokenLimiterDialog";
 import { ProvidersDialog } from "@/components/senku/ProvidersDialog";
 import { CommandPalette } from "@/components/senku/CommandPalette";
+import { PWARegistrar } from "@/components/senku/PWARegistrar";
+import { SenkuSplash } from "@/components/senku/SenkuSplash";
 
 /** Hover-peek timings (Run 13).
  * OPEN — how long the cursor must rest on the toggle before the
@@ -290,6 +292,13 @@ export function SenkuApp() {
         onManageProviders={() => setProvidersOpen(true)}
       />
       <ProvidersDialog open={providersOpen} onOpenChange={setProvidersOpen} />
+
+      {/* Run 27 — PWA plumbing: service-worker registration +
+          beforeinstallprompt capture (renders nothing), and the
+          branded launch splash that covers the cold-start flash and
+          fades once the app is booted. */}
+      <PWARegistrar />
+      <SenkuSplash />
 
       {/* keep `temporary` referenced for aria live region */}
       <span className="sr-only" aria-live="polite">

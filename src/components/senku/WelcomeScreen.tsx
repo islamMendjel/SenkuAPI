@@ -293,7 +293,7 @@ export function WelcomeScreen() {
           <kbd className="rounded border border-zinc-700 bg-zinc-800/70 px-1.5 py-0.5 font-sans text-[10px] font-medium text-zinc-400">
             ⌘K
           </kbd>
-          to search chats, models &amp; actions
+          to search every message, model &amp; action
         </p>
       </div>
     </div>

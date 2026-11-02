@@ -868,7 +868,7 @@ export function TemporaryBanner() {
 }
 
 export function ChatTimeline() {
-  const { messages } = useSenku();
+  const { messages, highlightMessageId, flashMessage } = useSenku();
   const { toast } = useToast();
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -963,25 +963,66 @@ export function ChatTimeline() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [count, lastId, stickRef]);
 
+  // Run 26 — jump-to-message from ⌘K content search. When the store
+  // carries a highlight target AND that message is mounted, center it
+  // (double-rAF so the enter-chat bottom-scroll settles first) and
+  // hold the flash ring ~2.4s before clearing. If the message isn't
+  // mounted yet (chats load async), the effect re-arms on the next
+  // messages update — no timers, no polling.
+  useEffect(() => {
+    if (!highlightMessageId) return;
+    const el = scrollRef.current?.querySelector(
+      `[data-message-id="${highlightMessageId}"]`
+    );
+    if (!el) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    });
+    const t = window.setTimeout(() => flashMessage(null), 2400);
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      window.clearTimeout(t);
+    };
+  }, [highlightMessageId, messages, flashMessage]);
+
   return (
     <div ref={scrollRef} className="senku-scroll flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl space-y-6 px-4 pb-6 pt-4">
         {messages.map((m, i) =>
           m.role === "user" ? (
-            <UserMessage key={m.id} message={m} />
+            <div
+              key={m.id}
+              data-message-id={m.id}
+              className={`rounded-2xl ${
+                m.id === highlightMessageId ? "senku-msg-flash" : ""
+              }`}
+            >
+              <UserMessage message={m} />
+            </div>
           ) : (
             /* Slot-stable key: the server reconciles the assistant
                message id at "done" — keying by id would remount the
                message right then and dump the typewriter's remaining
                reveal. The slot never shifts mid-turn (messages are
                append-only while streaming). */
-            <AssistantMessage
+            <div
               key={`slot-${i}`}
-              message={m}
-              isLast={i === messages.length - 1}
-              speech={speech}
-              onToggleSpeech={(msg) => void toggleSpeech(msg)}
-            />
+              data-message-id={m.id}
+              className={`rounded-2xl ${
+                m.id === highlightMessageId ? "senku-msg-flash" : ""
+              }`}
+            >
+              <AssistantMessage
+                message={m}
+                isLast={i === messages.length - 1}
+                speech={speech}
+                onToggleSpeech={(msg) => void toggleSpeech(msg)}
+              />
+            </div>
           )
         )}
         <div ref={bottomRef} />
