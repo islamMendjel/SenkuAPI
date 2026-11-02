@@ -2094,6 +2094,97 @@ moment both intact.
 
 ---
 
+## Run 21 — 2026-11-03: REGENERATE + ANSWER VARIANTS — the missing standard capability (and the lineup revert)
+
+**User request.** "Remove the lineup thing, its breaking the beauty
+and redundant… don't make redundant things — only improvements and
+upgrades, correcting wrong things and adding useful things, cook
+but not break or downgrade."
+
+**Part 1 — the revert (user is right).** Run 20's engine bay was
+removed cleanly: WelcomeScreen restored to the Run 19 cascade
+(starters back at 140–320ms), `senku-pop` / `senku-no-bar` CSS and
+their reduced-motion entries deleted, zero orphan references (rg
+verified). The composer picker remains the single owner of model
+switching — the welcome stays pure. Lesson logged: on this welcome
+screen, adding sections is a DOWNGRADE; the beauty is the restraint.
+(Run 20's entry stays above — history is history.)
+
+**Observed first.** Fresh walkthrough post-revert, then a gap scan
+against every mainstream chat UI: the app has copy, edit-&-resend,
+TTS, Stop, duel, search — but NO regenerate for completed answers.
+Retry existed only on the error card. A bad answer had no one-click
+second chance — the most standard expectation in chat products, and
+a daily-use conversion lever (a disappointing answer is where users
+churn).
+
+**The change: REGENERATE with variant history.**
+- A refresh icon in the last answer's provenance row: one click
+  re-rolls the turn. The current answer is snapshotted FIRST —
+  nothing is ever lost.
+- A compact `‹ 2/4 ›` navigator appears once a turn has history;
+  flipping swaps the answer AND its full receipt (model · pool ·
+  tokens · cache · effort) — per-variant honesty, not just text.
+- Variants persist (new `variants` JSON + `variantIndex` columns on
+  Message, `/api/chat/variant` POST that mirrors the active variant
+  into the row's content/model so every existing reader — export,
+  search, canvas — stays correct). Chains accumulate across
+  sessions and survive reload.
+- Server-truth cleanup: regenerate reuses the edit flow's
+  `/api/chat/truncate` primitive (messageId only, content
+  untouched) to delete the superseded answer row — verified in the
+  DB that NO duplicate turns appear after regen + reload.
+- Temporary chats: everything works, zero DB writes (regen is
+  local-only there, like the sends).
+- Errors keep their dedicated Retry card (regenerate hides on
+  error/duel/runner-up messages — no overlapping recovery paths).
+
+**Two real bugs caught during verification (fixed before ship):**
+1. DUPLICATE-ROW BUG (found by DB inspection, not the UI): the first
+   cut dropped the old answer only from the local timeline, leaving
+   its row in SQLite — a reload would have shown the same turn
+   twice. Exactly the "cook but not break" failure mode the user
+   warned about. Fixed via truncate-before-restream; DB now shows
+   exactly one assistant row per turn.
+2. STALE PRISMA CLIENT: `/api/chat/variant` 500'd with "Unknown
+   argument `variants`" — db:push generated a new client but the
+   running dev server kept the old one (its SELECTs didn't even
+   include the new columns). Dev-server restart fixed it. Lesson:
+   after schema changes, restart before trusting runtime results.
+
+**Bonus correction (wrong things):** the 5 pre-existing tsc errors
+in `selectChat` (`altContent`/`altModel` not on UIMessage) — the
+fetched rows are now properly typed with unknown-narrowing, and the
+new variants columns flow through the GET route parsed. **tsc:
+13 → 8 errors, zero new.**
+
+**Verified (all real):**
+- Send → regenerate → `2/2` nav appears; the fresh answer's receipt
+  renders (cache: hit) while variant 1 carries the ORIGINAL receipt
+  (2.4k tokens · cache: miss) — flipping swaps both text and receipt.
+- DB row: `variantIndex: 1`, `vCount: 2`, per-variant cached flags
+  `[false, true]`; exactly one assistant row (no duplicates).
+- Reload → sidebar → chat opens with `1/2` + original receipt +
+  regenerate available on restored chats; regen there grows the
+  chain to `4/4` (`cachedFlags [false,true,false,true]`), still
+  exactly one row.
+- Temporary chat: regen works, nav `2/2`, 0 DB rows for the turn.
+- Mobile 390×844: nav fits, `scrollWidth == 390`, sidebar/chat flows
+  intact; desktop welcome byte-identical to Run 19 (lineup gone).
+- Hydration check after the one dev-time mismatch: 0 warnings on
+  welcome load, welcome reload, chat open, chat reload (the single
+  warning was a Turbopack hot-reload artifact, not reproducible).
+- lint 0 errors (2 pre-existing script warnings), page errors none,
+  dev.log clean.
+
+**Scope discipline:** schema +2 columns, one new small API route,
+store actions (`regenerate`, `navigateVariant`) reusing the existing
+streamTurn/retryLast/truncate machinery, one meta-row UI addition.
+No redesign, no removed features, welcome untouched — pure
+capability upgrade on the surface users live on.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we

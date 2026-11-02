@@ -27,6 +27,8 @@ export async function GET(
       createdAt: m.createdAt.toISOString(),
       sources: m.sources ? JSON.parse(m.sources) : null,
       attachments: m.attachments ? JSON.parse(m.attachments) : null,
+      // Regenerate variant history (JSON column → array).
+      variants: m.variants ? JSON.parse(m.variants) : null,
     })),
   });
 }

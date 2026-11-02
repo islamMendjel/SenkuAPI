@@ -2,7 +2,8 @@
 
 // SenkuAPI — message timeline: markdown rendering, message editing,
 // quiet hover provenance line, cached badges, inline error recovery
-// (retry · switch model) and capped search sources.
+// (retry · switch model), answer regenerate with variant history
+// (‹ 2/3 › navigation, per-answer receipts) and capped search sources.
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
@@ -15,6 +16,8 @@ import {
   ArrowLeftRight,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Database,
   Eye,
@@ -427,12 +430,15 @@ function AssistantMessage({
   message,
   speech,
   onToggleSpeech,
+  isLast,
 }: {
   message: UIMessage;
   speech: SpeechState;
   onToggleSpeech: (m: UIMessage) => void;
+  isLast: boolean;
 }) {
-  const { models, model, setModel, retryLast, streaming } = useSenku();
+  const { models, model, setModel, retryLast, streaming, regenerate, navigateVariant } =
+    useSenku();
   const isThinking = message.streaming && !message.content && !message.error;
   const isSpeakingThis = speech?.id === message.id;
   const speechLoading = isSpeakingThis && speech.phase === "loading";
@@ -536,9 +542,63 @@ function AssistantMessage({
           )}
 
           {/* quiet provenance line + hover actions (desktop reveals on
-              hover; touch devices keep it faintly visible) */}
+              hover; touch devices keep it faintly visible). Run 21:
+              variant history navigation (‹ 2/3 ›) and — on the last
+              settled answer — regenerate live here too. */}
           {!message.streaming && !message.error && !message.duel && (
             <div className="mt-1.5 flex items-center gap-1 senku-meta-row">
+              {/* answer variants: flip through this turn's earlier
+                  answers; each carries its own honest receipt */}
+              {message.variants &&
+                message.variants.length > 0 &&
+                message.variantIndex != null && (
+                  <span
+                    className="flex shrink-0 items-center gap-0.5"
+                    role="group"
+                    aria-label="Answer versions"
+                  >
+                    <button
+                      onClick={() => void navigateVariant(message.id, -1)}
+                      disabled={streaming || message.variantIndex === 0}
+                      aria-label="Previous answer version"
+                      title="Previous answer"
+                      className="flex h-6 w-5 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <span
+                      className="min-w-[30px] text-center text-[11px] tabular-nums text-zinc-500"
+                      aria-live="polite"
+                    >
+                      {(message.variantIndex ?? 0) + 1}/{message.variants.length}
+                    </span>
+                    <button
+                      onClick={() => void navigateVariant(message.id, 1)}
+                      disabled={
+                        streaming ||
+                        message.variantIndex === message.variants.length - 1
+                      }
+                      aria-label="Next answer version"
+                      title="Next answer"
+                      className="flex h-6 w-5 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+              )}
+              {/* regenerate: one click re-rolls the last answer — the
+                  current one is kept as a viewable variant */}
+              {isLast && !message.runnerUp && message.content.trim() && (
+                <button
+                  onClick={() => void regenerate()}
+                  disabled={streaming}
+                  aria-label="Regenerate this answer"
+                  title="Regenerate — the current answer stays in the version history"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-40"
+                >
+                  <RefreshCcw className="h-3 w-3" />
+                </button>
+              )}
               <CopyButton text={message.content} />
               {message.content.trim() && (
                 <button
@@ -740,6 +800,7 @@ export function ChatTimeline() {
             <AssistantMessage
               key={`slot-${i}`}
               message={m}
+              isLast={i === messages.length - 1}
               speech={speech}
               onToggleSpeech={(msg) => void toggleSpeech(msg)}
             />

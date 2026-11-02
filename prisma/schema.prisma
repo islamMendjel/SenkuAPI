@@ -96,6 +96,12 @@ model Message {
   // lane is kept as a viewable runner-up reference.
   altContent String? // runner-up answer text (duel turns only)
   altModel   String? // runner-up model id
+  // Regenerate: previous answers of this turn — JSON array of
+  // {content, model, tokens, cached, servedBy, keyLabel, effort}.
+  // The ACTIVE answer always lives in content/model; `variants`
+  // holds the earlier ones so the user can flip back through them.
+  variants     String? // JSON AnswerVariant[] (regenerate history)
+  variantIndex Int?    // index of the active answer inside `variants`
   createdAt DateTime @default(now())
 
   @@index([chatId, createdAt])

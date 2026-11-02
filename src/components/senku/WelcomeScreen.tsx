@@ -1,8 +1,8 @@
 "use client";
 
 // SenkuAPI — welcome screen. Clean and focused: logo, greeting,
-// live local clock and one-click starter prompts. No plan badges —
-// the model always starts on the default (glm-5.3).
+// live local clock and one-click starter prompts. No plan badges,
+// no model pickers — the model always starts on the default (glm-5.3).
 //
 // Run 19 — THE LIVING GATEWAY: the entry moment now shows the
 // gateway's real pulse instead of a static page. A breathing health
@@ -13,19 +13,11 @@
 // limiter is unknown — never a fake digit), and the whole block
 // settles in as one staggered cinematic sequence. Reduced-motion:
 // everything lands instantly, numbers jump to their values.
-//
-// Run 20 — THE ENGINE BAY: the gateway's actual inventory — the
-// model lineup — becomes a first-class hero of the entry moment.
-// Real engine cards (straight from the bootstrap's activeProvider
-// list, never hardcoded), one click switches the engine and the
-// composer picker mirrors it via the same store field. The bay
-// renders NOTHING when the lineup isn't loaded — it never fakes an
-// inventory. Cascade order now follows DOM order (headline →
-// subtitle → clock → stats → engines → starters).
+// (Run 20's engine bay was removed on user feedback — the composer
+// picker already owns model switching; the welcome stays pure.)
 
 import Image from "next/image";
 import {
-  Check,
   Code2,
   Globe,
   GraduationCap,
@@ -42,7 +34,6 @@ import {
   liveDate,
   liveTime,
 } from "@/lib/senku/constants";
-import { modelHint, modelMeta } from "@/lib/senku/models";
 import { formatCompact, formatFull } from "@/lib/senku/format";
 
 /** Pulsing live clock — proof the gateway answers with real "now". */
@@ -111,94 +102,6 @@ function StatChip({
         </span>
       )}
     </span>
-  );
-}
-
-/** Run 20 — THE ENGINE BAY: the gateway's live model lineup as
- *  one-click engine cards. Real ids from the bootstrap payload,
- *  real names/notes from the shared modelMeta table, selection
- *  mirrored with the composer picker through the same store field.
- *  Renders nothing when the lineup hasn't loaded — the bay never
- *  invents an inventory. */
-function EngineBay() {
-  const { models, model, setModel } = useSenku();
-
-  if (models.length === 0) return null;
-
-  // "all free" only prints when every engine really is free-tier.
-  const allFree = models.every((m) => modelMeta(m).tier === "Free");
-
-  return (
-    <section
-      aria-label="Engine lineup — pick the model your next message uses"
-      className="mt-8 flex w-full max-w-4xl flex-col"
-    >
-      <div className="senku-fade-up mb-2.5 flex items-baseline justify-between gap-3 [animation-delay:300ms]">
-        <span className="text-[11px] font-semibold tracking-[0.14em] text-zinc-500">
-          THE LINEUP
-        </span>
-        <span className="text-[11px] text-zinc-600">
-          {models.length} engine{models.length === 1 ? "" : "s"} · one gateway
-          {allFree ? " · all free" : ""}
-        </span>
-      </div>
-      {/* mobile: edge-peek snap rail (scrollbar hidden — the cut-off
-          card is the affordance); sm+: even auto-fit grid */}
-      <div
-        role="group"
-        aria-label="Available engines"
-        className="senku-no-bar flex snap-x snap-proximity gap-2.5 overflow-x-auto pb-1 sm:grid sm:grid-cols-[repeat(auto-fit,minmax(160px,1fr))] sm:overflow-visible sm:pb-0"
-      >
-        {models.map((id, i) => {
-          const meta = modelMeta(id);
-          const selected = id === model;
-          const hint = modelHint(meta);
-          return (
-            <button
-              key={id}
-              onClick={() => setModel(id)}
-              aria-pressed={selected}
-              title={
-                selected
-                  ? `${meta.name} — current engine`
-                  : `Switch to ${meta.name}${hint ? ` (${hint})` : ""}`
-              }
-              style={{ "--d": `${330 + i * 55}ms` } as React.CSSProperties}
-              className={`senku-fade-up flex w-[152px] shrink-0 snap-start flex-col items-start rounded-xl border p-3 text-left transition-all [animation-delay:var(--d)] sm:w-auto ${
-                selected
-                  ? "border-emerald-400/40 bg-emerald-400/[0.07]"
-                  : "border-zinc-800 bg-[#1d1d20]/80 hover:-translate-y-0.5 hover:border-amber-400/35 hover:bg-[#222225] hover:shadow-[0_10px_32px_-14px_rgba(251,191,36,0.35)]"
-              }`}
-            >
-              <span className="max-w-full truncate text-[13px] font-medium text-zinc-100">
-                {meta.name}
-              </span>
-              <span className="min-h-[16px] max-w-full truncate text-[11.5px] text-zinc-500">
-                {meta.note ?? "\u00A0"}
-              </span>
-              {/* badge row always rendered → even card heights; the
-                  check lives here so a long name can never collide
-                  with it */}
-              <span className="mt-1.5 flex w-full items-center justify-between gap-2">
-                {meta.tier ? (
-                  <span className="rounded-full border border-zinc-600 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400">
-                    {meta.tier}
-                  </span>
-                ) : (
-                  <span aria-hidden />
-                )}
-                {selected && (
-                  <Check
-                    aria-hidden
-                    className="senku-pop h-3.5 w-3.5 shrink-0 text-emerald-300"
-                  />
-                )}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
   );
 }
 
@@ -361,17 +264,13 @@ export function WelcomeScreen() {
           </div>
         )}
 
-        <EngineBay />
-
-        {/* one-click starter prompts — staggered cascade + warm glow.
-            Run 20: the cascade follows DOM order — the bay lands
-            first (330ms+), the starters close the sequence. */}
+        {/* one-click starter prompts — staggered cascade + warm glow */}
         <div className="mt-8 grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
           {STARTERS.map((s, i) => (
             <button
               key={s.title}
               onClick={() => fire(s.prompt, s.search)}
-              style={{ "--d": `${600 + i * 60}ms` } as React.CSSProperties}
+              style={{ "--d": `${140 + i * 60}ms` } as React.CSSProperties}
               className="senku-fade-up group flex items-center gap-3 rounded-xl border border-zinc-800 bg-[#1d1d20]/80 p-3.5 text-left transition-all [animation-delay:var(--d)] hover:-translate-y-0.5 hover:border-amber-400/35 hover:bg-[#222225] hover:shadow-[0_10px_32px_-14px_rgba(251,191,36,0.35)]"
             >
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-700/70 bg-zinc-800/60 text-zinc-400 transition-colors group-hover:border-amber-400/30 group-hover:bg-amber-400/10 group-hover:text-amber-300">

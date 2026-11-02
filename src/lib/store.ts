@@ -53,6 +53,20 @@ export interface DuelLane {
   keyLabel: string | null;
 }
 
+/** One previous answer of a regenerated turn. The ACTIVE answer
+ *  always lives on the message itself (content/model/tokens/…) —
+ *  `variants` holds every earlier one, full provenance included,
+ *  so flipping back shows honest per-answer receipts. */
+export interface AnswerVariant {
+  content: string;
+  model: string;
+  tokens: number;
+  cached: boolean;
+  servedBy: string | null;
+  keyLabel: string | null;
+  effort: EffortLevel | null;
+}
+
 export interface UIMessage {
   id: string;
   role: "user" | "assistant";
@@ -86,6 +100,11 @@ export interface UIMessage {
   duelPicked?: "a" | "b" | null;
   /** the losing lane, kept as a viewable reference after the pick */
   runnerUp?: { content: string; model: string } | null;
+  /** earlier answers of this turn (regenerate history) — the
+   *  active one lives in content/model above */
+  variants?: AnswerVariant[] | null;
+  /** index of the active answer inside `variants` */
+  variantIndex?: number | null;
 }
 
 export interface ChatListItem {
@@ -190,6 +209,14 @@ interface SenkuState {
   /** Re-run the turn that produced the last failed assistant reply,
       optionally with a different model (error-card "switch model"). */
   retryLast: (modelOverride?: string) => Promise<void>;
+  /** Regenerate the LAST assistant answer: the current answer is
+      snapshotted into the message's variant history and the turn
+      re-streams. Available on every completed answer (not just
+      errors) — the standard chat capability. */
+  regenerate: () => Promise<void>;
+  /** Flip a message's active answer to the previous/next variant
+      (the ‹ 2/3 › control). Persists for saved chats. */
+  navigateVariant: (messageId: string, dir: -1 | 1) => Promise<void>;
   stopStreaming: () => void;
 }
 
@@ -600,20 +627,39 @@ export const useSenku = create<SenkuState>((set, get) => ({
         // staged files belong to the previous conversation
         pendingAttachments: [],
         viewEpoch: s.viewEpoch + 1,
-        messages: (chat.messages ?? []).map((m: UIMessage) => ({
-          ...m,
-          sources: m.sources ?? null,
-          attachments: m.attachments ?? null,
-          // Duel runner-ups live on persisted messages (the winner
-          // IS the message content/model).
-          runnerUp:
-            typeof m.altContent === "string" && m.altContent
-              ? {
-                  content: m.altContent,
-                  model: typeof m.altModel === "string" ? m.altModel : "",
-                }
-              : null,
-        })),
+        messages: (chat.messages ?? []).map(
+          (
+            // Raw rows carry duel-runner-up columns (`altContent` /
+            // `altModel`) that aren't part of UIMessage — read them
+            // as unknown and narrow below. `variants` arrives already
+            // parsed by the GET route.
+            m: UIMessage & {
+              altContent?: unknown;
+              altModel?: unknown;
+              variants?: unknown;
+              variantIndex?: unknown;
+            }
+          ) => ({
+            ...m,
+            sources: m.sources ?? null,
+            attachments: m.attachments ?? null,
+            // Duel runner-ups live on persisted messages (the winner
+            // IS the message content/model).
+            runnerUp:
+              typeof m.altContent === "string" && m.altContent
+                ? {
+                    content: m.altContent,
+                    model: typeof m.altModel === "string" ? m.altModel : "",
+                  }
+                : null,
+            variants:
+              Array.isArray(m.variants) && m.variants.length > 0
+                ? (m.variants as AnswerVariant[])
+                : null,
+            variantIndex:
+              typeof m.variantIndex === "number" ? m.variantIndex : null,
+          })
+        ),
       }));
     } catch {
       // non-fatal
@@ -823,6 +869,174 @@ export const useSenku = create<SenkuState>((set, get) => ({
     });
   },
 
+  /** Run 21 — REGENERATE: re-run the turn that produced the LAST
+   *  assistant answer, snapshotting the current answer into the
+   *  message's variant history first. The standard chat capability —
+   *  a bad answer is one click from a better one, and every previous
+   *  answer stays reachable (with its honest per-answer receipt). */
+  async regenerate() {
+    const state = get();
+    if (state.streaming) return;
+    const msgs = state.messages;
+    // Regenerate only ever targets the timeline's last message, and
+    // only when it's a settled, standalone assistant answer (errors
+    // have their own Retry card; duels have their own lanes).
+    const last = msgs[msgs.length - 1];
+    if (
+      !last ||
+      last.role !== "assistant" ||
+      last.streaming ||
+      last.error ||
+      last.duel ||
+      last.runnerUp ||
+      !last.content.trim()
+    ) {
+      return;
+    }
+    // The user message that turn was answering.
+    let userIdx = -1;
+    for (let i = msgs.length - 2; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx === -1) return;
+    const userMsg = msgs[userIdx];
+
+    // Snapshot every earlier answer of this turn (existing variant
+    // history + the current one), full provenance included.
+    const regenVariants: AnswerVariant[] = [
+      ...(last.variants ?? []),
+      {
+        content: last.content,
+        model: last.model ?? "",
+        tokens: last.tokens ?? 0,
+        cached: Boolean(last.cached),
+        servedBy: last.servedBy ?? null,
+        keyLabel: last.keyLabel ?? null,
+        effort: last.effort ?? null,
+      },
+    ];
+
+    const history: ChatMessageData[] = msgs
+      .slice(0, userIdx)
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.role === "user" && m.attachments?.length
+          ? { attachments: m.attachments }
+          : {}),
+      }));
+
+    // Server-truth cleanup: the old answer row must not survive the
+    // re-stream, or a reload would show the same turn twice. The edit
+    // flow's truncate primitive is exactly right — it deletes every
+    // message after the user's (content untouched when omitted).
+    // Local-only turns (temporary / never-persisted user bubble) skip.
+    const userPersisted = !userMsg.id.startsWith("u-");
+    if (!state.temporary && state.currentChatId && userPersisted) {
+      await fetch("/api/chat/truncate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: userMsg.id }),
+      }).catch(() => {});
+    }
+
+    // The old answer leaves the timeline; its snapshot travels into
+    // the re-streamed turn and returns attached to the fresh reply.
+    set({ messages: msgs.slice(0, userIdx + 1) });
+
+    await streamTurn(set, get, {
+      chatId: state.temporary ? null : state.currentChatId,
+      history,
+      content: userMsg.content,
+      // The user bubble already exists (same rule as retryLast).
+      persistUser: userMsg.id.startsWith("u-"),
+      appendUserBubble: false,
+      temporary: state.temporary,
+      attachments: userMsg.attachments ?? [],
+      regenVariants,
+    });
+
+    // Persist the variant set for saved chats (temporary turns stay
+    // local-only, and an unpersisted turn has a local "a-" id).
+    const s2 = get();
+    const fresh = s2.messages[s2.messages.length - 1];
+    if (
+      !state.temporary &&
+      fresh &&
+      fresh.role === "assistant" &&
+      fresh.variants &&
+      !fresh.id.startsWith("a-")
+    ) {
+      void fetch("/api/chat/variant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messageId: fresh.id,
+          variants: fresh.variants,
+          variantIndex: fresh.variantIndex,
+          content: fresh.content,
+          model: fresh.model,
+          tokens: fresh.tokens ?? 0,
+          cached: Boolean(fresh.cached),
+          servedBy: fresh.servedBy ?? null,
+          keyLabel: fresh.keyLabel ?? null,
+          effort: fresh.effort ?? null,
+        }),
+      }).catch(() => {});
+    }
+  },
+
+  /** Run 21 — flip a message's active answer through its variant
+   *  history (‹ 2/3 ›). The swapped-in answer carries its own
+   *  provenance; saved chats get the new index persisted. */
+  async navigateVariant(messageId, dir) {
+    const s = get();
+    if (s.streaming) return;
+    const msg = s.messages.find((m) => m.id === messageId);
+    if (!msg?.variants?.length || msg.variantIndex == null) return;
+    const next = msg.variantIndex + dir;
+    if (next < 0 || next >= msg.variants.length) return;
+    const v = msg.variants[next];
+    set({
+      messages: s.messages.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              variantIndex: next,
+              content: v.content,
+              model: v.model,
+              tokens: v.tokens,
+              cached: v.cached,
+              servedBy: v.servedBy,
+              keyLabel: v.keyLabel,
+              effort: v.effort,
+            }
+          : m
+      ),
+    });
+    if (!s.temporary && !messageId.startsWith("a-")) {
+      void fetch("/api/chat/variant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messageId,
+          variants: msg.variants,
+          variantIndex: next,
+          content: v.content,
+          model: v.model,
+          tokens: v.tokens,
+          cached: v.cached,
+          servedBy: v.servedBy,
+          keyLabel: v.keyLabel,
+          effort: v.effort,
+        }),
+      }).catch(() => {});
+    }
+  },
+
   async pickDuelWinner(messageId, laneId) {
     const s = get();
     const msg = s.messages.find((m) => m.id === messageId);
@@ -925,6 +1139,10 @@ interface TurnOptions {
   attachments?: AttachmentRecord[];
   /** One-shot response style (/code, /concise) — normal turns only. */
   style?: TurnStyle;
+  /** Regenerate: the earlier answers of this same turn. When set,
+      the finalized message carries them as its variant history
+      (the fresh answer is appended and made active). */
+  regenVariants?: AnswerVariant[];
 }
 
 async function streamTurn(
@@ -1258,9 +1476,30 @@ async function streamTurn(
             // (fallback: the buffer) — cancel the pending frame so a
             // stale flush can never follow this write.
             contentFlush.cancel();
+            const finalContent = (ev.content as string) ?? assistantContent;
+            const finalModel = (ev.model as string) ?? model;
+            // Regenerate: the fresh answer joins the variant history
+            // (previous answers first, new one last + active).
+            const variants = opts.regenVariants
+              ? ([
+                  ...opts.regenVariants,
+                  {
+                    content: finalContent,
+                    model: finalModel,
+                    tokens: (ev.tokens as number) ?? 0,
+                    cached: ev.cached === true,
+                    servedBy: (ev.servedBy as string) ?? null,
+                    keyLabel: (ev.keyLabel as string) ?? null,
+                    effort:
+                      ev.effort === "fast" || ev.effort === "deep" || ev.effort === "medium"
+                        ? ev.effort
+                        : effort,
+                  },
+                ] satisfies AnswerVariant[])
+              : undefined;
             updateAssistant({
               id: (ev.assistantMessageId as string) ?? assistantId,
-              content: (ev.content as string) ?? assistantContent,
+              content: finalContent,
               streaming: false,
               cached: Boolean(ev.cached),
               tokens: (ev.tokens as number) ?? 0,
@@ -1268,7 +1507,7 @@ async function streamTurn(
               servedBy: (ev.servedBy as string) ?? null,
               keyLabel: (ev.keyLabel as string) ?? null,
               provider: (ev.providerName as string) ?? null,
-              model: (ev.model as string) ?? model,
+              model: finalModel,
               effort:
                 ev.effort === "fast" || ev.effort === "deep" || ev.effort === "medium"
                   ? ev.effort
@@ -1276,6 +1515,9 @@ async function streamTurn(
               phase: null,
               searchDetail: null,
               searchFailed: ev.searchFailed === true,
+              ...(variants
+                ? { variants, variantIndex: opts.regenVariants!.length }
+                : {}),
             });
           }
         } else if (ev.type === "error") {
