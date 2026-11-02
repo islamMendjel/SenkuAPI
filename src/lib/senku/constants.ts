@@ -168,16 +168,34 @@ export const OXIONAI_MODELS = [
   "deepseek-v4-pro",
 ];
 
-// Default list = verified-servable free-tier ids (probed 2026-11-02).
-// The endpoint's full list is one Sync away (/api/models?sync=1) and
-// survives restarts — the seed no longer overwrites a synced list.
+// Default list = the Free-page roster, probe-verified servable on
+// /v1/chat/completions 2026-11-03 (1-token probes, all 200).
+// Deliberately NOT listed: free/jev-1.13 (apinex rejects it on the
+// chat endpoint — "Jev Group Decision model" — permanently broken in
+// a picker) and every paid-tier id (this gateway runs free keys; a
+// 402 model is a broken model). The Sync endpoint keeps the same
+// free-tier scope. Survives restarts — the seed never overwrites a
+// synced/stored list.
 export const APINEX_MODELS = [
   "free/glm-5.3",
+  "free/glm-5.3-flash",
+  "free/glm-5.3-flashx",
   "free/gemini-3.8-flash",
   "free/qwen-3.8-max",
   "free/kimi-k3",
   "free/deepseek-v4.1-flash",
+  "free/deepseek-v4-pro-0813",
+  "free/minimax-m3.1-flash",
+  "free/gpt-6-luna",
+  "free/muse-spark-1.3",
 ];
+
+// Free-tier ids the provider advertises but that are NOT callable on
+// /v1/chat/completions (probed 2026-11-03: apinex answers 400 "Jev
+// Group Decision model and cannot be called on /v1/chat/completions").
+// Sync strips these so the picker can never ingest a model that
+// fails on every send.
+export const APINEX_NON_CHAT_IDS = ["free/jev-1.13"];
 
 // ── Identity (single-user personal gateway) ──────────────────
 export const USER = {

@@ -2416,3 +2416,74 @@ they ship).
 | Grounded-answer confidence contract + visible audit | none (Gemini's "double-check" is sentence-level, undated) | SHIPPED (Runs 4+6) — differentiator |
 | Per-message provenance (provider/key/tokens/cache) | none | SHIPPED (Runs 1+3) — differentiator |
 | Health-aware pooled routing with visible billing | none (single-backend) | SHIPPED (Run 1) — differentiator |
+
+---
+
+## Run 24 — 2026-11-03: THE ROSTER — the apinex free lineup lands (11 models) and the picker grows family identity
+
+**User request.** Sent a screenshot of apinex's Free models page
+(12 visible of 44) — "can you add the ones that aren't available
+on SenkuAPI? just the 12 visible ones… look at the site first,
+then innovate… make one bold change… don't make redundant things."
+
+**Observed first.** Dev server was down (restarted, 200). Site
+walkthrough: welcome at Run 19 form, picker a flat w-72 list of 5
+models. Data layer: `Provider.models` JSON in SQLite, seeded with
+5 ids; a Sync button (`/api/models?sync=1`) that replaced the list
+with the provider's FULL `/v1/models` output — all 44 ids sorted,
+including 23 paid-tier ids that 402 on this gateway's free keys.
+Live provider probe: 44 models, 21 free-tier.
+
+**Truth before add (1-token probes against the real endpoint):**
+- 6 of the 7 missing visible models SERVE (200):
+  `free/muse-spark-1.3`, `free/glm-5.3-flash`,
+  `free/minimax-m3.1-flash`, `free/deepseek-v4-pro-0813`,
+  `free/gpt-6-luna`, `free/glm-5.3-flashx`.
+- `free/jev-1.13` is NOT addable — apinex itself answers 400
+  ("Jev Group Decision model and cannot be called on
+  /v1/chat/completions"). Adding it would ship a permanently
+  broken picker row, so it is excluded and documented.
+
+**The change:**
+- **Roster 5 → 11.** DB list (and the seed default) is now the
+  curated Free-page lineup: 3× GLM, Gemini 3.8 Flash, Qwen 3.8 Max,
+  Kimi K3, 2× DeepSeek, MiniMax M3.1 Flash, GPT 6 Luna, Muse Spark
+  1.3 — grouped GLM-first, default unchanged. New KNOWN display
+  metadata (names + honest notes: DeepSeek V4 Pro "Deep reasoning",
+  Muse Spark 1.3 "Creative", …). `modelFamily()` learned
+  minimax/muse.
+- **THE BOLD CHANGE — the picker becomes a roster.** Every model
+  row now carries a tinted family glyph chip (GLM emerald, GEM
+  amber, QW violet, KI rose, DS teal, MM orange, GPT lime, MU
+  fuchsia, CL yellow — no blues) via a new pure `modelGlyph()`;
+  the header gains an honest "11 LIVE" count chip; popover widened
+  to 300px with a mobile max-width guard. Same single picker, same
+  behavior — 11 models finally *scan* like a lineup instead of
+  reading like a menu. The Duel challenger list got the same
+  identity (consistency, not a second feature).
+- **Sync corrected (latent bug, now guard-railed).** `/api/models?
+  sync=1` used to ingest ALL 44 ids — 23 paid (402 at runtime) +
+  the non-callable jev. Now: free-tier scope when a free/* tier
+  exists, plus an explicit `APINEX_NON_CHAT_IDS` denylist so sync
+  can never reintroduce a model that fails on every send. Verified
+  live: sync returns 20 free ids, 0 paid, 0 jev.
+
+**Verified (all real):**
+- lint 0 errors (2 pre-existing warnings); tsc 8 pre-existing
+  errors, none in touched files (baseline moved 13 → 8 by Runs
+  22-23, not by this run).
+- Browser golden path: picker shows the 11-model roster with
+  glyphs + "11 LIVE"; selected **GPT 6 Luna** (a brand-new model)
+  → sent "Reply with exactly: luna online" → reply "luna online",
+  metadata row "GPT 6 Luna · APInex pool · 2.2k tokens · cache:
+  miss", token counter 121k → 124k.
+- All 7 candidate models probed directly against the provider
+  before listing (6×200, jev 400 — the reason it's excluded).
+- Sync endpoint exercised twice live (pre/post denylist): 21 free
+  incl. jev → 20 free, jev stripped; DB restored to the curated 11
+  after the test.
+- Mobile 390px: popover fits with the max-width guard, glyphs and
+  hints intact, nothing clipped.
+- Console clean after Fast Refresh settles; dev.log shows only
+  healthy 200s. Test chat deleted (23 chats remain — no test
+  residue); roster + default model state confirmed in DB.

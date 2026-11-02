@@ -25,6 +25,14 @@ const KNOWN: Record<string, ModelMeta> = {
   "free/glm-5.3-flashx": { name: "GLM 5.3 FlashX", tier: "Free", note: "Fast" },
   "free/glm-5.3-flash": { name: "GLM 5.3 Flash", tier: "Free", note: "Fast" },
   "free/kimi-k2.8": { name: "Kimi K2.8", tier: "Free", note: null },
+  // Run 24 — roster expansion (visible on the provider's Free page,
+  // probe-verified servable 2026-11-03). free/jev-1.13 is NOT listed:
+  // apinex rejects it on /v1/chat/completions ("Jev Group Decision
+  // model"), so a picker entry would be permanently broken.
+  "free/deepseek-v4-pro-0813": { name: "DeepSeek V4 Pro", tier: "Free", note: "Deep reasoning" },
+  "free/gpt-6-luna": { name: "GPT 6 Luna", tier: "Free", note: "Balanced" },
+  "free/minimax-m3.1-flash": { name: "MiniMax M3.1 Flash", tier: "Free", note: "Fast" },
+  "free/muse-spark-1.3": { name: "Muse Spark 1.3", tier: "Free", note: "Creative" },
   // OxionAI
   "claude-fable-5.1": { name: "Claude Fable 5.1", tier: "Pool", note: "Balanced" },
   "claude-opus-5.5": { name: "Claude Opus 5.5", tier: "Pool", note: "Most capable" },
@@ -69,6 +77,39 @@ export function modelHint(meta: ModelMeta): string {
   return [meta.tier, meta.note].filter(Boolean).join(" · ");
 }
 
+// ── Family glyphs (picker roster identity) ───────────────────
+
+export interface ModelGlyph {
+  /** 1–3 letter family monogram shown in a tinted chip */
+  tag: string;
+  /** Tailwind text/bg classes for the tinted chip (no blue/indigo) */
+  cls: string;
+}
+
+const FAMILY_GLYPH: Record<string, ModelGlyph> = {
+  glm: { tag: "GLM", cls: "text-emerald-300 bg-emerald-500/10" },
+  gemini: { tag: "GEM", cls: "text-amber-300 bg-amber-500/10" },
+  qwen: { tag: "QW", cls: "text-violet-300 bg-violet-500/10" },
+  kimi: { tag: "KI", cls: "text-rose-300 bg-rose-500/10" },
+  deepseek: { tag: "DS", cls: "text-teal-300 bg-teal-500/10" },
+  minimax: { tag: "MM", cls: "text-orange-300 bg-orange-500/10" },
+  gpt: { tag: "GPT", cls: "text-lime-300 bg-lime-500/10" },
+  muse: { tag: "MU", cls: "text-fuchsia-300 bg-fuchsia-500/10" },
+  claude: { tag: "CL", cls: "text-yellow-300 bg-yellow-500/10" },
+};
+
+const GLYPH_FALLBACK: ModelGlyph = {
+  tag: "·",
+  cls: "text-zinc-400 bg-zinc-500/10",
+};
+
+/** Vendor chip for a model id — the roster's at-a-glance identity.
+ *  Declared before modelFamily; function declarations hoist, so the
+ *  call below resolves fine at runtime. */
+export function modelGlyph(id: string): ModelGlyph {
+  return FAMILY_GLYPH[modelFamily(id)] ?? GLYPH_FALLBACK;
+}
+
 // ── Duel support ─────────────────────────────────────────────
 
 /** Model family key for contrast pairing: "free/glm-5.3" → "glm",
@@ -77,7 +118,7 @@ export function modelHint(meta: ModelMeta): string {
 export function modelFamily(id: string): string {
   const raw = id.startsWith("free/") ? id.slice(5) : id;
   const known = raw.match(
-    /^(gemini|glm|qwen|kimi|deepseek|claude|gpt|grok|llama|mistral)/i
+    /^(gemini|glm|qwen|kimi|deepseek|claude|gpt|grok|llama|mistral|minimax|muse)/i
   );
   if (known) return known[1].toLowerCase();
   const letters = raw.match(/^[a-z]+/i);

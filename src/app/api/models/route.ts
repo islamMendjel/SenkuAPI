@@ -3,6 +3,7 @@
 //                              (OpenAI-compatible), DB list as fallback
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { APINEX_NON_CHAT_IDS } from "@/lib/senku/constants";
 import { getActiveProvider } from "@/lib/senku/router";
 import { ensureSeed } from "@/lib/senku/seed";
 
@@ -35,7 +36,16 @@ export async function GET(req: NextRequest) {
           .map((m) => m.id)
           .filter((id): id is string => typeof id === "string");
         if (remote.length) {
-          models = remote.sort();
+          // Free-key scope: when the provider exposes a free/* tier,
+          // sync ONLY those ids. Everything else is either paid (a
+          // 402 at runtime on this gateway's free keys) or — like
+          // jev-1.13 — not callable on /v1/chat/completions at all.
+          // Ingesting them would fill the picker with broken models.
+          const free = remote.filter(
+            (id) =>
+              id.startsWith("free/") && !APINEX_NON_CHAT_IDS.includes(id)
+          );
+          models = (free.length ? free : remote).sort();
           synced = true;
           await db.provider.update({
             where: { id: provider.id },

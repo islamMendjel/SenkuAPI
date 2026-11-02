@@ -36,7 +36,7 @@ import {
 import { useSenku, type PendingAttachment } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
-import { effortModel, modelHint, modelMeta } from "@/lib/senku/models";
+import { effortModel, modelGlyph, modelHint, modelMeta } from "@/lib/senku/models";
 import { IMAGE_SIZES, IMAGE_SIZE_KEYS } from "@/lib/senku/image-forge";
 import { countLines } from "@/lib/senku/format";
 import type { EffortLevel } from "@/lib/senku/types";
@@ -1078,6 +1078,7 @@ export function InputBar() {
                       .filter((m) => m !== model)
                       .map((m) => {
                         const meta = modelMeta(m);
+                        const glyph = modelGlyph(m);
                         return (
                           <button
                             key={m}
@@ -1086,11 +1087,17 @@ export function InputBar() {
                               setChallengerOpen(false);
                             }}
                             title={m}
-                            className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
                               m === challenger ? "text-white" : "text-zinc-300"
                             }`}
                           >
-                            <span className="min-w-0 truncate font-medium">
+                            <span
+                              aria-hidden
+                              className={`flex h-[22px] w-[30px] shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide ${glyph.cls}`}
+                            >
+                              {glyph.tag}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate font-medium">
                               {meta.name}
                             </span>
                             {m === challenger ? (
@@ -1133,12 +1140,21 @@ export function InputBar() {
               <PopoverContent
                 side="top"
                 align="end"
-                className="w-72 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+                className="w-[300px] max-w-[calc(100vw-24px)] rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
               >
                 <div className="flex items-center justify-between border-b border-zinc-800 px-3.5 py-2.5">
                   <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
                     SELECT MODEL
                   </span>
+                  <div className="flex items-center gap-2">
+                    {models.length > 0 && (
+                      <span
+                        title={`${models.length} models live on ${providerName ?? "the active provider"}`}
+                        className="rounded-full border border-zinc-700 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400"
+                      >
+                        {models.length} live
+                      </span>
+                    )}
                   <button
                     onClick={async () => {
                       setSyncing(true);
@@ -1157,6 +1173,7 @@ export function InputBar() {
                     />
                     Sync
                   </button>
+                  </div>
                 </div>
                 <div className="senku-scroll max-h-80 overflow-y-auto py-1">
                   {models.length === 0 && (
@@ -1174,6 +1191,7 @@ export function InputBar() {
                   {models.map((m) => {
                     const meta = modelMeta(m);
                     const hint = modelHint(meta);
+                    const glyph = modelGlyph(m);
                     return (
                       <button
                         key={m}
@@ -1182,11 +1200,17 @@ export function InputBar() {
                           setModelOpen(false);
                         }}
                         title={m}
-                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
                           m === model ? "text-white" : "text-zinc-300"
                         }`}
                       >
-                        <span className="min-w-0 truncate font-medium">
+                        <span
+                          aria-hidden
+                          className={`flex h-[22px] w-[30px] shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide ${glyph.cls}`}
+                        >
+                          {glyph.tag}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-medium">
                           {meta.name}
                         </span>
                         {m === model ? (
