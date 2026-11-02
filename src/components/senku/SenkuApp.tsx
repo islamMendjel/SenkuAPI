@@ -222,17 +222,29 @@ export function SenkuApp() {
             by newChat / selectChat / deleteChat-of-current), so every
             navigation remounts the whole view and it settles in with
             one calm fade-and-rise. Keyed remount never happens
-            mid-stream: sending a message doesn't touch the epoch. */}
-        {booted && (
-          <div
-            key={viewEpoch}
-            className="senku-view-in flex min-h-0 flex-1 flex-col"
-          >
-            {temporary && <TemporaryBanner />}
+            mid-stream: sending a message doesn't touch the epoch.
 
-            {messages.length === 0 ? <WelcomeScreen /> : <ChatTimeline />}
-          </div>
-        )}
+            Run 18 — the flex-1 SLOT is now rendered even before the
+            bootstrap round-trip answers. It used to be gated on
+            `booted`, and since it is the only flex-1 in this column
+            the composer spent the boot window pinned right under the
+            top bar, then visibly dropped to the bottom the moment
+            bootstrap landed. With the slot always present the
+            composer sits in its final position from the very first
+            paint; when boot completes the content mounts into the
+            waiting slot and settles in with the existing
+            senku-view-in fade (reduced-motion: instant). */}
+        <div
+          key={viewEpoch}
+          className={`flex min-h-0 flex-1 flex-col ${
+            booted ? "senku-view-in" : ""
+          }`}
+        >
+          {booted && temporary && <TemporaryBanner />}
+
+          {booted &&
+            (messages.length === 0 ? <WelcomeScreen /> : <ChatTimeline />)}
+        </div>
 
         <InputBar />
       </div>

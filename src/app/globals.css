@@ -231,6 +231,24 @@
   animation: senku-view-in 260ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
+/* Run 18 — the composer's one-time settle on load. Position is
+   already correct at first paint (the view slot above the bar is
+   always rendered), so this only eases it in: 8px rise + fade.
+   Plays once per app load; never re-runs on chat navigation. */
+@keyframes senku-input-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.senku-input-in {
+  animation: senku-input-in 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
 /* Run 17 — the Senku Canvas panel settling in (overlay on small
    screens, split column on wide ones). */
 @keyframes senku-canvas-in {
@@ -567,7 +585,8 @@
   }
   /* Run 13: sidebar + view transitions become instant state
      changes — hover-peek still works, it just doesn't animate. */
-  .senku-view-in {
+  .senku-view-in,
+  .senku-input-in {
     animation: none !important;
   }
   .senku-sidebar,

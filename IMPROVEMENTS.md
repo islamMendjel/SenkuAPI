@@ -1854,6 +1854,69 @@ already gone.
 
 ---
 
+## Run 18 — 2026-11-03: Entry flash killed — the composer no longer pops under the top bar and drops on boot
+
+**User report (screenshots).** On entering the app, the composer
+"pops up" pinned directly under the top bar with an empty body,
+then visibly drops to the bottom once the page settles. Asked to
+fix it "with an animation or something".
+
+**Root cause (traced, not guessed).** In `SenkuApp.tsx` the
+conversation view wrapper — the ONLY `flex-1` element in the main
+column — was gated behind `{booted && …}`. Until `/api/bootstrap`
+answered, the column rendered `TopBar → InputBar` with nothing
+expandable between them, so the composer spent the boot window
+pinned right under the top bar; the moment `booted` flipped, the
+flex-1 view mounted and the composer teleported to the bottom.
+The welcome content had a calm `senku-view-in` fade-and-rise, but
+the composer's drop was an unanimated jump.
+
+**Fix — stabilize first paint, then let the existing animation
+carry the moment (3 files):**
+- `src/components/senku/SenkuApp.tsx` — the flex-1 view SLOT is
+  now rendered unconditionally (keyed by `viewEpoch` as before);
+  pre-boot it is an empty expanding slot, so the composer sits in
+  its final position from the very first server-rendered paint.
+  When boot completes, content mounts into the waiting slot and
+  the `senku-view-in` class lands in the same commit → the whole
+  view settles in with the existing 260 ms fade-and-rise
+  (reduced-motion: instant). Keyed navigation remounts are
+  byte-identical to the old behavior (same key, same class once
+  booted).
+- `src/components/senku/InputBar.tsx` — root gains the one-time
+  `senku-input-in` entrance (280 ms, 8 px rise + fade). Purely
+  cosmetic: position is already correct at first paint, so it
+  eases in, never jumps. Plays once per app load; chat navigation
+  never remounts the bar so it never re-runs mid-session.
+- `src/app/globals.css` — `senku-input-in` keyframes next to
+  `senku-view-in`, plus the `prefers-reduced-motion: reduce`
+  override grouped with it.
+
+**Verified (all real):**
+- SSR HTML proof: raw server output now contains the flex-1 slot
+  between top bar and composer (`topbar < slot < composer` true),
+  `senku-input-in` present, `senku-view-in`/welcome content
+  correctly absent pre-boot → first paint is the settled layout,
+  browser-independent.
+- Live zero-jump proof (agent-browser): with the settled page
+  measured (composer top = 769 px), the exact pre-boot DOM was
+  simulated (slot emptied, class removed) → composer top stayed
+  exactly 769 px (`zeroJump: true`). No popup state exists anymore.
+- Desktop 1440×900 + mobile 390×844: composer flush at viewport
+  bottom (gap 0), slot fills top-bar→composer, welcome visible,
+  `senku-view-in` applied after boot; no console/page errors;
+  screenshots captured.
+- `bun run lint` 0 errors (2 pre-existing script warnings);
+  `tsc --noEmit` unchanged baseline — zero new errors in touched
+  files.
+
+**Scope discipline:** no new dependencies, no fake loading
+states, no route or API changes; `booted` semantics untouched
+(failed bootstrap still boots by design — verified live via an
+aborted `/api/bootstrap`).
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we

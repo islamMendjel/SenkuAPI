@@ -484,7 +484,11 @@ export function InputBar() {
   };
 
   return (
-    <div className="relative mx-auto w-full max-w-3xl shrink-0 px-4">
+    // senku-input-in — one gentle settle on load (Run 18): the bar
+    // already sits in its final position from the first paint (the
+    // view slot above is always rendered), so this is a purely
+    // cosmetic 8px rise + fade, never a position jump.
+    <div className="senku-input-in relative mx-auto w-full max-w-3xl shrink-0 px-4">
       <input
         ref={fileRef}
         type="file"
