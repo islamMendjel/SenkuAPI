@@ -5,7 +5,9 @@
 
 import { create } from "zustand";
 import { DEFAULT_MODEL } from "@/lib/senku/constants";
+import { countLines } from "@/lib/senku/format";
 import { autoChallenger } from "@/lib/senku/models";
+import { StreamFlushScheduler } from "@/lib/senku/raf-throttle";
 import type {
   AttachmentRecord,
   ChatMessageData,
@@ -13,6 +15,7 @@ import type {
   LimiterStatus,
   ProviderView,
   SearchSource,
+  TurnStyle,
 } from "@/lib/senku/types";
 
 /** One file being attached to the next message — extraction runs
@@ -25,6 +28,15 @@ export interface PendingAttachment {
   status: "extracting" | "ready" | "error";
   error?: string;
   record?: AttachmentRecord;
+}
+
+/** A code block staged into the Senku Canvas (the Tools aside).
+ *  Kept in the store so the preview survives close/reopen and chat
+ *  navigation — closing the canvas never touches the conversation. */
+export interface CanvasSource {
+  /** canonical preview language: html | svg | mermaid | javascript | python */
+  language: string;
+  code: string;
 }
 
 /** One racing model inside a duel turn. */
@@ -50,6 +62,9 @@ export interface UIMessage {
   keyLabel?: string | null;
   tokens?: number;
   cached?: boolean;
+  /** true when the token count is a chars/4 estimate because the
+   *  provider did not report usage (Run 17 honesty marker) */
+  tokensEstimated?: boolean;
   servedBy?: string | null;
   sources?: SearchSource[] | null;
   /** files the gateway read and sent with this message */
@@ -119,6 +134,23 @@ interface SenkuState {
   viewEpoch: number;
   /** files staged for the NEXT message (extraction runs at pick time) */
   pendingAttachments: PendingAttachment[];
+
+  /** Run 17 — one-shot response style for the NEXT message, armed by
+   *  the /code and /concise slash commands, shown as a removable pill. */
+  turnStyle: TurnStyle | null;
+  setTurnStyle: (s: TurnStyle | null) => void;
+  /** Stage a >60-line pasted snippet as an attachment pill. The exact
+   *  text stays client-side until the user SENDS (explicit action) —
+   *  no upload, no persistence at paste time. */
+  stagePastedSnippet: (text: string) => { ok: boolean; error?: string };
+
+  /** Run 17 — Senku Canvas state (the Tools aside). The source is
+   *  kept across close/reopen so the user never loses a preview. */
+  canvasOpen: boolean;
+  canvasSource: CanvasSource | null;
+  openCanvas: (src: CanvasSource) => void;
+  closeCanvas: () => void;
+  setCanvasOpen: (open: boolean) => void;
 
   /** Upload files for extraction — each becomes a chip showing what
    *      the gateway read (or why it couldn't be read). */
@@ -219,6 +251,9 @@ export const useSenku = create<SenkuState>((set, get) => ({
   booted: false,
   viewEpoch: 0,
   pendingAttachments: [],
+  turnStyle: null,
+  canvasOpen: false,
+  canvasSource: null,
 
   async addAttachments(files) {
     const existing = get().pendingAttachments;
@@ -476,6 +511,66 @@ export const useSenku = create<SenkuState>((set, get) => ({
     await get().refreshUsage();
   },
 
+  setTurnStyle(s) {
+    set({ turnStyle: s });
+  },
+
+  stagePastedSnippet(text) {
+    const t = text ?? "";
+    // Hard sanity ceiling — anything past this is not a "snippet".
+    if (t.length > 1_000_000) {
+      return {
+        ok: false,
+        error: `Snippet is ${(t.length / 1_000_000).toFixed(1)}M characters — too large to attach. Save it as a file and attach that instead.`,
+      };
+    }
+    const existing = get().pendingAttachments;
+    if (existing.length >= 5) {
+      return {
+        ok: false,
+        error: "Up to 5 attachments per message — remove one first.",
+      };
+    }
+    const lines = countLines(t);
+    // Built ENTIRELY client-side: no upload, no server call — the
+    // exact pasted text leaves only when the user sends the message.
+    const record: AttachmentRecord = {
+      name: `Pasted snippet · ${lines} lines`,
+      mime: "text/plain",
+      kind: "text",
+      method: "text-layer",
+      chars: t.length,
+      totalChars: t.length,
+      truncated: false,
+      extract: t,
+    };
+    set({
+      pendingAttachments: [
+        ...existing,
+        {
+          id: `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: record.name,
+          kindGuess: "text",
+          status: "ready",
+          record,
+        },
+      ],
+    });
+    return { ok: true };
+  },
+
+  openCanvas(src) {
+    set({ canvasSource: src, canvasOpen: true });
+  },
+
+  closeCanvas() {
+    set({ canvasOpen: false });
+  },
+
+  setCanvasOpen(open) {
+    set({ canvasOpen: open });
+  },
+
   newChat: () =>
     // Every new chat resets to the default model (glm-5.3) —
     // the user can then switch freely for that conversation.
@@ -597,6 +692,10 @@ export const useSenku = create<SenkuState>((set, get) => ({
     }
     const duel =
       s2.duelEnabled && challenger ? { challenger } : undefined;
+    // One-shot response style (/code, /concise) — armed by the slash
+    // popover, consumed (and cleared) by THIS send.
+    const style = s2.turnStyle ?? undefined;
+    if (style) set({ turnStyle: null });
     await streamTurn(set, get, {
       chatId: s2.temporary ? null : s2.currentChatId,
       history,
@@ -604,6 +703,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
       persistUser: true,
       duel,
       attachments,
+      style,
     });
   },
 
@@ -823,6 +923,8 @@ interface TurnOptions {
   duel?: { challenger: string };
   /** Files the gateway already read for this turn. */
   attachments?: AttachmentRecord[];
+  /** One-shot response style (/code, /concise) — normal turns only. */
+  style?: TurnStyle;
 }
 
 async function streamTurn(
@@ -931,6 +1033,34 @@ async function streamTurn(
     });
   };
 
+  // ── Run 17: rAF-gated stream rendering ──
+  // Deltas accumulate into these buffers SYNCHRONOUSLY (the data is
+  // never delayed — only the render is), and the store is patched on
+  // animation frames with a ≥32 ms floor so chunk bursts don't
+  // re-render/re-parse the markdown tree per SSE event. Terminal
+  // paths (done / error / Stop / stream end) flush or write
+  // authoritative content, so the complete response is always shown
+  // exactly once and Stop stays instant (flushNow is synchronous).
+  let assistantContent = "";
+  // Duel lanes accumulate independently; untagged deltas (normal
+  // turns) fall through to assistantContent only.
+  const laneContents: Record<"a" | "b", string> = { a: "", b: "" };
+  const contentFlush = new StreamFlushScheduler(() =>
+    updateAssistant({ content: assistantContent, phase: null })
+  );
+  const laneFlush: Record<"a" | "b", StreamFlushScheduler> = {
+    a: new StreamFlushScheduler(() =>
+      updateLane("a", { content: laneContents.a, phase: null })
+    ),
+    b: new StreamFlushScheduler(() =>
+      updateLane("b", { content: laneContents.b, phase: null })
+    ),
+  };
+  // True once a terminal event (done / error / abort) settled the
+  // message — keeps the post-loop safety flush from ever writing
+  // stale buffered content over server truth.
+  let sawTerminal = false;
+
   const controller = new AbortController();
   streamController = controller;
   // Reconciled with the server-assigned id as soon as "meta" arrives so
@@ -953,6 +1083,7 @@ async function streamTurn(
         effort,
         ...(attachments.length ? { attachments } : {}),
         ...(duel ? { duel: true, challengerModel: duel.challenger } : {}),
+        ...(opts.style ? { style: opts.style } : {}),
       }),
     });
 
@@ -964,10 +1095,6 @@ async function streamTurn(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let assistantContent = "";
-    // Duel lanes accumulate independently; untagged deltas (normal
-    // turns) fall through to assistantContent only.
-    const laneContents: Record<"a" | "b", string> = { a: "", b: "" };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1041,12 +1168,16 @@ async function streamTurn(
         } else if (ev.type === "restart") {
           // A provider died mid-stream; the cloud re-generates that
           // lane from scratch. Discard only the affected lane's
-          // partial text (untagged = normal single-lane turn).
+          // partial text (untagged = normal single-lane turn). The
+          // scheduled frame is cancelled FIRST so no stale buffered
+          // content flashes back after the reset.
           const lane = ev.lane === "b" ? "b" : "a";
           if (duel) {
+            laneFlush[lane].cancel();
             laneContents[lane] = "";
             updateLane(lane, { content: "", phase: "thinking" });
           } else {
+            contentFlush.cancel();
             assistantContent = "";
             updateAssistant({ content: "", phase: "thinking" });
           }
@@ -1054,15 +1185,18 @@ async function streamTurn(
           const lane = ev.lane === "b" ? "b" : "a";
           if (duel) {
             laneContents[lane] += String(ev.text ?? "");
-            updateLane(lane, { content: laneContents[lane], phase: null });
+            laneFlush[lane].notify();
           } else {
             assistantContent += String(ev.text ?? "");
-            updateAssistant({ content: assistantContent, phase: null });
+            contentFlush.notify();
           }
         } else if (ev.type === "lane_done") {
           // Final per-lane stats from the gateway — server truth wins.
           const lane = ev.lane === "b" ? "b" : "a";
           if (duel) {
+            // Server truth supersedes the buffer — drop any pending
+            // frame before writing it.
+            laneFlush[lane].cancel();
             updateLane(lane, {
               content: (ev.content as string) ?? laneContents[lane],
               streaming: false,
@@ -1076,6 +1210,9 @@ async function streamTurn(
           }
         } else if (ev.type === "done") {
           if (duel && ev.duel && typeof ev.duel === "object") {
+            sawTerminal = true;
+            laneFlush.a.cancel();
+            laneFlush.b.cancel();
             const lanes = ev.duel as {
               a: { content: string; error: string | null; tokens: number; cached: boolean; servedBy: string | null; keyLabel: string | null; model: string };
               b: { content: string; error: string | null; tokens: number; cached: boolean; servedBy: string | null; keyLabel: string | null; model: string };
@@ -1116,12 +1253,18 @@ async function streamTurn(
             }
             // Both lanes healthy → the message waits for the user's pick.
           } else {
+            sawTerminal = true;
+            // The done event carries the authoritative full content
+            // (fallback: the buffer) — cancel the pending frame so a
+            // stale flush can never follow this write.
+            contentFlush.cancel();
             updateAssistant({
               id: (ev.assistantMessageId as string) ?? assistantId,
               content: (ev.content as string) ?? assistantContent,
               streaming: false,
               cached: Boolean(ev.cached),
               tokens: (ev.tokens as number) ?? 0,
+              tokensEstimated: ev.tokensEstimated === true,
               servedBy: (ev.servedBy as string) ?? null,
               keyLabel: (ev.keyLabel as string) ?? null,
               provider: (ev.providerName as string) ?? null,
@@ -1136,6 +1279,10 @@ async function streamTurn(
             });
           }
         } else if (ev.type === "error") {
+          sawTerminal = true;
+          contentFlush.cancel();
+          laneFlush.a.cancel();
+          laneFlush.b.cancel();
           updateAssistant({
             streaming: false,
             error: String(ev.message ?? "Generation failed"),
@@ -1145,19 +1292,44 @@ async function streamTurn(
         }
       }
     }
+
+    // The stream ended WITHOUT a terminal event (server closed
+    // early). Flush whatever is still buffered so the tail tokens
+    // are never lost, and settle the message — no caret may spin
+    // forever.
+    if (!sawTerminal) {
+      contentFlush.flushNow();
+      laneFlush.a.flushNow();
+      laneFlush.b.flushNow();
+      updateAssistant({ streaming: false, phase: null });
+      if (duel) {
+        updateLane("a", { streaming: false, phase: null });
+        updateLane("b", { streaming: false, phase: null });
+      }
+    }
   } catch (e) {
     const err = e as Error;
     if (err.name === "AbortError") {
-      // User pressed stop: a stopped duel keeps both partial lanes —
-      // the user can still pick either one as the answer.
+      // User pressed stop — the partial text must appear INSTANTLY:
+      // flushNow is synchronous, so throttling never delays Stop.
+      sawTerminal = true;
       if (duel) {
+        laneFlush.a.flushNow();
+        laneFlush.b.flushNow();
+        // A stopped duel keeps both partial lanes — the user can
+        // still pick either one as the answer.
         updateAssistant({ streaming: false, phase: null });
         updateLane("a", { streaming: false, phase: null });
         updateLane("b", { streaming: false, phase: null });
       } else {
+        contentFlush.flushNow();
         updateAssistant({ streaming: false, phase: null });
       }
     } else {
+      sawTerminal = true;
+      contentFlush.cancel();
+      laneFlush.a.cancel();
+      laneFlush.b.cancel();
       updateAssistant({
         streaming: false,
         error: err.message,
@@ -1166,6 +1338,11 @@ async function streamTurn(
       });
     }
   } finally {
+    // Last-resort cleanup: no scheduled animation frame may outlive
+    // the turn (the store-level equivalent of unmount cleanup).
+    contentFlush.cancel();
+    laneFlush.a.cancel();
+    laneFlush.b.cancel();
     streamController = null;
     set({ streaming: false });
     if (!temporary) {

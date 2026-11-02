@@ -110,6 +110,28 @@ export const DEEP_THINKING_ADDON =
   "present only the polished result, organized and complete. Depth " +
   "of rigor, not length.";
 
+// ── One-shot response styles (Run 17 slash commands) ─────────
+// Armed by /code and /concise in the composer, consumed by exactly
+// ONE send, then cleared. Appended to the base system prompt (which
+// also namespaces the 24h response cache per style — a /code answer
+// and a plain answer to the same question cache separately).
+
+/** /code — code-focused answer, no introductory chatter. */
+export const CODE_STYLE_ADDON =
+  "CODE MODE — the user asked for a code-focused answer. Lead with " +
+  "the code. No introductory chatter, no summary outro, no " +
+  "\"certainly!\" openers. Prose is allowed only where it is " +
+  "genuinely needed: a one-line note between code blocks, a short " +
+  "inline comment, or a brief explanation when the code alone would " +
+  "be misleading. Assume the user can read code.";
+
+/** /concise — ultra-brief answer. */
+export const CONCISE_STYLE_ADDON =
+  "CONCISE MODE — the user asked for an ultra-brief answer. Answer " +
+  "in the fewest words that are still complete and correct: ideally " +
+  "one to three sentences, or a single tight list. No preamble, no " +
+  "filler, no restating the question, no recap of what was said.";
+
 // ── Deep search pipeline ─────────────────────────────────────
 export const DEEP_SEARCH_MAX_QUERIES = 4; // 1 primary + up to 3 planned
 export const DEEP_SEARCH_MAX_SOURCES = 8; // merged, URL-deduped cap

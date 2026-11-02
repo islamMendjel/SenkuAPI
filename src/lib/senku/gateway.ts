@@ -11,6 +11,8 @@ import {
 } from "./attachments";
 import {
   BASE_SYSTEM_PROMPT,
+  CODE_STYLE_ADDON,
+  CONCISE_STYLE_ADDON,
   DEEP_RESEARCH_ADDON,
   DEEP_THINKING_ADDON,
   FAST_SYSTEM_ADDON,
@@ -30,6 +32,7 @@ import type {
   ChatMessageData,
   EffortLevel,
   SearchSource,
+  TurnStyle,
 } from "./types";
 
 export interface TurnEvent {
@@ -64,6 +67,11 @@ export interface TurnParams {
    *  to the stored message content — and persisted on the user
    *  message row so follow-up turns and reloads keep the context. */
   attachments?: AttachmentRecord[];
+  /** One-shot response style (Run 17 slash commands): "code" →
+   *  code-focused directive, "concise" → ultra-brief directive.
+   *  Appended to the system prompt (and thus the cache key) — the
+   *  /code and /concise variants of one question cache separately. */
+  style?: TurnStyle;
   /** Fires when the CLIENT disconnects (Stop button, tab close).
    *  The upstream generation is cancelled at the source, the
    *  partial reply is persisted, and the truncated answer NEVER
@@ -88,6 +96,9 @@ export interface TurnResult {
   model: string;
   /** which effort level served this turn */
   effort: EffortLevel;
+  /** true when the token count is a chars/4 estimate because the
+   *  upstream did not report usage (Run 17 — the UI marks it) */
+  tokensEstimated: boolean;
   /** true when search was requested but every engine failed */
   searchFailed: boolean;
   /** true when the client disconnected mid-generation — content is
@@ -176,9 +187,19 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
           ? DEEP_RESEARCH_ADDON
           : DEEP_THINKING_ADDON
         : "";
+  // One-shot response style (/code, /concise) — appended AFTER the
+  // effort addon. Medium + no style stays byte-identical to legacy
+  // turns so the 24h response cache still hits for them.
+  const styleAddon =
+    params.style === "code"
+      ? CODE_STYLE_ADDON
+      : params.style === "concise"
+        ? CONCISE_STYLE_ADDON
+        : "";
   const baseSystemPrompt =
     (params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT) +
-    (effortAddon ? `\n\n${effortAddon}` : "");
+    (effortAddon ? `\n\n${effortAddon}` : "") +
+    (styleAddon ? `\n\n${styleAddon}` : "");
   // The model always knows the real "now" (user's timezone).
   const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
 
@@ -296,6 +317,8 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
       cached: true,
       tokens: 0,
       rawTokens: 0,
+      // Cache hits bill zero tokens — nothing was estimated.
+      tokensEstimated: false,
       servedBy: "cache" as const,
       keyLabel: "cache",
       providerName: provider.name,
@@ -361,6 +384,9 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     exec.totalTokens ||
     exec.promptTokens + exec.completionTokens ||
     estimateTokens(finalUserContent) + estimateTokens(exec.content);
+  // Honesty marker: without upstream usage stats the counts are
+  // chars/4 estimates — the UI must never present them as exact.
+  const tokensEstimated = exec.usageReported !== true && rawTotal > 0;
 
   await db.usageEvent.create({
     data: {
@@ -430,6 +456,7 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
         provider: provider.name,
         keyLabel: servedKeyLabel,
         tokens: effectiveTokens,
+        tokensEstimated,
         cached: false,
         effort,
       },
@@ -456,6 +483,7 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     providerName: provider.name,
     model,
     effort,
+    tokensEstimated,
     searchFailed: params.search && sources.length === 0,
     ...(aborted ? { aborted: true } : {}),
   };

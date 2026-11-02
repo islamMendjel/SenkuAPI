@@ -16,6 +16,11 @@ export interface ExecResult {
   completionTokens: number;
   totalTokens: number;
   servedBy: "provider" | "zai-cloud";
+  /** True when token counts came from the provider's usage stats;
+   *  absent/false = chars/4 ESTIMATES (Run 17 honesty marker — the
+   *  UI shows "≈ estimated" so an estimate is never presented as
+   *  exact usage). */
+  usageReported?: boolean;
   /** True when generation ended early because the CLIENT
    *  disconnected — `content` is the partial text generated so far
    *  and must NEVER be cached. */
@@ -63,8 +68,48 @@ function messagesTokens(msgs: ChatMessageData[]): number {
  */
 export type ProviderAttempt =
   | { ok: true; result: ExecResult }
-  | { ok: false; reason: "auth" | "unreachable" | "empty"; emitted: boolean }
-  | { ok: false; reason: "aborted"; emitted: boolean; partial: ExecResult };
+  | {
+      ok: false;
+      reason: "auth" | "unreachable" | "empty";
+      emitted: boolean;
+      /** bounded Retry-After hint (ms) parsed from 429/503 */
+      retryAfterMs?: number;
+    }
+  | {
+      ok: false;
+      reason: "aborted";
+      emitted: boolean;
+      partial: ExecResult;
+    };
+
+/** Failure attempts may carry a bounded Retry-After hint parsed
+ *  from an HTTP 429/503 (milliseconds, already capped) — the
+ *  dispatcher waits at most this long before the next pooled key. */
+export interface ProviderFailureHint {
+  retryAfterMs?: number;
+}
+
+/** Endpoints that rejected `stream_options` with a 400 naming the
+ *  field — usage streaming is adaptively disabled per base URL so a
+ *  provider that doesn't support the option is never broken by it
+ *  (in-memory, single-process gateway, consistent with key health). */
+const streamUsageRejected = new Set<string>();
+
+/** Parse an HTTP Retry-After header into a BOUNDED wait in ms
+ *  (delay-seconds form only; HTTP-dates are ignored). Cap keeps a
+ *  hostile header from stalling the turn. */
+function parseRetryAfterMs(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number.parseInt(header.trim(), 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return Math.min(seconds * 1000, 3000);
+}
+
+/** True when a 400 body names the stream_options/include_usage
+ *  fields — i.e. the endpoint rejected the OPTION, not the request. */
+function mentionsStreamOptions(body: string): boolean {
+  return /stream[_\s-]?options|include[_\s-]?usage/i.test(body);
+}
 
 interface OpenAIChunk {
   choices?: { delta?: { content?: string }; message?: { content?: string } }[];
@@ -112,23 +157,56 @@ export async function tryProviderStream(
   } | null = null;
 
   try {
-    const res = await fetch(`${opts.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${opts.apiKey}`,
-      },
-      body: JSON.stringify({
+    // Request body is rebuilt from the untouched `opts.messages` on
+    // every attempt, so replaying after a stream_options rejection
+    // is byte-faithful (body replayability is part of the retry
+    // contract). `stream_options.include_usage` asks OpenAI-
+    // compatible endpoints for a final usage chunk — only sent to
+    // endpoints not known to reject it, and adaptively disabled
+    // (per base URL, in memory) the first time one does.
+    const buildBody = (withUsage: boolean) =>
+      JSON.stringify({
         model: opts.model,
         messages: opts.messages,
         stream: true,
-      }),
-      signal: controller.signal,
-    });
+        ...(withUsage ? { stream_options: { include_usage: true } } : {}),
+      });
+
+    const doFetch = (withUsage: boolean) =>
+      fetch(`${opts.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${opts.apiKey}`,
+        },
+        body: buildBody(withUsage),
+        signal: controller.signal,
+      });
+
+    let res = await doFetch(!streamUsageRejected.has(opts.baseUrl));
+
+    // The endpoint rejected the usage OPTION (not the request):
+    // remember, strip the option, replay the identical request once.
+    if (
+      res.status === 400 &&
+      !streamUsageRejected.has(opts.baseUrl) &&
+      mentionsStreamOptions(await res.text().catch(() => ""))
+    ) {
+      streamUsageRejected.add(opts.baseUrl);
+      res = await doFetch(false);
+    }
+
     if (res.status === 401 || res.status === 403) {
       return { ok: false, reason: "auth", emitted: false };
     }
-    if (!res.ok || !res.body) return { ok: false, reason: "unreachable", emitted: false };
+    if (!res.ok || !res.body) {
+      // 429/503 may carry a bounded Retry-After for the dispatcher.
+      const hint: ProviderFailureHint =
+        res.status === 429 || res.status === 503
+          ? { retryAfterMs: parseRetryAfterMs(res.headers.get("retry-after")) }
+          : {};
+      return { ok: false, reason: "unreachable", emitted: false, ...hint };
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -176,6 +254,7 @@ export async function tryProviderStream(
           (usage?.prompt_tokens ?? messagesTokens(opts.messages)) +
             (usage?.completion_tokens ?? estimateTokens(content)),
         servedBy: "provider",
+        usageReported: usage != null,
       },
     };
   } catch {
@@ -196,6 +275,7 @@ export async function tryProviderStream(
           completionTokens,
           totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
           servedBy: "provider",
+          usageReported: usage != null,
           aborted: true,
         },
       };
@@ -337,6 +417,7 @@ export async function zaiCloudExec(opts: ExecOptions): Promise<ExecResult> {
     completionTokens,
     totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
     servedBy: "zai-cloud",
+    usageReported: usage != null,
     ...(aborted ? { aborted: true } : {}),
   };
 }

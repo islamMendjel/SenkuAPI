@@ -5,7 +5,7 @@ import { NextRequest } from "next/server";
 import { sanitizeAttachments } from "@/lib/senku/attachments";
 import { runChatTurn, runDuelTurn } from "@/lib/senku/gateway";
 import { ensureSeed } from "@/lib/senku/seed";
-import type { ChatMessageData, EffortLevel } from "@/lib/senku/types";
+import type { ChatMessageData, EffortLevel, TurnStyle } from "@/lib/senku/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -21,6 +21,8 @@ interface SendBody {
   duel?: boolean;
   challengerModel?: string;
   effort?: EffortLevel;
+  /** One-shot response style (/code, /concise) — normal turns only. */
+  style?: TurnStyle;
   /** Attachment records from the composer (already extracted —
    *  rebuilt field-by-field by sanitizeAttachments). */
   attachments?: unknown;
@@ -30,6 +32,11 @@ interface SendBody {
  *  silently treated as the default (medium). */
 function normalizeEffort(v: unknown): EffortLevel {
   return v === "fast" || v === "deep" ? v : "medium";
+}
+
+/** Only the two slash-command styles are valid. */
+function normalizeStyle(v: unknown): TurnStyle | undefined {
+  return v === "code" || v === "concise" ? v : undefined;
 }
 
 export async function POST(req: NextRequest) {
@@ -114,6 +121,7 @@ export async function POST(req: NextRequest) {
             temporary: body.temporary === true,
             persistUser: body.persistUser !== false,
             effort: normalizeEffort(body.effort),
+            style: normalizeStyle(body.style),
             attachments,
             signal: clientSignal,
             emit: (ev) => emit(ev as Record<string, unknown>),

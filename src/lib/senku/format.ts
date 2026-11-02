@@ -35,3 +35,13 @@ export function countdownTo(iso: string, now: Date): string {
   if (h === 0) return `resets in ${m}m`;
   return `resets in ${h}h ${m.toString().padStart(2, "0")}m`;
 }
+
+/** Line count consistent across LF / CR / CRLF input (Run 17).
+ *  Mirrors how editors count: one trailing newline does NOT open a
+ *  new line ("a\nb" → 2, "a\n" → 1, "a" → 1, "a\n\n" → 2). Used by
+ *  the >60-line pasted-snippet gate. */
+export function countLines(text: string): number {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines.length;
+}

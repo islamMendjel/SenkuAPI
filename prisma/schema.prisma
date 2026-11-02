@@ -77,6 +77,11 @@ model Message {
   provider  String? // provider that served the reply
   keyLabel  String? // pooled key that served the reply (for timeline debug)
   tokens    Int      @default(0) // tokens billed for this message (0 when cached)
+  // True when `tokens` is a chars/4 ESTIMATE because the upstream
+  // provider did not report usage (Run 17) — the timeline shows
+  // "≈ N tokens (estimated)" so an estimate is never presented as
+  // exact usage.
+  tokensEstimated Boolean @default(false)
   cached    Boolean  @default(false) // served from exact-match cache
   sources   String? // JSON array [{title,url,snippet}] when web search ran
   // Effort dial: "fast" | "medium" | "deep" on assistant replies

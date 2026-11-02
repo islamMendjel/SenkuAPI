@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSenku } from "@/lib/store";
 import { Sidebar } from "@/components/senku/Sidebar";
 import { RightRail } from "@/components/senku/RightRail";
+import { CanvasPanel } from "@/components/senku/CanvasPanel";
 import { TopBar } from "@/components/senku/TopBar";
 import { WelcomeScreen } from "@/components/senku/WelcomeScreen";
 import { ChatTimeline, TemporaryBanner } from "@/components/senku/ChatTimeline";
@@ -235,6 +236,11 @@ export function SenkuApp() {
 
         <InputBar />
       </div>
+
+      {/* Senku Canvas (Run 17) — split view on wide screens, overlay
+          panel on small ones. Mounted between the chat and the rail
+          so the conversation reflows, never overlaps. */}
+      <CanvasPanel />
 
       <RightRail onOpenSettings={() => setProvidersOpen(true)} />
 

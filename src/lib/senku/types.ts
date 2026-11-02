@@ -12,6 +12,14 @@ export type ChatRole = "user" | "assistant" | "system";
  */
 export type EffortLevel = "fast" | "medium" | "deep";
 
+/**
+ * One-shot response style (Run 17 slash commands):
+ *   code    → /code   — code-focused answer, no introductory chatter
+ *   concise → /concise — ultra-brief answer
+ * Armed in the composer, consumed by exactly one send, then cleared.
+ */
+export type TurnStyle = "code" | "concise";
+
 export interface ChatMessageData {
   role: ChatRole;
   content: string;

@@ -1673,6 +1673,187 @@ reloaded the env cleanly and all APIs kept serving 200.
 
 ---
 
+## Run 17 — 2026-11-03: PRODUCTION POLISH SWEEP — rAF stream throttle · Senku Canvas · paste pills · slash commands · usage honesty
+
+**User request (production-polish spec, five sections).** The
+unshipped remainder after Run 16's audit: (1a) re-verify the
+`<div inert>` sidebar report at the source; (1b) throttle streamed
+markdown/UI updates on `requestAnimationFrame` with a ~32 ms floor
+and a guaranteed final flush; (2) activate the dormant
+`<aside aria-label="Tools">` rail as a Senku Canvas (code-block
+Copy/Wrap/Preview controls, sandboxed html/svg/mermaid previews);
+(3) >60-line pastes → removable `Pasted snippet · X lines` pills +
+an accessible `/` command popover; (4) `stream_options:
+{include_usage}` where supported, estimates clearly marked,
+Retry-After respected; (5) full verification, no fake states.
+
+### Diagnosis first
+
+- **(1a) inert — re-proven NOT a defect** (Run 16's audit holds).
+  SSR HTML contains exactly ONE `inert`, on the closed sidebar
+  wrapper; the control that OPENS it (`aria-label="Open sidebar"`)
+  renders outside the subtree and stays interactive; clicking it
+  removes `inert`; closing restores it; the Tab order flows
+  toggle → palette → rail → textarea and never enters the closed
+  panel. No hydration mismatch (React 19 serializes `inert=""`;
+  client state matches). Defaulting inert to false pre-hydration
+  would put a hidden 0-width panel in the tab order — kept the
+  documented invariant instead.
+- **(1b) real gap**: every SSE delta ran a full store `set` +
+  markdown re-parse. **(2)** real gap: CodeBlock had Copy only,
+  rail was stub toasts. **(3)** real gap: pastes flooded the
+  textarea; no command palette at the input. **(4)** partial gap:
+  `stream_options` never sent, estimates presented as exact, no
+  Retry-After. Failover/disconnect/WAL/atomicity: already shipped
+  (Runs 1/16) — untouched.
+
+### What shipped
+
+**1. rAF-gated stream rendering (`raf-throttle.ts` + store).**
+`StreamFlushScheduler`: deltas accumulate synchronously (data is
+never delayed); store patches ride animation frames with a
+timestamp-enforced ≥32 ms floor (rAF is the scheduler, timestamps
+only the gate; a too-early frame reschedules itself). Terminal
+paths are exact: `done`/`error`/`lane_done` CANCEL the pending
+frame then write authoritative content; Stop flushes NOW
+(synchronous — throttling can never delay cancellation); a stream
+that ends without a terminal event gets a safety flush so tail
+tokens are never lost and no caret spins forever; `finally`
+cancels every scheduled frame. Duel lanes got their own
+schedulers; `restart` cancels before resetting so stale content
+never flashes back.
+
+**2. Senku Canvas (the Tools aside, activated).** Every supported
+code block now has a sticky keyboard-accessible header: Copy (with
+copied state + graceful clipboard failure), **Wrap/Unwrap**
+(`wrapLongLines`, `aria-pressed`), and **Preview in Tools** —
+offered ONLY for `html · svg · mermaid · javascript · python`
+labels (+ js/mjs/node/py aliases); unlabeled/unknown blocks are
+never inferred safe. The canvas is a 420 px split column on lg+,
+a closable full-height overlay below (backdrop + Escape + focus
+moved to Close on small screens). Preview/Code tabs share one
+source block kept in the store (close/reopen/chat navigation never
+lose it). SECURITY: previews render in a srcdoc iframe with
+`sandbox=""` (no allow-scripts, no allow-same-origin, no forms) +
+CSP `default-src 'none'` (all external network blocked — no CDN
+scripts/styles, ever). Mermaid is pre-rendered in the parent via
+the locally-bundled `mermaid@12` (lazy dynamic import,
+securityLevel `strict`) then independently sanitized (scripts,
+foreignObject, on* attrs, script/external URLs stripped) before
+entering the iframe — the rendered SVG is static. JavaScript and
+Python honestly DO NOT run: they open on the Code tab and the
+Preview tab explains that execution is unsupported, never
+simulated.
+
+**3. Developer input UX.** Plain-text pastes >60 lines (LF/CRLF
+consistent, editor-style counting — exactly 60 stays inline)
+become a removable `Pasted snippet · X lines` pill: staged 100 %
+client-side (no upload/persist until the user sends), sent exactly
+once via the existing attachments pipeline in pill order, capped
+by the existing 5-file/size limits with clear errors, honest chip
+tooltips ("the pasted snippet, N characters"). The `/` popover:
+`/code` (code-focused, no chatter), `/concise` (ultra-brief),
+`/search` (reflects the REAL grounded-search pipeline, live On/Off
+badge). Keyboard: ↑↓ navigate, Enter/Tab apply, Escape dismisses
+(and stays dismissed for that token); IME-composition Enter never
+submits or drives the popover (`isComposing`/229 guard — also
+fixed for normal sends); `/` mid-word and URLs never trigger.
+Applying strips the token (never sent as prompt text), arms a
+removable one-shot pill, and the next send carries `style` through
+the gateway (CODE/CONCISE system addons; cache-key namespaced per
+style; medium+no-style stays byte-identical for cache hits).
+
+**4. Usage honesty + provider hardening.** Provider requests now
+send `stream_options:{include_usage:true}` — adaptively: an
+endpoint that 400s naming the field is remembered per base URL
+(in-memory) and replayed byte-faithfully without it, so providers
+that reject the option are never broken (Z.ai SDK path never
+sends it — capability-gated). `usageReported` threads through the
+executor → gateway → `done` event → store → a persisted
+`Message.tokensEstimated` column → the timeline provenance line,
+which now reads **"≈ N tokens (estimated)"** whenever the upstream
+didn't report usage — an estimate is never presented as exact.
+429/503 responses parse `Retry-After` into a bounded (≤3 s) wait
+before the next pooled key, skipped entirely when the client is
+already gone.
+
+### Verification (all live, agent-browser + suite)
+
+- **Inert (1a)**: SSR HTML audit (exactly one `inert`, on the
+  closed wrapper; open-control outside) → click opens (inert
+  removed, 264 px panel) → close restores → 8-step Tab walk never
+  enters the closed panel.
+- **Stream (1b)**: 500-word stream — 412 network deltas → final
+  DOM text === `done` payload === DB row (2,939 chars,
+  byte-normalized equal); second stream — 286 deltas, **zero
+  writes after done** (no stale frames); Stop mid-essay → partial
+  retained (785 chars), zero error cards, send restored, both
+  cancellation markers in dev.log, DB holds the 843-char partial,
+  cache skipped. The visible settle pace after Stop is the
+  typewriter's reading rhythm (skippable), not throttle delay —
+  the store flush is synchronous.
+- **Canvas (2)**: html preview → 420 px static split column,
+  iframe `sandbox=""`, NO allow-same-origin, srcdoc CSP
+  `default-src 'none'` present; VLM confirms the red-heading/blue-
+  box page renders. Mermaid → rendered Start→Choice→End flowchart
+  (VLM-confirmed), `<svg>` in srcdoc, zero `<script>`, still
+  sandboxed. Code tab shows highlighted source + Copy; tab
+  switches preserve the source; close/reopen (rail button,
+  `aria-pressed`) keeps it; Escape closes; 390×844 → fixed
+  full-height overlay + visible backdrop + focus on Close;
+  backdrop click closes. javascript block → opens on Code tab;
+  Preview tab shows the honest "doesn't run in the preview"
+  notice with NO iframe. Wrap toggle → `aria-pressed` flips,
+  `white-space: pre-wrap` applied.
+- **Input UX (3)**: 61 LF lines → pill + clean textarea; 61 CRLF
+  lines → pill; exactly 60 and 59 → stay inline; 2 pills staged in
+  order, removal works; send → request body carries ONE attachment
+  with the byte-exact CRLF text, prompt clean, pills cleared;
+  persisted user message shows the record (538 chars, CR
+  preserved). Slash: bare `/` → 3 options + aria-activedescendant;
+  `/co` filters; ↑↓ + Enter applies (token stripped, Concise pill,
+  toast); pill X removes; `/search` turns the Search pill on;
+  mid-word `a/b` and URLs never trigger; `/` after space does;
+  Escape dismisses and stays dismissed. `/code` send → body has
+  `style:"code"`, content clean, pill cleared, and the reply led
+  with the code block (no chatter).
+- **Usage (4)**: live APInex turns report exact usage
+  (`tokensEstimated: false` in DB, provenance "4.9k tokens", no ≈);
+  the aborted turn also recorded exact usage; cache-hit turns
+  carry `tokensEstimated: false` (0 tokens, nothing estimated).
+- **Duel regression**: armed duel → both lanes streamed and
+  settled (2 Keep buttons), winner pick clean.
+- **Suites**: `tests/test_senku.py` — 96/101; the 5 failures are
+  environmental, proven independent of this run: `api.oxionai.dev`
+  has NO DNS RECORD (every OxionAI turn correctly cloud-fails-over
+  → `senku.key=None`) and Test 9 expects a `free/claude-4.6-opus`
+  model absent from the current seed. Provider restored to APInex
+  after the probe. `lint` 0 errors (2 pre-existing script
+  warnings); `tsc --noEmit` **14 errors = exact baseline** (proved
+  by stashing the working tree: pristine tree also 14); `bun run
+  build` not run (sandbox policy); dev.log clean; 0 page errors;
+  all 12 real chats intact; both test chats + duel chat purged.
+
+### Deferred / known trade-offs
+
+- IME guard is code-level (`isComposing`/keyCode 229) — true
+  composition can't be simulated headlessly.
+- The store-level throttle's flush cadence isn't directly
+  observable in the DOM (the typewriter reveal dominates visible
+  text changes); its correctness is anchored by architecture
+  (single append buffer) + the final-equality/no-stale-write
+  proofs.
+- Mermaid's parent-side parse is defense-in-depth behind
+  securityLevel `strict` + the sanitizer + the script-less
+  sandbox; a mermaid CVE would need to defeat three layers.
+- Retry-After only in delay-seconds form, capped at 3 s; 402
+  remains typed as transient (still retried per Run 1 policy).
+- No new automated test files (project convention: live
+  characterization via the python suite + agent-browser E2E,
+  documented above).
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we
@@ -1682,7 +1863,7 @@ they ship).
 | Gap | Competitor | Status |
 | --- | --- | --- |
 | File uploads with real content understanding (docs, images) | all three | **BEATEN (Run 9)** — we read text/code/PDF (text-layer) and images (pooled VISION pass: OCR + visual description), AND show per-file extraction provenance (chars read, truncation, method) the incumbents hide; unreadable files are honestly not sent |
-| Canvas / artifacts side-panel for long code+docs | ChatGPT, Claude | OPEN |
+| Canvas / artifacts side-panel for long code+docs | ChatGPT, Claude | **MATCHED (Run 17)** — Senku Canvas: per-block Copy/Wrap/Preview controls, sandboxed (script-less, network-less) html/svg/mermaid previews in a split panel; js/py honestly view-only |
 | Scheduled prompts / recurring tasks | ChatGPT, Gemini | OPEN |
 | Memory across chats | ChatGPT, Claude | OPEN (deliberately: personal gateway, no profile harvesting) |
 | Code interpreter / sandboxed execution | ChatGPT | OPEN |

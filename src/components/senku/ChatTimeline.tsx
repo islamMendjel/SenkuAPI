@@ -250,7 +250,13 @@ function provenanceLine(m: UIMessage): string {
     );
   }
   if (typeof m.tokens === "number" && m.tokens > 0) {
-    parts.push(`${formatCompact(m.tokens)} tokens`);
+    // Estimated counts (upstream sent no usage stats) say so — an
+    // estimate is never presented as exact usage (Run 17).
+    parts.push(
+      m.tokensEstimated
+        ? `≈${formatCompact(m.tokens)} tokens (estimated)`
+        : `${formatCompact(m.tokens)} tokens`
+    );
   }
   parts.push(m.cached ? "cache: hit" : "cache: miss");
   return parts.join(" · ");

@@ -141,6 +141,32 @@ export async function dispatchCompletion(
 
     noteKeyFailure(key.id, attempt.reason === "auth" ? "auth" : "transient");
 
+    // 429/503 with a Retry-After hint: wait it out (bounded ≤3 s by
+    // the executor's parser) before hammering the pool again — but
+    // never when the client is already gone, and never unbounded.
+    if (
+      attempt.retryAfterMs &&
+      attempt.retryAfterMs > 0 &&
+      !signal?.aborted
+    ) {
+      await new Promise((r) => setTimeout(r, attempt.retryAfterMs));
+      if (signal?.aborted) {
+        return {
+          exec: {
+            content: "",
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            servedBy: "provider",
+            aborted: true,
+          },
+          key: null,
+          attempts: tried.size,
+          aborted: true,
+        };
+      }
+    }
+
     // Partial output already reached the client — retrying another
     // key would duplicate it; go straight to the cloud re-emission
     // (identical to the previous single-attempt behavior).

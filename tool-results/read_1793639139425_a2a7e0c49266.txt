@@ -1,0 +1,1204 @@
+     1→"use client";
+     2→
+     3→// SenkuAPI — client store (Zustand). Owns bootstrap data, chat state
+     4→// and the SSE streaming turn pipeline.
+     5→
+     6→import { create } from "zustand";
+     7→import { DEFAULT_MODEL } from "@/lib/senku/constants";
+     8→import { autoChallenger } from "@/lib/senku/models";
+     9→import type {
+    10→  AttachmentRecord,
+    11→  ChatMessageData,
+    12→  EffortLevel,
+    13→  LimiterStatus,
+    14→  ProviderView,
+    15→  SearchSource,
+    16→} from "@/lib/senku/types";
+    17→
+    18→/** One file being attached to the next message — extraction runs
+    19→ *  server-side the moment the file is picked, so the chip can show
+    20→ *  exactly what the gateway read BEFORE the user sends. */
+    21→export interface PendingAttachment {
+    22→  id: string;
+    23→  name: string;
+    24→  kindGuess: "text" | "pdf" | "image" | "unknown";
+    25→  status: "extracting" | "ready" | "error";
+    26→  error?: string;
+    27→  record?: AttachmentRecord;
+    28→}
+    29→
+    30→/** One racing model inside a duel turn. */
+    31→export interface DuelLane {
+    32→  id: "a" | "b";
+    33→  model: string;
+    34→  content: string;
+    35→  streaming: boolean;
+    36→  error: string | null;
+    37→  phase: "searching" | "thinking" | null;
+    38→  tokens: number;
+    39→  cached: boolean;
+    40→  servedBy: string | null;
+    41→  keyLabel: string | null;
+    42→}
+    43→
+    44→export interface UIMessage {
+    45→  id: string;
+    46→  role: "user" | "assistant";
+    47→  content: string;
+    48→  model?: string | null;
+    49→  provider?: string | null;
+    50→  keyLabel?: string | null;
+    51→  tokens?: number;
+    52→  cached?: boolean;
+    53→  servedBy?: string | null;
+    54→  sources?: SearchSource[] | null;
+    55→  /** files the gateway read and sent with this message */
+    56→  attachments?: AttachmentRecord[] | null;
+    57→  createdAt?: string;
+    58→  streaming?: boolean;
+    59→  error?: string | null;
+    60→  /** live phase while waiting for the first delta */
+    61→  phase?: "searching" | "thinking" | null;
+    62→  /** deep-research stage label while the search pipeline runs */
+    63→  searchDetail?: string | null;
+    64→  /** effort level that served (or is serving) this turn */
+    65→  effort?: EffortLevel | null;
+    66→  /** set when web search was requested but every engine failed */
+    67→  searchFailed?: boolean;
+    68→  /** present while a duel turn awaits the user's pick */
+    69→  duel?: { a: DuelLane; b: DuelLane } | null;
+    70→  /** which lane the user kept ("a" | "b"), once picked */
+    71→  duelPicked?: "a" | "b" | null;
+    72→  /** the losing lane, kept as a viewable reference after the pick */
+    73→  runnerUp?: { content: string; model: string } | null;
+    74→}
+    75→
+    76→export interface ChatListItem {
+    77→  id: string;
+    78→  title: string;
+    79→  model: string;
+    80→  provider: string;
+    81→  createdAt: string;
+    82→  updatedAt: string;
+    83→}
+    84→
+    85→interface UserInfo {
+    86→  name: string;
+    87→  email: string;
+    88→  plan: string;
+    89→}
+    90→
+    91→interface SenkuState {
+    92→  user: UserInfo;
+    93→  providers: ProviderView[];
+    94→  limiter: LimiterStatus | null;
+    95→  chats: ChatListItem[];
+    96→  models: string[];
+    97→
+    98→  sidebarOpen: boolean;
+    99→  searchOpen: boolean;
+   100→  searchFilter: string;
+   101→  searchEnabled: boolean;
+   102→  temporary: boolean;
+   103→  model: string;
+   104→  /** duel mode: next send races two models, user keeps the winner */
+   105→  duelEnabled: boolean;
+   106→  /** the lane-B model (null when the pool has no second model) */
+   107→  challenger: string | null;
+   108→  /** effort dial — fast / medium (default) / deep */
+   109→  effort: EffortLevel;
+   110→
+   111→  currentChatId: string | null;
+   112→  messages: UIMessage[];
+   113→  streaming: boolean;
+   114→  booted: boolean;
+   115→  /** Bumped on every conversation navigation (new chat, entering
+   116→   *      a chat, deleting the current chat) — the app shell keys the
+   117→   *      timeline view on it so each navigation plays the view-in
+   118→   *      transition exactly once (and never mid-stream). */
+   119→  viewEpoch: number;
+   120→  /** files staged for the NEXT message (extraction runs at pick time) */
+   121→  pendingAttachments: PendingAttachment[];
+   122→
+   123→  /** Upload files for extraction — each becomes a chip showing what
+   124→   *      the gateway read (or why it couldn't be read). */
+   125→  addAttachments: (files: File[]) => Promise<void>;
+   126→  removePendingAttachment: (id: string) => void;
+   127→
+   128→  bootstrap: () => Promise<void>;
+   129→  refreshUsage: () => Promise<void>;
+   130→  refreshChats: () => Promise<void>;
+   131→  setSidebarOpen: (v: boolean) => void;
+   132→  setSearchOpen: (v: boolean) => void;
+   133→  setSearchFilter: (v: string) => void;
+   134→  toggleSearch: () => void;
+   135→  setSearchEnabled: (v: boolean) => void;
+   136→  toggleTemporary: () => void;
+   137→  setModel: (m: string) => void;
+   138→  toggleDuel: () => void;
+   139→  setChallenger: (m: string) => void;
+   140→  setEffort: (e: EffortLevel) => void;
+   141→  /** Keep one lane of an awaiting-pick duel as the canonical
+   142→        assistant reply (persists it server-side for saved chats). */
+   143→  pickDuelWinner: (messageId: string, lane: "a" | "b") => Promise<void>;
+   144→  syncModels: () => Promise<boolean>;
+   145→  switchProvider: (providerId: string) => Promise<void>;
+   146→  addKey: (providerId: string, label: string, key: string) => Promise<void>;
+   147→  deleteKey: (keyId: string) => Promise<void>;
+   148→  toggleKey: (keyId: string, isActive: boolean) => Promise<void>;
+   149→
+   150→  newChat: () => void;
+   151→  selectChat: (id: string) => Promise<void>;
+   152→  deleteChat: (id: string) => Promise<void>;
+   153→  /** Rename a chat (optimistic — rolls back to the server list on
+   154→      failure). Returns true when the new title stuck. */
+   155→  renameChat: (id: string, title: string) => Promise<boolean>;
+   156→  sendMessage: (content: string) => Promise<void>;
+   157→  editMessage: (messageId: string, content: string) => Promise<void>;
+   158→  /** Re-run the turn that produced the last failed assistant reply,
+   159→      optionally with a different model (error-card "switch model"). */
+   160→  retryLast: (modelOverride?: string) => Promise<void>;
+   161→  stopStreaming: () => void;
+   162→}
+   163→
+   164→let streamController: AbortController | null = null;
+   165→
+   166→/** Fires exactly when the usage day rolls over (01:00 Africa/Algiers),
+   167→ *  so the daily token counter visibly resets to 0 at that moment —
+   168→ *  no polling loop, one timer armed from the server's own schedule. */
+   169→let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+   170→function scheduleDailyRolloverRefresh(dailyResetsAt?: string) {
+   171→  if (rolloverTimer) {
+   172→    clearTimeout(rolloverTimer);
+   173→    rolloverTimer = null;
+   174→  }
+   175→  if (typeof dailyResetsAt !== "string") return;
+   176→  const at = new Date(dailyResetsAt).getTime();
+   177→  if (!Number.isFinite(at)) return;
+   178→  const delay = Math.max(at - Date.now() + 1000, 30_000); // never tighter than 30s
+   179→  rolloverTimer = setTimeout(() => {
+   180→    rolloverTimer = null;
+   181→    void useSenku.getState().refreshUsage();
+   182→  }, delay);
+   183→}
+   184→
+   185→function applyProviderView(
+   186→  providers: ProviderView[],
+   187→  view: ProviderView
+   188→): ProviderView[] {
+   189→  return providers.map((p) => (p.id === view.id ? view : p));
+   190→}
+   191→
+   192→export const useSenku = create<SenkuState>((set, get) => ({
+   193→  user: {
+   194→    name: "senku",
+   195→    email: "gamerislam21@gmail.com",
+   196→    plan: "Ultimate plan (unlimited)",
+   197→  },
+   198→  providers: [],
+   199→  limiter: null,
+   200→  chats: [],
+   201→  models: [],
+   202→
+   203→  // Run 15: the sidebar starts CLOSED on launch (the user asked for
+   204→  // it explicitly). It opens on click, on hover-peek over the
+   205→  // top-bar toggle, and — on mobile — stays an overlay drawer.
+   206→  sidebarOpen: false,
+   207→  searchOpen: false,
+   208→  searchFilter: "",
+   209→  searchEnabled: false,
+   210→  temporary: false,
+   211→  model: "free/glm-5.3",
+   212→  duelEnabled: false,
+   213→  challenger: null,
+   214→  effort: "medium",
+   215→
+   216→  currentChatId: null,
+   217→  messages: [],
+   218→  streaming: false,
+   219→  booted: false,
+   220→  viewEpoch: 0,
+   221→  pendingAttachments: [],
+   222→
+   223→  async addAttachments(files) {
+   224→    const existing = get().pendingAttachments;
+   225→    const room = 5 - existing.length;
+   226→    if (room <= 0) {
+   227→      return; // caller toasts about the cap
+   228→    }
+   229→    const accepted = files.slice(0, room);
+   230→    const skipped = files.length - accepted.length;
+   231→    const staged: PendingAttachment[] = accepted.map((f) => ({
+   232→      id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+   233→      name: f.name,
+   234→      kindGuess: f.type.startsWith("image/")
+   235→        ? "image"
+   236→        : f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")
+   237→          ? "pdf"
+   238→          : f.type.startsWith("text/") || f.name.includes(".")
+   239→            ? "text"
+   240→            : "unknown",
+   241→      status: "extracting",
+   242→    }));
+   243→    set({ pendingAttachments: [...existing, ...staged] });
+   244→    if (skipped > 0) return; // cap message handled by the caller
+   245→
+   246→    try {
+   247→      const form = new FormData();
+   248→      for (const f of accepted) form.append("files", f);
+   249→      const res = await fetch("/api/attachments/extract", {
+   250→        method: "POST",
+   251→        body: form,
+   252→      });
+   253→      const data = (await res.json().catch(() => ({}))) as {
+   254→        records?: AttachmentRecord[];
+   255→        errors?: { name: string; error: string }[];
+   256→        error?: string;
+   257→      };
+   258→      if (!res.ok) throw new Error(data.error || "Extraction failed");
+   259→      const records = data.records ?? [];
+   260→      const errors = data.errors ?? [];
+   261→      set((s) => ({
+   262→        pendingAttachments: s.pendingAttachments.map((p) => {
+   263→          const rec = records.find((r) => r.name === p.name);
+   264→          if (rec) {
+   265→            return {
+   266→              ...p,
+   267→              status: "ready" as const,
+   268→              kindGuess: rec.kind,
+   269→              record: rec,
+   270→            };
+   271→          }
+   272→          const err = errors.find((e) => e.name === p.name);
+   273→          if (err) {
+   274→            return { ...p, status: "error" as const, error: err.error };
+   275→          }
+   276→          // No result at all (name mismatch etc.) — treat as error.
+   277→          return {
+   278→            ...p,
+   279→            status: "error" as const,
+   280→            error: "Could not read this file.",
+   281→          };
+   282→        }),
+   283→      }));
+   284→    } catch (e) {
+   285→      // Whole upload failed — every staged file errors out.
+   286→      const msg = (e as Error).message || "Extraction failed";
+   287→      set((s) => ({
+   288→        pendingAttachments: s.pendingAttachments.map((p) =>
+   289→          staged.some((q) => q.id === p.id)
+   290→            ? { ...p, status: "error" as const, error: msg }
+   291→            : p
+   292→        ),
+   293→      }));
+   294→    }
+   295→  },
+   296→
+   297→  removePendingAttachment: (id) =>
+   298→    set((s) => ({
+   299→      pendingAttachments: s.pendingAttachments.filter((p) => p.id !== id),
+   300→    })),
+   301→
+   302→  async bootstrap() {
+   303→    try {
+   304→      const res = await fetch("/api/bootstrap");
+   305→      const data = await res.json();
+   306→      if (data.error) throw new Error(data.error);
+   307→      const models: string[] = data.activeProvider?.models ?? [];
+   308→      set({
+   309→        user: data.user ?? get().user,
+   310→        providers: data.providers ?? [],
+   311→        limiter: data.limiter ?? null,
+   312→        chats: data.chats ?? [],
+   313→        models,
+   314→        // Every fresh session boots on the default model (glm-5.3).
+   315→        model: models.includes(DEFAULT_MODEL)
+   316→          ? DEFAULT_MODEL
+   317→          : models[0] ?? DEFAULT_MODEL,
+   318→        // A stale challenger (from a previous provider's list) is
+   319→        // dropped — it is re-derived the next time duel is armed.
+   320→        challenger: null,
+   321→        booted: true,
+   322→      });
+   323→    } catch (e) {
+   324→      console.error("bootstrap failed", e);
+   325→      set({ booted: true });
+   326→    }
+   327→  },
+   328→
+   329→  async refreshUsage() {
+   330→    try {
+   331→      const res = await fetch("/api/usage");
+   332→      const data = await res.json();
+   333→      if (!data.error) {
+   334→        set({ providers: data.providers ?? [], limiter: data.limiter ?? null });
+   335→        scheduleDailyRolloverRefresh(data.limiter?.dailyResetsAt);
+   336→      }
+   337→    } catch {
+   338→      // non-fatal
+   339→    }
+   340→  },
+   341→
+   342→  async refreshChats() {
+   343→    try {
+   344→      const res = await fetch("/api/chats");
+   345→      const chats = await res.json();
+   346→      if (Array.isArray(chats)) set({ chats });
+   347→    } catch {
+   348→      // non-fatal
+   349→    }
+   350→  },
+   351→
+   352→  setSidebarOpen: (v) => set({ sidebarOpen: v }),
+   353→  setSearchOpen: (v) => set({ searchOpen: v, searchFilter: v ? get().searchFilter : "" }),
+   354→  setSearchFilter: (v) => set({ searchFilter: v }),
+   355→  toggleSearch: () => set((s) => ({ searchEnabled: !s.searchEnabled })),
+   356→  setSearchEnabled: (v) => set({ searchEnabled: v }),
+   357→  toggleTemporary: () =>
+   358→    set((s) => ({
+   359→      temporary: !s.temporary,
+   360→      // switching modes always starts a fresh conversation so persisted
+   361→      // history never mixes with ephemeral messages
+   362→      currentChatId: null,
+   363→      messages: [],
+   364→      // staged files belong to the abandoned conversation
+   365→      pendingAttachments: [],
+   366→    })),
+   367→  setModel: (m) =>
+   368→    set((s) => ({
+   369→      model: m,
+   370→      // The challenger can never be the primary — re-derive it when
+   371→      // the user switches onto the challenger's model mid-duel-arm.
+   372→      challenger:
+   373→        s.duelEnabled && s.challenger === m
+   374→          ? autoChallenger(s.models, m)
+   375→          : s.challenger,
+   376→    })),
+   377→  toggleDuel: () => {
+   378→    const s = get();
+   379→    if (!s.duelEnabled) {
+   380→      // Arming: reuse a still-valid challenger, else auto-pick a
+   381→      // contrasting one (different family when possible).
+   382→      const challenger =
+   383→        s.challenger &&
+   384→        s.challenger !== s.model &&
+   385→        s.models.includes(s.challenger)
+   386→          ? s.challenger
+   387→          : autoChallenger(s.models, s.model);
+   388→      if (!challenger) return; // nothing to duel against
+   389→      set({ duelEnabled: true, challenger });
+   390→    } else {
+   391→      set({ duelEnabled: false });
+   392→    }
+   393→  },
+   394→  setChallenger: (m) => set({ challenger: m }),
+   395→  setEffort: (e) => set({ effort: e }),
+   396→
+   397→  async syncModels() {
+   398→    try {
+   399→      const res = await fetch("/api/models?sync=1");
+   400→      const data = await res.json();
+   401→      if (Array.isArray(data.models) && data.models.length) {
+   402→        const models: string[] = data.models;
+   403→        set((s) => ({
+   404→          models,
+   405→          model: models.includes(s.model)
+   406→            ? s.model
+   407→            : models.includes(DEFAULT_MODEL)
+   408→              ? DEFAULT_MODEL
+   409→              : models[0],
+   410→          // The list changed — a challenger that disappeared is dropped
+   411→          // (re-derived when duel is armed / at send time).
+   412→          challenger:
+   413→            s.challenger && models.includes(s.challenger) ? s.challenger : null,
+   414→        }));
+   415→        return data.synced === true;
+   416→      }
+   417→    } catch {
+   418→      // keep current list
+   419→    }
+   420→    return false;
+   421→  },
+   422→
+   423→  async switchProvider(providerId) {
+   424→    const res = await fetch("/api/providers/switch", {
+   425→      method: "POST",
+   426→      headers: { "Content-Type": "application/json" },
+   427→      body: JSON.stringify({ providerId }),
+   428→    });
+   429→    const data = await res.json();
+   430→    if (data.error) throw new Error(data.error);
+   431→    const models: string[] = data.activeProvider?.models ?? [];
+   432→    set((s) => ({
+   433→      providers: data.providers ?? s.providers,
+   434→      limiter: data.limiter ?? s.limiter,
+   435→      models,
+   436→      model: models.includes(s.model)
+   437→        ? s.model
+   438→        : models.includes(DEFAULT_MODEL)
+   439→          ? DEFAULT_MODEL
+   440→          : models[0] ?? s.model,
+   441→      // Provider switch → different model list; stale challenger dropped.
+   442→      challenger:
+   443→        s.challenger && models.includes(s.challenger) ? s.challenger : null,
+   444→    }));
+   445→  },
+   446→
+   447→  async addKey(providerId, label, key) {
+   448→    const res = await fetch(`/api/providers/${providerId}/keys`, {
+   449→      method: "POST",
+   450→      headers: { "Content-Type": "application/json" },
+   451→      body: JSON.stringify({ label, key }),
+   452→    });
+   453→    const view = await res.json();
+   454→    if (view.error) throw new Error(view.error);
+   455→    set((s) => ({ providers: applyProviderView(s.providers, view) }));
+   456→    await get().refreshUsage();
+   457→  },
+   458→
+   459→  async deleteKey(keyId) {
+   460→    const res = await fetch(`/api/keys/${keyId}`, { method: "DELETE" });
+   461→    const view = await res.json();
+   462→    if (view.error) throw new Error(view.error);
+   463→    set((s) => ({ providers: applyProviderView(s.providers, view) }));
+   464→    await get().refreshUsage();
+   465→  },
+   466→
+   467→  async toggleKey(keyId, isActive) {
+   468→    const res = await fetch(`/api/keys/${keyId}`, {
+   469→      method: "PATCH",
+   470→      headers: { "Content-Type": "application/json" },
+   471→      body: JSON.stringify({ isActive }),
+   472→    });
+   473→    const view = await res.json();
+   474→    if (view.error) throw new Error(view.error);
+   475→    set((s) => ({ providers: applyProviderView(s.providers, view) }));
+   476→    await get().refreshUsage();
+   477→  },
+   478→
+   479→  newChat: () =>
+   480→    // Every new chat resets to the default model (glm-5.3) —
+   481→    // the user can then switch freely for that conversation.
+   482→    set((s) => ({
+   483→      currentChatId: null,
+   484→      messages: [],
+   485→      pendingAttachments: [],
+   486→      viewEpoch: s.viewEpoch + 1,
+   487→      model: s.models.includes(DEFAULT_MODEL)
+   488→        ? DEFAULT_MODEL
+   489→        : s.models[0] ?? s.model,
+   490→    })),
+   491→
+   492→  async selectChat(id) {
+   493→    if (get().streaming) return;
+   494→    // Re-clicking the chat you're already reading is a no-op —
+   495→    // no refetch, and no view-transition replay.
+   496→    if (get().currentChatId === id && !get().temporary) return;
+   497→    try {
+   498→      const res = await fetch(`/api/chats/${id}`);
+   499→      if (!res.ok) return;
+   500→      const chat = await res.json();
+   501→      set((s) => ({
+   502→        currentChatId: id,
+   503→        temporary: false,
+   504→        model: chat.model ?? s.model,
+   505→        // staged files belong to the previous conversation
+   506→        pendingAttachments: [],
+   507→        viewEpoch: s.viewEpoch + 1,
+   508→        messages: (chat.messages ?? []).map((m: UIMessage) => ({
+   509→          ...m,
+   510→          sources: m.sources ?? null,
+   511→          attachments: m.attachments ?? null,
+   512→          // Duel runner-ups live on persisted messages (the winner
+   513→          // IS the message content/model).
+   514→          runnerUp:
+   515→            typeof m.altContent === "string" && m.altContent
+   516→              ? {
+   517→                  content: m.altContent,
+   518→                  model: typeof m.altModel === "string" ? m.altModel : "",
+   519→                }
+   520→              : null,
+   521→        })),
+   522→      }));
+   523→    } catch {
+   524→      // non-fatal
+   525→    }
+   526→  },
+   527→
+   528→  async deleteChat(id) {
+   529→    await fetch(`/api/chats/${id}`, { method: "DELETE" }).catch(() => {});
+   530→    if (get().currentChatId === id) {
+   531→      set((s) => ({
+   532→        currentChatId: null,
+   533→        messages: [],
+   534→        viewEpoch: s.viewEpoch + 1,
+   535→      }));
+   536→    }
+   537→    await get().refreshChats();
+   538→  },
+   539→
+   540→  async renameChat(id, title) {
+   541→    const t = title.trim().slice(0, 80);
+   542→    const prev = get().chats.find((c) => c.id === id);
+   543→    if (!t || !prev || prev.title === t) return true;
+   544→    // Optimistic: the new title appears instantly in the sidebar…
+   545→    set((s) => ({
+   546→      chats: s.chats.map((c) => (c.id === id ? { ...c, title: t } : c)),
+   547→    }));
+   548→    try {
+   549→      const res = await fetch(`/api/chats/${id}`, {
+   550→        method: "PATCH",
+   551→        headers: { "Content-Type": "application/json" },
+   552→        body: JSON.stringify({ title: t }),
+   553→      });
+   554→      if (!res.ok) throw new Error("rename failed");
+   555→      return true;
+   556→    } catch {
+   557→      // …and rolls back to the server's truth if the write failed.
+   558→      await get().refreshChats();
+   559→      return false;
+   560→    }
+   561→  },
+   562→
+   563→  async sendMessage(content) {
+   564→    const state = get();
+   565→    if (state.streaming || !content.trim()) return;
+   566→    // A duel still awaiting its pick? The primary lane becomes the
+   567→    // canonical answer so the next turn's history has one voice.
+   568→    const pending = [...state.messages].reverse().find((m) => m.duel && !m.duelPicked);
+   569→    if (pending) {
+   570→      await get().pickDuelWinner(pending.id, "a");
+   571→    }
+   572→    const s2 = get();
+   573→    const history: ChatMessageData[] = s2.messages.map((m) => ({
+   574→      role: m.role,
+   575→      content: m.content,
+   576→      ...(m.role === "user" && m.attachments?.length
+   577→        ? { attachments: m.attachments }
+   578→        : {}),
+   579→    }));
+   580→    // Files staged in the composer: only READY records are sent (a
+   581→    // file that couldn't be read is never sent — the model must not
+   582→    // pretend it saw it). Failed/error chips stay for the user to
+   583→    // remove or ignore.
+   584→    const attachments = s2.pendingAttachments
+   585→      .filter((p) => p.status === "ready" && p.record)
+   586→      .map((p) => p.record!);
+   587→    const stillExtracting = s2.pendingAttachments.some(
+   588→      (p) => p.status === "extracting"
+   589→    );
+   590→    if (stillExtracting) return; // InputBar disables send meanwhile
+   591→    set({ pendingAttachments: [] });
+   592→    // Resolve the challenger at send time — the model list may have
+   593→    // changed since duel was armed.
+   594→    let challenger = s2.challenger;
+   595→    if (challenger === s2.model || !s2.models.includes(challenger ?? "")) {
+   596→      challenger = autoChallenger(s2.models, s2.model);
+   597→    }
+   598→    const duel =
+   599→      s2.duelEnabled && challenger ? { challenger } : undefined;
+   600→    await streamTurn(set, get, {
+   601→      chatId: s2.temporary ? null : s2.currentChatId,
+   602→      history,
+   603→      content,
+   604→      persistUser: true,
+   605→      duel,
+   606→      attachments,
+   607→    });
+   608→  },
+   609→
+   610→  async editMessage(messageId, content) {
+   611→    const state = get();
+   612→    if (state.streaming || !content.trim()) return;
+   613→    const idx = state.messages.findIndex((m) => m.id === messageId);
+   614→    if (idx === -1) return;
+   615→    if (state.temporary || !state.currentChatId) {
+   616→      // Local-only timeline: truncate everything after the edited message.
+   617→      const kept = state.messages
+   618→        .slice(0, idx + 1)
+   619→        .map((m) => (m.id === messageId ? { ...m, content: content.trim() } : m));
+   620→      set({ messages: kept });
+   621→      const history: ChatMessageData[] = kept.slice(0, -1).map((m) => ({
+   622→        role: m.role,
+   623→        content: m.content,
+   624→        ...(m.role === "user" && m.attachments?.length
+   625→          ? { attachments: m.attachments }
+   626→          : {}),
+   627→      }));
+   628→      const edited = kept[kept.length - 1];
+   629→      await streamTurn(set, get, {
+   630→        chatId: null,
+   631→        history,
+   632→        content: content.trim(),
+   633→        persistUser: false,
+   634→        temporary: true,
+   635→        attachments: edited?.role === "user" ? edited.attachments ?? [] : [],
+   636→      });
+   637→      return;
+   638→    }
+   639→
+   640→    const res = await fetch("/api/chat/truncate", {
+   641→      method: "POST",
+   642→      headers: { "Content-Type": "application/json" },
+   643→      body: JSON.stringify({ messageId, content: content.trim() }),
+   644→    });
+   645→    const data = await res.json();
+   646→    if (!Array.isArray(data.messages)) return;
+   647→    const kept: UIMessage[] = data.messages.map((m: UIMessage) => ({
+   648→      ...m,
+   649→      sources: m.sources ?? null,
+   650→      attachments: m.attachments ?? null,
+   651→    }));
+   652→    set({ messages: kept });
+   653→    const history: ChatMessageData[] = kept.slice(0, -1).map((m) => ({
+   654→      role: m.role,
+   655→      content: m.content,
+   656→      ...(m.role === "user" && m.attachments?.length
+   657→        ? { attachments: m.attachments }
+   658→        : {}),
+   659→    }));
+   660→    const edited = kept[kept.length - 1];
+   661→    await streamTurn(set, get, {
+   662→      chatId: state.currentChatId,
+   663→      history,
+   664→      content: content.trim(),
+   665→      persistUser: false,
+   666→      attachments: edited?.role === "user" ? edited.attachments ?? [] : [],
+   667→    });
+   668→  },
+   669→
+   670→  async retryLast(modelOverride) {
+   671→    const state = get();
+   672→    if (state.streaming) return;
+   673→
+   674→    // The most recent failed assistant reply.
+   675→    let failedIdx = -1;
+   676→    for (let i = state.messages.length - 1; i >= 0; i--) {
+   677→      const m = state.messages[i];
+   678→      if (m.role === "assistant" && m.error) {
+   679→        failedIdx = i;
+   680→        break;
+   681→      }
+   682→    }
+   683→    if (failedIdx === -1) return;
+   684→
+   685→    // The user message that failed turn was answering.
+   686→    let userIdx = -1;
+   687→    for (let i = failedIdx - 1; i >= 0; i--) {
+   688→      if (state.messages[i].role === "user") {
+   689→        userIdx = i;
+   690→        break;
+   691→      }
+   692→    }
+   693→    if (userIdx === -1) return;
+   694→    const userMsg = state.messages[userIdx];
+   695→
+   696→    const history: ChatMessageData[] = state.messages
+   697→      .slice(0, userIdx)
+   698→      .map((m) => ({
+   699→        role: m.role,
+   700→        content: m.content,
+   701→        ...(m.role === "user" && m.attachments?.length
+   702→          ? { attachments: m.attachments }
+   703→          : {}),
+   704→      }));
+   705→
+   706→    // Drop the failed bubble from the timeline.
+   707→    set({ messages: state.messages.slice(0, failedIdx) });
+   708→
+   709→    // If the user message never received a server id, the turn died
+   710→    // before persistence — persist it on retry. Otherwise it is
+   711→    // already in the DB and must not be duplicated.
+   712→    const persisted = !userMsg.id.startsWith("u-");
+   713→    await streamTurn(set, get, {
+   714→      chatId: state.temporary ? null : state.currentChatId,
+   715→      history,
+   716→      content: userMsg.content,
+   717→      persistUser: !persisted,
+   718→      appendUserBubble: false, // the original user bubble stays
+   719→      temporary: state.temporary,
+   720→      model: modelOverride,
+   721→      // The retried turn sees the same files again.
+   722→      attachments: userMsg.attachments ?? [],
+   723→    });
+   724→  },
+   725→
+   726→  async pickDuelWinner(messageId, laneId) {
+   727→    const s = get();
+   728→    const msg = s.messages.find((m) => m.id === messageId);
+   729→    if (!msg?.duel || msg.duelPicked) return;
+   730→    const winner = msg.duel[laneId];
+   731→    const loser = msg.duel[laneId === "a" ? "b" : "a"];
+   732→    if (!winner.content.trim()) return; // nothing to keep
+   733→    const providerName = s.limiter?.providerName ?? null;
+   734→
+   735→    // Local commit first — the pick must feel instant.
+   736→    set({
+   737→      messages: s.messages.map((m) =>
+   738→        m.id === messageId
+   739→          ? {
+   740→              ...m,
+   741→              content: winner.content,
+   742→              model: winner.model,
+   743→              tokens: winner.tokens,
+   744→              cached: winner.cached,
+   745→              servedBy: winner.servedBy,
+   746→              keyLabel: winner.keyLabel,
+   747→              provider: providerName,
+   748→              duel: null,
+   749→              duelPicked: laneId,
+   750→              runnerUp: loser.content.trim()
+   751→                ? { content: loser.content, model: loser.model }
+   752→                : null,
+   753→              streaming: false,
+   754→              phase: null,
+   755→            }
+   756→          : m
+   757→      ),
+   758→    });
+   759→
+   760→    // Persist for saved chats (temporary duels stay local-only).
+   761→    if (!s.temporary && s.currentChatId) {
+   762→      try {
+   763→        const res = await fetch("/api/chat/duel/pick", {
+   764→          method: "POST",
+   765→          headers: { "Content-Type": "application/json" },
+   766→          body: JSON.stringify({
+   767→            chatId: s.currentChatId,
+   768→            winner: {
+   769→              content: winner.content,
+   770→              model: winner.model,
+   771→              tokens: winner.tokens,
+   772→              cached: winner.cached,
+   773→              servedBy: winner.servedBy,
+   774→              keyLabel: winner.keyLabel,
+   775→            },
+   776→            runnerUp: loser.content.trim()
+   777→              ? { content: loser.content, model: loser.model }
+   778→              : null,
+   779→            effort: s.effort,
+   780→          }),
+   781→        });
+   782→        const data = (await res.json()) as { id?: string; error?: string };
+   783→        if (typeof data.id === "string" && data.id) {
+   784→          // Reconcile with the server id so later edits/truncates hit
+   785→          // the real message row.
+   786→          set((st) => ({
+   787→            messages: st.messages.map((m) =>
+   788→              m.id === messageId ? { ...m, id: data.id as string } : m
+   789→            ),
+   790→          }));
+   791→        }
+   792→      } catch {
+   793→        // keep the local pick — the answer stays in the timeline
+   794→      }
+   795→    }
+   796→  },
+   797→
+   798→  stopStreaming: () => {
+   799→    streamController?.abort();
+   800→    streamController = null;
+   801→  },
+   802→}));
+   803→
+   804→// ── SSE turn pipeline ─────────────────────────────────────────
+   805→type SetState = (
+   806→  partial: Partial<SenkuState> | ((s: SenkuState) => Partial<SenkuState>)
+   807→) => void;
+   808→type GetState = () => SenkuState;
+   809→
+   810→interface TurnOptions {
+   811→  chatId: string | null;
+   812→  history: ChatMessageData[];
+   813→  content: string;
+   814→  persistUser: boolean;
+   815→  temporary?: boolean;
+   816→  /** Overrides the store's active model (error-card "switch model"). */
+   817→  model?: string;
+   818→  /** Force whether a new local user bubble is appended. Defaults to
+   819→      the persistUser flag — retries keep the original bubble but may
+   820→      still need server-side persistence, so the two are decoupled. */
+   821→  appendUserBubble?: boolean;
+   822→  /** Duel: race the active model against `duel.challenger`. */
+   823→  duel?: { challenger: string };
+   824→  /** Files the gateway already read for this turn. */
+   825→  attachments?: AttachmentRecord[];
+   826→}
+   827→
+   828→async function streamTurn(
+   829→  set: SetState,
+   830→  get: GetState,
+   831→  opts: TurnOptions
+   832→): Promise<void> {
+   833→  const state = get();
+   834→  const temporary = opts.temporary ?? state.temporary;
+   835→  const model = opts.model ?? state.model;
+   836→  const effort = state.effort;
+   837→  const userId = `u-${Date.now()}`;
+   838→  const assistantId = `a-${Date.now()}`;
+   839→  const search = state.searchEnabled;
+   840→  const duel = opts.duel;
+   841→  const attachments = opts.attachments ?? [];
+   842→  const makeLane = (id: "a" | "b", laneModel: string): DuelLane => ({
+   843→    id,
+   844→    model: laneModel,
+   845→    content: "",
+   846→    streaming: true,
+   847→    error: null,
+   848→    phase: search ? ("searching" as const) : ("thinking" as const),
+   849→    tokens: 0,
+   850→    cached: false,
+   851→    servedBy: null,
+   852→    keyLabel: null,
+   853→  });
+   854→  // Regenerate-after-edit turns keep the (already updated) user message
+   855→  // in the timeline — only fresh sends append a new local user bubble.
+   856→  // Retries decouple the two: the bubble stays, persistence is decided
+   857→  // by whether the failed turn ever reached the server.
+   858→  const appendUserBubble = opts.appendUserBubble ?? (opts.persistUser !== false);
+   859→  // Set when this turn creates a brand-new persisted chat — the
+   860→  // raw derived title then gets refined by a cheap model pass.
+   861→  let createdChatId: string | null = null;
+   862→
+   863→  set({
+   864→    streaming: true,
+   865→    messages: [
+   866→      ...state.messages,
+   867→      ...(appendUserBubble
+   868→        ? [
+   869→            {
+   870→              id: userId,
+   871→              role: "user" as const,
+   872→              content: opts.content,
+   873→              sources: search ? [] : null,
+   874→              attachments: attachments.length ? attachments : null,
+   875→            },
+   876→          ]
+   877→        : []),
+   878→      {
+   879→        id: assistantId,
+   880→        role: "assistant" as const,
+   881→        content: "",
+   882→        streaming: true,
+   883→        model,
+   884→        provider: state.limiter?.providerName ?? null,
+   885→        phase: search ? "searching" : "thinking",
+   886→        effort,
+   887→        ...(duel
+   888→          ? {
+   889→              duel: {
+   890→                a: makeLane("a", model),
+   891→                b: makeLane("b", duel.challenger),
+   892→              },
+   893→              duelPicked: null,
+   894→            }
+   895→          : {}),
+   896→      },
+   897→    ],
+   898→  });
+   899→
+   900→  const updateAssistant = (patch: Partial<UIMessage>) => {
+   901→    set((s) => ({
+   902→      messages: s.messages.map((m) =>
+   903→        m.id === assistantId ? { ...m, ...patch } : m
+   904→      ),
+   905→    }));
+   906→  };
+   907→  // Duel-only: patch one racing lane of the assistant message.
+   908→  const updateLane = (lane: "a" | "b", patch: Partial<DuelLane>) => {
+   909→    set((s) => ({
+   910→      messages: s.messages.map((m) =>
+   911→        m.id === assistantId && m.duel
+   912→          ? { ...m, duel: { ...m.duel, [lane]: { ...m.duel[lane], ...patch } } }
+   913→          : m
+   914→      ),
+   915→    }));
+   916→  };
+   917→  const updateUser = (patch: Partial<UIMessage>) => {
+   918→    set((s) => {
+   919→      const idx = appendUserBubble
+   920→        ? s.messages.findIndex((m) => m.id === currentUserMsgId)
+   921→        : (() => {
+   922→            for (let i = s.messages.length - 1; i >= 0; i--) {
+   923→              if (s.messages[i].role === "user") return i;
+   924→            }
+   925→            return -1;
+   926→          })();
+   927→      if (idx === -1) return {};
+   928→      return {
+   929→        messages: s.messages.map((m, i) => (i === idx ? { ...m, ...patch } : m)),
+   930→      };
+   931→    });
+   932→  };
+   933→
+   934→  const controller = new AbortController();
+   935→  streamController = controller;
+   936→  // Reconciled with the server-assigned id as soon as "meta" arrives so
+   937→  // later edits hit /api/chat/truncate with the real message id.
+   938→  let currentUserMsgId = userId;
+   939→
+   940→  try {
+   941→    const res = await fetch("/api/chat/send", {
+   942→      method: "POST",
+   943→      headers: { "Content-Type": "application/json" },
+   944→      signal: controller.signal,
+   945→      body: JSON.stringify({
+   946→        chatId: opts.chatId,
+   947→        history: opts.history,
+   948→        content: opts.content,
+   949→        model,
+   950→        search,
+   951→        temporary,
+   952→        persistUser: opts.persistUser,
+   953→        effort,
+   954→        ...(attachments.length ? { attachments } : {}),
+   955→        ...(duel ? { duel: true, challengerModel: duel.challenger } : {}),
+   956→      }),
+   957→    });
+   958→
+   959→    if (!res.ok || !res.body) {
+   960→      const errText = await res.text().catch(() => "");
+   961→      throw new Error(errText || `Request failed (${res.status})`);
+   962→    }
+   963→
+   964→    const reader = res.body.getReader();
+   965→    const decoder = new TextDecoder();
+   966→    let buffer = "";
+   967→    let assistantContent = "";
+   968→    // Duel lanes accumulate independently; untagged deltas (normal
+   969→    // turns) fall through to assistantContent only.
+   970→    const laneContents: Record<"a" | "b", string> = { a: "", b: "" };
+   971→
+   972→    while (true) {
+   973→      const { done, value } = await reader.read();
+   974→      if (done) break;
+   975→      buffer += decoder.decode(value, { stream: true });
+   976→      const parts = buffer.split("\n\n");
+   977→      buffer = parts.pop() ?? "";
+   978→      for (const part of parts) {
+   979→        const line = part.trim();
+   980→        if (!line.startsWith("data:")) continue;
+   981→        let ev: Record<string, unknown>;
+   982→        try {
+   983→          ev = JSON.parse(line.slice(5).trim());
+   984→        } catch {
+   985→          continue;
+   986→        }
+   987→        if (ev.type === "meta") {
+   988→          if (!temporary && typeof ev.chatId === "string" && ev.chatId) {
+   989→            set({ currentChatId: ev.chatId });
+   990→            if (opts.chatId == null) createdChatId = ev.chatId;
+   991→          }
+   992→          // The effort dial may route the turn to a different pooled
+   993→          // engine (fast → flash tier, deep → frontier tier) — the
+   994→          // server's model is the truth the provenance must show.
+   995→          if (typeof ev.model === "string" && ev.model) {
+   996→            updateAssistant({ model: ev.model });
+   997→          }
+   998→          if (
+   999→            typeof ev.userMessageId === "string" &&
+  1000→            ev.userMessageId &&
+  1001→            appendUserBubble
+  1002→          ) {
+  1003→            const serverId = ev.userMessageId;
+  1004→            // patch FIRST (message still carries the local id), then move
+  1005→            // the cursor so later patches (sources, …) target the new id
+  1006→            updateUser({ id: serverId });
+  1007→            currentUserMsgId = serverId;
+  1008→          }
+  1009→        } else if (ev.type === "duel_start") {
+  1010→          // Reconcile lane models with the server's normalization.
+  1011→          if (duel) {
+  1012→            if (typeof ev.a === "string" && ev.a) updateLane("a", { model: ev.a });
+  1013→            if (typeof ev.b === "string" && ev.b) updateLane("b", { model: ev.b });
+  1014→          }
+  1015→        } else if (ev.type === "search_status") {
+  1016→          const status = String(ev.status ?? "");
+  1017→          const detail =
+  1018→            typeof ev.detail === "string" && ev.detail ? ev.detail : null;
+  1019→          if (status === "searching") {
+  1020→            updateAssistant({ phase: "searching", searchDetail: detail });
+  1021→            if (duel) {
+  1022→              updateLane("a", { phase: "searching" });
+  1023→              updateLane("b", { phase: "searching" });
+  1024→            }
+  1025→          } else if (status === "ok") {
+  1026→            updateAssistant({ phase: "thinking", searchFailed: false, searchDetail: null });
+  1027→            if (duel) {
+  1028→              updateLane("a", { phase: "thinking" });
+  1029→              updateLane("b", { phase: "thinking" });
+  1030→            }
+  1031→          } else if (status === "failed") {
+  1032→            updateAssistant({ phase: "thinking", searchFailed: true, searchDetail: null });
+  1033→            if (duel) {
+  1034→              updateLane("a", { phase: "thinking" });
+  1035→              updateLane("b", { phase: "thinking" });
+  1036→            }
+  1037→          }
+  1038→        } else if (ev.type === "sources") {
+  1039→          const sources = (ev.sources ?? []) as SearchSource[];
+  1040→          if (sources.length) updateUser({ sources });
+  1041→        } else if (ev.type === "restart") {
+  1042→          // A provider died mid-stream; the cloud re-generates that
+  1043→          // lane from scratch. Discard only the affected lane's
+  1044→          // partial text (untagged = normal single-lane turn).
+  1045→          const lane = ev.lane === "b" ? "b" : "a";
+  1046→          if (duel) {
+  1047→            laneContents[lane] = "";
+  1048→            updateLane(lane, { content: "", phase: "thinking" });
+  1049→          } else {
+  1050→            assistantContent = "";
+  1051→            updateAssistant({ content: "", phase: "thinking" });
+  1052→          }
+  1053→        } else if (ev.type === "delta") {
+  1054→          const lane = ev.lane === "b" ? "b" : "a";
+  1055→          if (duel) {
+  1056→            laneContents[lane] += String(ev.text ?? "");
+  1057→            updateLane(lane, { content: laneContents[lane], phase: null });
+  1058→          } else {
+  1059→            assistantContent += String(ev.text ?? "");
+  1060→            updateAssistant({ content: assistantContent, phase: null });
+  1061→          }
+  1062→        } else if (ev.type === "lane_done") {
+  1063→          // Final per-lane stats from the gateway — server truth wins.
+  1064→          const lane = ev.lane === "b" ? "b" : "a";
+  1065→          if (duel) {
+  1066→            updateLane(lane, {
+  1067→              content: (ev.content as string) ?? laneContents[lane],
+  1068→              streaming: false,
+  1069→              phase: null,
+  1070→              tokens: (ev.tokens as number) ?? 0,
+  1071→              cached: ev.cached === true,
+  1072→              servedBy: (ev.servedBy as string) ?? null,
+  1073→              keyLabel: (ev.keyLabel as string) ?? null,
+  1074→              error: (ev.error as string) ?? null,
+  1075→            });
+  1076→          }
+  1077→        } else if (ev.type === "done") {
+  1078→          if (duel && ev.duel && typeof ev.duel === "object") {
+  1079→            const lanes = ev.duel as {
+  1080→              a: { content: string; error: string | null; tokens: number; cached: boolean; servedBy: string | null; keyLabel: string | null; model: string };
+  1081→              b: { content: string; error: string | null; tokens: number; cached: boolean; servedBy: string | null; keyLabel: string | null; model: string };
+  1082→            };
+  1083→            updateAssistant({
+  1084→              streaming: false,
+  1085→              phase: null,
+  1086→              searchFailed: ev.searchFailed === true,
+  1087→            });
+  1088→            updateLane("a", {
+  1089→              content: lanes.a.content,
+  1090→              model: lanes.a.model,
+  1091→              streaming: false,
+  1092→              phase: null,
+  1093→              tokens: lanes.a.tokens,
+  1094→              cached: lanes.a.cached,
+  1095→              servedBy: lanes.a.servedBy,
+  1096→              keyLabel: lanes.a.keyLabel,
+  1097→              error: lanes.a.error,
+  1098→            });
+  1099→            updateLane("b", {
+  1100→              content: lanes.b.content,
+  1101→              model: lanes.b.model,
+  1102→              streaming: false,
+  1103→              phase: null,
+  1104→              tokens: lanes.b.tokens,
+  1105→              cached: lanes.b.cached,
+  1106→              servedBy: lanes.b.servedBy,
+  1107→              keyLabel: lanes.b.keyLabel,
+  1108→              error: lanes.b.error,
+  1109→            });
+  1110→            // One lane died → the duel silently degrades: keep the
+  1111→            // surviving lane as the answer (no pick needed).
+  1112→            if (lanes.a.error && !lanes.b.error && lanes.b.content.trim()) {
+  1113→              void get().pickDuelWinner(assistantId, "b");
+  1114→            } else if (lanes.b.error && !lanes.a.error && lanes.a.content.trim()) {
+  1115→              void get().pickDuelWinner(assistantId, "a");
+  1116→            }
+  1117→            // Both lanes healthy → the message waits for the user's pick.
+  1118→          } else {
+  1119→            updateAssistant({
+  1120→              id: (ev.assistantMessageId as string) ?? assistantId,
+  1121→              content: (ev.content as string) ?? assistantContent,
+  1122→              streaming: false,
+  1123→              cached: Boolean(ev.cached),
+  1124→              tokens: (ev.tokens as number) ?? 0,
+  1125→              servedBy: (ev.servedBy as string) ?? null,
+  1126→              keyLabel: (ev.keyLabel as string) ?? null,
+  1127→              provider: (ev.providerName as string) ?? null,
+  1128→              model: (ev.model as string) ?? model,
+  1129→              effort:
+  1130→                ev.effort === "fast" || ev.effort === "deep" || ev.effort === "medium"
+  1131→                  ? ev.effort
+  1132→                  : effort,
+  1133→              phase: null,
+  1134→              searchDetail: null,
+  1135→              searchFailed: ev.searchFailed === true,
+  1136→            });
+  1137→          }
+  1138→        } else if (ev.type === "error") {
+  1139→          updateAssistant({
+  1140→            streaming: false,
+  1141→            error: String(ev.message ?? "Generation failed"),
+  1142→            content: "",
+  1143→            phase: null,
+  1144→          });
+  1145→        }
+  1146→      }
+  1147→    }
+  1148→  } catch (e) {
+  1149→    const err = e as Error;
+  1150→    if (err.name === "AbortError") {
+  1151→      // User pressed stop: a stopped duel keeps both partial lanes —
+  1152→      // the user can still pick either one as the answer.
+  1153→      if (duel) {
+  1154→        updateAssistant({ streaming: false, phase: null });
+  1155→        updateLane("a", { streaming: false, phase: null });
+  1156→        updateLane("b", { streaming: false, phase: null });
+  1157→      } else {
+  1158→        updateAssistant({ streaming: false, phase: null });
+  1159→      }
+  1160→    } else {
+  1161→      updateAssistant({
+  1162→        streaming: false,
+  1163→        error: err.message,
+  1164→        content: "",
+  1165→        phase: null,
+  1166→      });
+  1167→    }
+  1168→  } finally {
+  1169→    streamController = null;
+  1170→    set({ streaming: false });
+  1171→    if (!temporary) {
+  1172→      // Await the refresh so the raw derived title is in the list
+  1173→      // BEFORE the refined one patches it (no clobber race).
+  1174→      await get().refreshChats();
+  1175→      if (createdChatId) void refineTitle(set, createdChatId);
+  1176→    }
+  1177→    void get().refreshUsage();
+  1178→  }
+  1179→}
+  1180→
+  1181→/**
+  1182→ * Replace a brand-new chat's raw derived title ("who r u?") with a
+  1183→ * proper one from a cheap cloud model pass: "Who Are You?". Fire and
+  1184→ * forget — failure keeps the derived title.
+  1185→ */
+  1186→async function refineTitle(set: SetState, chatId: string): Promise<void> {
+  1187→  try {
+  1188→    const res = await fetch("/api/chat/title", {
+  1189→      method: "POST",
+  1190→      headers: { "Content-Type": "application/json" },
+  1191→      body: JSON.stringify({ chatId }),
+  1192→    });
+  1193→    if (!res.ok) return;
+  1194→    const data = (await res.json()) as { title?: string };
+  1195→    const title = typeof data.title === "string" ? data.title.trim() : "";
+  1196→    if (!title) return;
+  1197→    set((s) => ({
+  1198→      chats: s.chats.map((c) => (c.id === chatId ? { ...c, title } : c)),
+  1199→    }));
+  1200→  } catch {
+  1201→    // keep the derived title
+  1202→  }
+  1203→}
+  1204→

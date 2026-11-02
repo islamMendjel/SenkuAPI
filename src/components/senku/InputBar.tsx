@@ -7,15 +7,17 @@
 // + tier badge + caret, grouped provider dropdown), server-backed
 // voice dictation with a live waveform, send/stop.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   Brain,
   ChevronDown,
   Check,
+  Code2,
   Eye,
   FileImage,
   FileText,
+  FoldVertical,
   Globe,
   Loader2,
   Mic,
@@ -34,11 +36,53 @@ import { useSenku, type PendingAttachment } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
 import { effortModel, modelHint, modelMeta } from "@/lib/senku/models";
+import { countLines } from "@/lib/senku/format";
 import type { EffortLevel } from "@/lib/senku/types";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const WAVE_BARS = 26;
 const ATTACHMENT_CAP = 5;
+
+/** Run 17 — plain-text pastes longer than this many lines (LF/CRLF
+ *  consistent) become a removable attachment pill instead of
+ *  flooding the textarea. Exactly 60 lines stays inline. */
+const PASTE_SNIPPET_LINES = 60;
+
+/** The slash commands offered in the / popover. /search reflects the
+ *  REAL search capability (grounded pipeline with cited sources) and
+ *  shows its live on/off state — nothing here implies a capability
+ *  the gateway doesn't have. */
+const SLASH_COMMANDS = [
+  {
+    cmd: "code",
+    icon: Code2,
+    desc: "Code-focused answer, no chatter — next message",
+  },
+  {
+    cmd: "concise",
+    icon: FoldVertical,
+    desc: "Ultra-brief answer — next message",
+  },
+  {
+    cmd: "search",
+    icon: Globe,
+    desc: "Web search with cited sources",
+  },
+] as const;
+type SlashCommand = (typeof SLASH_COMMANDS)[number];
+
+/** The /-token under the caret, if any. The "/" must sit at the very
+ *  start of the input or right after whitespace — typing "/" mid-word
+ *  ("a/b") or inside a URL ("https://x") never triggers the popover. */
+function activeSlashToken(
+  value: string,
+  caret: number
+): { query: string; start: number } | null {
+  const upto = value.slice(0, caret);
+  const m = /(^|\s)\/([\w-]{0,20})$/.exec(upto);
+  if (!m) return null;
+  return { query: m[2].toLowerCase(), start: caret - m[2].length - 1 };
+}
 
 function formatChars(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k chars`;
@@ -106,7 +150,11 @@ function AttachmentChip({
             title={
               p.record.truncated
                 ? `Sent to the model: first ${formatChars(p.record.chars)} of ${p.record.totalChars} — the rest was cut to fit`
-                : `Sent to the model: ${p.record.chars} characters${p.record.kind === "image" ? " from a vision pass (OCR + description)" : " read from the file"}`
+                : p.record.kind === "image"
+                  ? `Sent to the model: ${p.record.chars} characters from a vision pass (OCR + description)`
+                  : p.name.startsWith("Pasted snippet")
+                    ? `Sent to the model: the pasted snippet, ${p.record.chars} characters`
+                    : `Sent to the model: ${p.record.chars} characters read from the file`
             }
           >
             {p.record.kind === "image" ? (
@@ -199,6 +247,9 @@ export function InputBar() {
     pendingAttachments,
     addAttachments,
     removePendingAttachment,
+    turnStyle,
+    setTurnStyle,
+    stagePastedSnippet,
   } = useSenku();
   const { toast } = useToast();
 
@@ -209,6 +260,12 @@ export function InputBar() {
   const [effortOpen, setEffortOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  // Run 17 — slash popover: caret position drives the active /-token,
+  // slashIndex is the highlighted option, and a dismissed token stays
+  // dismissed (Escape) until the token itself changes.
+  const [caret, setCaret] = useState(0);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissedKey, setSlashDismissedKey] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const recorder = useVoiceRecorder();
@@ -347,6 +404,85 @@ export function InputBar() {
 
   const activeMeta = modelMeta(model);
 
+  // ── Slash popover (Run 17) ──
+  const slashToken = useMemo(
+    () => activeSlashToken(value, caret),
+    [value, caret]
+  );
+  const slashMatches = useMemo(() => {
+    if (!slashToken) return [] as readonly SlashCommand[];
+    return SLASH_COMMANDS.filter((c) => c.cmd.startsWith(slashToken.query));
+  }, [slashToken]);
+  const slashKey =
+    slashToken != null ? `${slashToken.start}:${slashToken.query}` : null;
+  const slashOpen =
+    slashToken != null &&
+    slashMatches.length > 0 &&
+    slashDismissedKey !== slashKey;
+  const slashActive =
+    slashMatches.length > 0
+      ? slashMatches[Math.min(slashIndex, slashMatches.length - 1)]
+      : null;
+
+  const dismissSlash = () => {
+    if (slashKey) setSlashDismissedKey(slashKey);
+  };
+
+  /** Apply one slash command: strip the /token from the draft (it is
+   *  NEVER sent as prompt text), then update the real mode state. */
+  const applySlash = (c: SlashCommand) => {
+    if (!slashToken) return;
+    const before = value.slice(0, slashToken.start);
+    const after = value.slice(caret);
+    const next = (before + after).replace(/\s+$/, "");
+    setValue(next);
+    dismissSlash();
+    if (c.cmd === "code") {
+      setTurnStyle("code");
+      toast({
+        description: "Code mode — your next message gets a code-focused answer.",
+      });
+    } else if (c.cmd === "concise") {
+      setTurnStyle("concise");
+      toast({
+        description: "Concise mode — your next message gets an ultra-brief answer.",
+      });
+    } else if (c.cmd === "search") {
+      if (!searchEnabled) toggleSearch();
+      toast({ description: "Web search on — answers will cite sources." });
+    }
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        const pos = next.length;
+        el.setSelectionRange(pos, pos);
+        setCaret(pos);
+      }
+    });
+  };
+
+  /** >60-line plain-text pastes become a removable attachment pill —
+   *  the exact text is preserved and only leaves with the next send.
+   *  File pastes and short pastes keep the browser default. */
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (items && Array.from(items).some((it) => it.kind === "file")) return;
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    if (!text) return;
+    const lines = countLines(text);
+    if (lines <= PASTE_SNIPPET_LINES) return; // exactly 60 stays inline
+    e.preventDefault();
+    const res = stagePastedSnippet(text);
+    if (!res.ok) {
+      toast({ description: res.error, variant: "destructive" });
+      return;
+    }
+    toast({
+      description: `Pasted snippet (${lines} lines) attached — it will be sent with your next message.`,
+    });
+  };
+
   return (
     <div className="relative mx-auto w-full max-w-3xl shrink-0 px-4">
       <input
@@ -358,7 +494,90 @@ export function InputBar() {
         aria-hidden
       />
 
-      <div className="rounded-[26px] border border-zinc-700/70 bg-[#262627] shadow-[0_8px_32px_rgba(0,0,0,0.45)] transition-colors focus-within:border-zinc-500">
+      {/* Run 17 — armed one-shot style pill (/code, /concise).
+          Removable; consumed by the next send. */}
+      {turnStyle && (
+        <div className="mb-2 flex items-center gap-2 pl-1.5">
+          <div
+            className="flex items-center gap-1.5 rounded-full border border-amber-300/40 bg-amber-300/10 py-1 pl-2.5 pr-1 text-[12px] text-amber-200"
+            aria-live="polite"
+          >
+            {turnStyle === "code" ? (
+              <Code2 className="h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <FoldVertical className="h-3.5 w-3.5" aria-hidden />
+            )}
+            {turnStyle === "code" ? "Code mode" : "Concise mode"}
+            <span className="text-amber-200/55">· next message</span>
+            <button
+              type="button"
+              onClick={() => setTurnStyle(null)}
+              aria-label={`Disable ${turnStyle} mode`}
+              className="flex h-5 w-5 items-center justify-center rounded-full text-amber-200/70 transition-colors hover:bg-white/10 hover:text-amber-100"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="relative rounded-[26px] border border-zinc-700/70 bg-[#262627] shadow-[0_8px_32px_rgba(0,0,0,0.45)] transition-colors focus-within:border-zinc-500">
+        {/* Slash-command popover (Run 17) — anchored above the text
+            area while a /-token is under the caret. */}
+        {slashOpen && slashActive && (
+          <div
+            id="senku-slash-menu"
+            role="listbox"
+            aria-label="Slash commands"
+            className="absolute bottom-full left-2 z-20 mb-2 w-72 overflow-hidden rounded-xl border border-zinc-700/70 bg-[#212121] p-1 shadow-2xl"
+          >
+            {slashMatches.map((c, i) => {
+              const active = c.cmd === slashActive.cmd;
+              const Icon = c.icon;
+              return (
+                <button
+                  key={c.cmd}
+                  id={`senku-slash-opt-${c.cmd}`}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // keep the textarea focused
+                    applySlash(c);
+                  }}
+                  onMouseEnter={() => setSlashIndex(i)}
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                    active ? "bg-white/5" : ""
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-medium text-zinc-100">
+                      /{c.cmd}
+                    </span>
+                    <span className="block truncate text-[11px] text-zinc-500">
+                      {c.desc}
+                    </span>
+                  </span>
+                  {c.cmd === "search" && (
+                    <span
+                      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                        searchEnabled
+                          ? "bg-emerald-400/15 text-emerald-300"
+                          : "bg-zinc-700/60 text-zinc-400"
+                      }`}
+                    >
+                      {searchEnabled ? "On" : "Off"}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <p className="px-2.5 pb-1 pt-1.5 text-[10px] text-zinc-600">
+              ↑↓ navigate · Enter apply · Esc dismiss
+            </p>
+          </div>
+        )}
         {isRecording ? (
           /* live waveform strip replaces the textarea while dictating */
           <div className="senku-rec-in flex h-[52px] items-center gap-3 px-4" aria-live="polite">
@@ -392,16 +611,63 @@ export function InputBar() {
           <textarea
             ref={textareaRef}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setCaret(e.target.selectionStart ?? 0);
+            }}
+            onSelect={(e) =>
+              setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)
+            }
+            onPaste={onPaste}
             onKeyDown={(e) => {
+              // IME composition (CJK input…): the Enter that confirms
+              // a composition must never submit or drive the popover.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
+              if (slashOpen) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSlashIndex(
+                    (i) => (i + 1) % Math.max(slashMatches.length, 1)
+                  );
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashIndex(
+                    (i) =>
+                      (i - 1 + Math.max(slashMatches.length, 1)) %
+                      Math.max(slashMatches.length, 1)
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  if (slashActive) applySlash(slashActive);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  dismissSlash();
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 submit();
               }
             }}
             rows={1}
-            placeholder="Message SenkuAPI..."
+            placeholder="Message SenkuAPI... (/ for commands)"
             aria-label="Message SenkuAPI"
+            aria-controls={slashOpen ? "senku-slash-menu" : undefined}
+            aria-activedescendant={
+              slashOpen && slashActive
+                ? `senku-slash-opt-${slashActive.cmd}`
+                : undefined
+            }
+            aria-autocomplete="list"
             className="senku-scroll max-h-52 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-500"
           />
         )}

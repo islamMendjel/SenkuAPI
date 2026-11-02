@@ -1,0 +1,854 @@
+     1→"use client";
+     2→
+     3→// SenkuAPI — floating bottom input bar:
+     4→// "+" attachments menu (REAL file reading — extraction runs the
+     5→// moment a file is picked, chips show what the gateway read),
+     6→// Search toggle pill, effort dial, model selector chip (pretty name
+     7→// + tier badge + caret, grouped provider dropdown), server-backed
+     8→// voice dictation with a live waveform, send/stop.
+     9→
+    10→import { useEffect, useRef, useState } from "react";
+    11→import {
+    12→  ArrowUp,
+    13→  Brain,
+    14→  ChevronDown,
+    15→  Check,
+    16→  Eye,
+    17→  FileImage,
+    18→  FileText,
+    19→  Globe,
+    20→  Loader2,
+    21→  Mic,
+    22→  Paperclip,
+    23→  Plus,
+    24→  RefreshCw,
+    25→  Sparkles,
+    26→  Square,
+    27→  Swords,
+    28→  Trash2,
+    29→  TriangleAlert,
+    30→  X,
+    31→  Zap,
+    32→} from "lucide-react";
+    33→import { useSenku, type PendingAttachment } from "@/lib/store";
+    34→import { useToast } from "@/hooks/use-toast";
+    35→import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
+    36→import { effortModel, modelHint, modelMeta } from "@/lib/senku/models";
+    37→import type { EffortLevel } from "@/lib/senku/types";
+    38→import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+    39→
+    40→const WAVE_BARS = 26;
+    41→const ATTACHMENT_CAP = 5;
+    42→
+    43→function formatChars(n: number): string {
+    44→  if (n >= 1000) return `${(n / 1000).toFixed(1)}k chars`;
+    45→  return `${n} chars`;
+    46→}
+    47→
+    48→function kindIcon(p: PendingAttachment) {
+    49→  return p.kindGuess === "image";
+    50→}
+    51→
+    52→/** One staged file: icon + name + live extraction status. The chip
+    53→ *  tells the user exactly what the model will receive — chars read,
+    54→ *  vision pass, truncation — or why the file can't be sent. */
+    55→function AttachmentChip({
+    56→  p,
+    57→  onRemove,
+    58→  disabled,
+    59→}: {
+    60→  p: PendingAttachment;
+    61→  onRemove: () => void;
+    62→  disabled: boolean;
+    63→}) {
+    64→  const isImage = kindIcon(p);
+    65→  return (
+    66→    <div
+    67→      className={`flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left ${
+    68→        p.status === "error"
+    69→          ? "border-red-500/30 bg-red-500/5"
+    70→          : "border-zinc-700/70 bg-[#1d1d20]"
+    71→      }`}
+    72→      aria-label={
+    73→        p.status === "ready"
+    74→          ? `Attachment ${p.name}, read by the gateway`
+    75→          : `Attachment ${p.name}`
+    76→      }
+    77→    >
+    78→      {isImage ? (
+    79→        <FileImage
+    80→          className={`h-4 w-4 shrink-0 ${
+    81→            p.status === "error" ? "text-red-400/80" : "text-zinc-400"
+    82→          }`}
+    83→          aria-hidden
+    84→        />
+    85→      ) : (
+    86→        <FileText
+    87→          className={`h-4 w-4 shrink-0 ${
+    88→            p.status === "error" ? "text-red-400/80" : "text-zinc-400"
+    89→          }`}
+    90→          aria-hidden
+    91→        />
+    92→      )}
+    93→      <span className="min-w-0 flex-1">
+    94→        <span className="block truncate text-[12.5px] font-medium text-zinc-200">
+    95→          {p.name}
+    96→        </span>
+    97→        {p.status === "extracting" && (
+    98→          <span className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+    99→            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+   100→            reading…
+   101→          </span>
+   102→        )}
+   103→        {p.status === "ready" && p.record && (
+   104→          <span
+   105→            className="flex items-center gap-1 text-[11px] text-emerald-300/80"
+   106→            title={
+   107→              p.record.truncated
+   108→                ? `Sent to the model: first ${formatChars(p.record.chars)} of ${p.record.totalChars} — the rest was cut to fit`
+   109→                : `Sent to the model: ${p.record.chars} characters${p.record.kind === "image" ? " from a vision pass (OCR + description)" : " read from the file"}`
+   110→            }
+   111→          >
+   112→            {p.record.kind === "image" ? (
+   113→              <Eye className="h-3 w-3 shrink-0" aria-hidden />
+   114→            ) : (
+   115→              <Check className="h-3 w-3 shrink-0" aria-hidden />
+   116→            )}
+   117→            {p.record.kind === "image" ? "vision pass · " : "read · "}
+   118→            {formatChars(p.record.chars)}
+   119→            {p.record.truncated ? " (truncated)" : ""}
+   120→          </span>
+   121→        )}
+   122→        {p.status === "error" && (
+   123→          <span className="flex items-start gap-1 text-[11px] leading-snug text-red-300/80">
+   124→            <TriangleAlert className="mt-px h-3 w-3 shrink-0" aria-hidden />
+   125→            {p.error} — not sent
+   126→          </span>
+   127→        )}
+   128→      </span>
+   129→      <button
+   130→        onClick={onRemove}
+   131→        disabled={disabled}
+   132→        aria-label={`Remove ${p.name}`}
+   133→        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-40"
+   134→      >
+   135→        <X className="h-3.5 w-3.5" />
+   136→      </button>
+   137→    </div>
+   138→  );
+   139→}
+   140→
+   141→// ── Effort dial ──────────────────────────────────────────────
+   142→// How hard the gateway works on one turn. On single-brand chats a
+   143→// fast/quality toggle flips one backend's switch; here each level
+   144→// can route to a different ENGINE from the pool.
+   145→const EFFORTS: {
+   146→  level: EffortLevel;
+   147→  label: string;
+   148→  desc: string;
+   149→  icon: typeof Zap;
+   150→  pill: string;
+   151→}[] = [
+   152→  {
+   153→    level: "fast",
+   154→    label: "Fast",
+   155→    desc: "Fastest engine in the pool · brief, direct answers",
+   156→    icon: Zap,
+   157→    pill: "border-yellow-300/60 bg-yellow-300/10 text-yellow-200",
+   158→  },
+   159→  {
+   160→    level: "medium",
+   161→    label: "Medium",
+   162→    desc: "Your selected model · balanced (default)",
+   163→    icon: Sparkles,
+   164→    pill: "",
+   165→  },
+   166→  {
+   167→    level: "deep",
+   168→    label: "Deep",
+   169→    desc: "Strongest engine · thinking · deep research with Search",
+   170→    icon: Brain,
+   171→    pill: "border-emerald-300/60 bg-emerald-300/10 text-emerald-200",
+   172→  },
+   173→];
+   174→
+   175→function formatElapsed(ms: number): string {
+   176→  const total = Math.floor(ms / 1000);
+   177→  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+   178→}
+   179→
+   180→export function InputBar() {
+   181→  const {
+   182→    searchEnabled,
+   183→    toggleSearch,
+   184→    temporary,
+   185→    model,
+   186→    models,
+   187→    setModel,
+   188→    syncModels,
+   189→    streaming,
+   190→    sendMessage,
+   191→    stopStreaming,
+   192→    limiter,
+   193→    duelEnabled,
+   194→    toggleDuel,
+   195→    challenger,
+   196→    setChallenger,
+   197→    effort,
+   198→    setEffort,
+   199→    pendingAttachments,
+   200→    addAttachments,
+   201→    removePendingAttachment,
+   202→  } = useSenku();
+   203→  const { toast } = useToast();
+   204→
+   205→  const [value, setValue] = useState("");
+   206→  const [attachOpen, setAttachOpen] = useState(false);
+   207→  const [modelOpen, setModelOpen] = useState(false);
+   208→  const [challengerOpen, setChallengerOpen] = useState(false);
+   209→  const [effortOpen, setEffortOpen] = useState(false);
+   210→  const [syncing, setSyncing] = useState(false);
+   211→  const [transcribing, setTranscribing] = useState(false);
+   212→  const textareaRef = useRef<HTMLTextAreaElement>(null);
+   213→  const fileRef = useRef<HTMLInputElement>(null);
+   214→  const recorder = useVoiceRecorder();
+   215→  const waveBarsRef = useRef<(HTMLDivElement | null)[]>([]);
+   216→  const waveLevelsRef = useRef<number[]>(new Array(WAVE_BARS).fill(4));
+   217→
+   218→  const providerName = limiter?.providerName ?? "";
+   219→  const extractingAttachments = pendingAttachments.some(
+   220→    (p) => p.status === "extracting"
+   221→  );
+   222→  const canSend =
+   223→    value.trim().length > 0 && !streaming && !extractingAttachments;
+   224→  const isRecording = recorder.state === "recording";
+   225→  const isProcessing = recorder.state === "processing" || transcribing;
+   226→  // A duel needs a second model to race against.
+   227→  const duelAvailable = models.filter((m) => m !== model).length > 0;
+   228→
+   229→  // auto-grow textarea
+   230→  useEffect(() => {
+   231→    const el = textareaRef.current;
+   232→    if (!el) return;
+   233→    el.style.height = "0px";
+   234→    el.style.height = Math.min(el.scrollHeight, 208) + "px";
+   235→  }, [value]);
+   236→
+   237→  // surface recorder permission/device errors
+   238→  useEffect(() => {
+   239→    if (recorder.error) {
+   240→      toast({ description: recorder.error, variant: "destructive" });
+   241→    }
+   242→  }, [recorder.error, toast]);
+   243→
+   244→  // live waveform: push the smoothed mic level through a rolling window
+   245→  // and paint bar heights directly on the DOM (no re-render per frame)
+   246→  useEffect(() => {
+   247→    if (recorder.state !== "recording") return;
+   248→    let raf = 0;
+   249→    const loop = () => {
+   250→      const level = recorder.levelRef.current;
+   251→      const next = waveLevelsRef.current
+   252→        .slice(1)
+   253→        .concat(4 + level * level * 42 + Math.random() * 2);
+   254→      waveLevelsRef.current = next;
+   255→      for (let i = 0; i < WAVE_BARS; i++) {
+   256→        const el = waveBarsRef.current[i];
+   257→        if (el) el.style.height = `${Math.max(4, next[i]).toFixed(1)}px`;
+   258→      }
+   259→      raf = requestAnimationFrame(loop);
+   260→    };
+   261→    raf = requestAnimationFrame(loop);
+   262→    return () => cancelAnimationFrame(raf);
+   263→  }, [recorder.state, recorder.levelRef]);
+   264→
+   265→  const submit = () => {
+   266→    if (!canSend) return;
+   267→    const content = value.trim();
+   268→    setValue("");
+   269→    void sendMessage(content);
+   270→  };
+   271→
+   272→  // stop → transcribe (server ASR) → land the text in the input
+   273→  const finishDictation = async () => {
+   274→    recorder.stop();
+   275→    setTranscribing(true);
+   276→    try {
+   277→      const wav = await recorder.takeResult();
+   278→      if (!wav) {
+   279→        toast({ description: "Didn't catch that — try speaking a bit louder." });
+   280→        return;
+   281→      }
+   282→      const res = await fetch("/api/voice/transcribe", {
+   283→        method: "POST",
+   284→        headers: { "Content-Type": "application/json" },
+   285→        body: JSON.stringify({ audio: wav }),
+   286→      });
+   287→      const data = await res.json();
+   288→      if (!res.ok) throw new Error(data.error || "Transcription failed");
+   289→      const text = String(data.text ?? "").trim();
+   290→      if (!text) {
+   291→        toast({ description: "Didn't catch that — try speaking a bit louder." });
+   292→        return;
+   293→      }
+   294→      setValue((v) => (v ? `${v} ${text}` : text));
+   295→      requestAnimationFrame(() => {
+   296→        const el = textareaRef.current;
+   297→        if (el) {
+   298→          el.focus();
+   299→          el.setSelectionRange(el.value.length, el.value.length);
+   300→        }
+   301→      });
+   302→    } catch (e) {
+   303→      toast({
+   304→        description: (e as Error).message || "Transcription failed.",
+   305→        variant: "destructive",
+   306→      });
+   307→    } finally {
+   308→      setTranscribing(false);
+   309→    }
+   310→  };
+   311→
+   312→  const onMicClick = () => {
+   313→    if (recorder.state === "recording") {
+   314→      void finishDictation();
+   315→    } else if (recorder.state === "idle") {
+   316→      void recorder.start();
+   317→    }
+   318→  };
+   319→
+   320→  const onUpload = () => {
+   321→    setAttachOpen(false);
+   322→    fileRef.current?.click();
+   323→  };
+   324→
+   325→  const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+   326→    const files = Array.from(e.target.files ?? []);
+   327→    e.target.value = "";
+   328→    if (!files.length) return;
+   329→    const room = ATTACHMENT_CAP - pendingAttachments.length;
+   330→    if (room <= 0) {
+   331→      toast({
+   332→        description: `Up to ${ATTACHMENT_CAP} files per message.`,
+   333→        variant: "destructive",
+   334→      });
+   335→      return;
+   336→    }
+   337→    const accepted = files.slice(0, room);
+   338→    if (files.length > accepted.length) {
+   339→      toast({
+   340→        description: `Only ${accepted.length} of ${files.length} files added — up to ${ATTACHMENT_CAP} per message.`,
+   341→      });
+   342→    }
+   343→    void addAttachments(accepted).then(() => {
+   344→      /* per-file results are shown on the chips */
+   345→    });
+   346→  };
+   347→
+   348→  const activeMeta = modelMeta(model);
+   349→
+   350→  return (
+   351→    <div className="relative mx-auto w-full max-w-3xl shrink-0 px-4">
+   352→      <input
+   353→        ref={fileRef}
+   354→        type="file"
+   355→        multiple
+   356→        hidden
+   357→        onChange={onFilePicked}
+   358→        aria-hidden
+   359→      />
+   360→
+   361→      <div className="rounded-[26px] border border-zinc-700/70 bg-[#262627] shadow-[0_8px_32px_rgba(0,0,0,0.45)] transition-colors focus-within:border-zinc-500">
+   362→        {isRecording ? (
+   363→          /* live waveform strip replaces the textarea while dictating */
+   364→          <div className="senku-rec-in flex h-[52px] items-center gap-3 px-4" aria-live="polite">
+   365→            <span className="flex shrink-0 items-center gap-2 tabular-nums text-[13px] text-red-400">
+   366→              <span className="senku-rec-dot inline-block h-2 w-2 rounded-full bg-red-400" />
+   367→              {formatElapsed(recorder.elapsedMs)}
+   368→            </span>
+   369→            <div className="flex h-10 min-w-0 flex-1 items-center justify-center gap-[3px]" aria-hidden>
+   370→              {Array.from({ length: WAVE_BARS }).map((_, i) => (
+   371→                <div
+   372→                  key={i}
+   373→                  ref={(el) => {
+   374→                    waveBarsRef.current[i] = el;
+   375→                  }}
+   376→                  className="senku-wave-bar"
+   377→                  style={{ height: 4 }}
+   378→                />
+   379→              ))}
+   380→            </div>
+   381→            <span className="hidden shrink-0 text-[11px] text-zinc-500 sm:block">
+   382→              tap ◼ to stop
+   383→            </span>
+   384→          </div>
+   385→        ) : isProcessing ? (
+   386→          <div className="flex h-[52px] items-center px-4" aria-live="polite">
+   387→            <span className="senku-thinking-label text-[14px] font-medium">
+   388→              Transcribing…
+   389→            </span>
+   390→          </div>
+   391→        ) : (
+   392→          <textarea
+   393→            ref={textareaRef}
+   394→            value={value}
+   395→            onChange={(e) => setValue(e.target.value)}
+   396→            onKeyDown={(e) => {
+   397→              if (e.key === "Enter" && !e.shiftKey) {
+   398→                e.preventDefault();
+   399→                submit();
+   400→              }
+   401→            }}
+   402→            rows={1}
+   403→            placeholder="Message SenkuAPI..."
+   404→            aria-label="Message SenkuAPI"
+   405→            className="senku-scroll max-h-52 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-500"
+   406→          />
+   407→        )}
+   408→
+   409→        {/* staged attachments — one chip per file, live extraction
+   410→            status: what the gateway read is what the model gets */}
+   411→        {pendingAttachments.length > 0 && (
+   412→          <div className="senku-scroll max-h-44 space-y-1.5 overflow-y-auto px-3 pt-2">
+   413→            {pendingAttachments.map((p) => (
+   414→              <AttachmentChip
+   415→                key={p.id}
+   416→                p={p}
+   417→                disabled={streaming}
+   418→                onRemove={() => removePendingAttachment(p.id)}
+   419→              />
+   420→            ))}
+   421→          </div>
+   422→        )}
+   423→
+   424→        <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5 pt-0.5">
+   425→          {/* left controls — horizontally scrollable on narrow screens
+   426→              so Search + Duel + challenger never wrap or overflow */}
+   427→          <div className="senku-scroll flex min-w-0 items-center gap-1.5 overflow-x-auto">
+   428→            <Popover open={attachOpen} onOpenChange={setAttachOpen}>
+   429→              <PopoverTrigger asChild>
+   430→                <button
+   431→                  aria-label="Add attachments"
+   432→                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+   433→                >
+   434→                  <Plus className="h-[18px] w-[18px]" />
+   435→                </button>
+   436→              </PopoverTrigger>
+   437→              <PopoverContent
+   438→                side="top"
+   439→                align="start"
+   440→                className="w-64 rounded-xl border-zinc-800 bg-[#262627] p-1.5 text-zinc-200 shadow-2xl"
+   441→              >
+   442→                <button
+   443→                  onClick={onUpload}
+   444→                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   445→                >
+   446→                  <Paperclip className="h-4 w-4 text-zinc-400" />
+   447→                  <span className="flex min-w-0 flex-col">
+   448→                    <span>Upload from computer</span>
+   449→                    <span className="truncate text-[10.5px] text-zinc-500">
+   450→                      Text · code · PDF · image — read before sending
+   451→                    </span>
+   452→                  </span>
+   453→                </button>
+   454→                <button
+   455→                  onClick={() => {
+   456→                    toggleSearch();
+   457→                    setAttachOpen(false);
+   458→                  }}
+   459→                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   460→                >
+   461→                  <Globe className="h-4 w-4 text-zinc-400" />
+   462→                  Search the web
+   463→                  <span
+   464→                    className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   465→                      searchEnabled
+   466→                        ? "bg-emerald-400/15 text-emerald-300"
+   467→                        : "bg-zinc-700/60 text-zinc-400"
+   468→                    }`}
+   469→                  >
+   470→                    {searchEnabled ? "On" : "Off"}
+   471→                  </span>
+   472→                </button>
+   473→                {duelAvailable && (
+   474→                  <button
+   475→                    onClick={() => {
+   476→                      if (!duelEnabled) {
+   477→                        toast({
+   478→                          description:
+   479→                            "Duel armed — next message races two models; you pick the keeper.",
+   480→                        });
+   481→                      }
+   482→                      toggleDuel();
+   483→                      setAttachOpen(false);
+   484→                    }}
+   485→                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   486→                  >
+   487→                    <Swords className="h-4 w-4 text-zinc-400" />
+   488→                    Duel two models
+   489→                    <span
+   490→                      className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   491→                        duelEnabled
+   492→                          ? "bg-emerald-400/15 text-emerald-300"
+   493→                          : "bg-zinc-700/60 text-zinc-400"
+   494→                      }`}
+   495→                    >
+   496→                      {duelEnabled ? "On" : "Off"}
+   497→                    </span>
+   498→                  </button>
+   499→                )}
+   500→              </PopoverContent>
+   501→            </Popover>
+   502→
+   503→            <button
+   504→              onClick={toggleSearch}
+   505→              aria-pressed={searchEnabled}
+   506→              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+   507→                searchEnabled
+   508→                  ? "border-zinc-400 bg-white/10 text-white"
+   509→                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+   510→              }`}
+   511→              title="Toggle web search — grounded answers with cited sources (max 3 snippets, 300 chars each)"
+   512→            >
+   513→              <Globe className="h-3.5 w-3.5" />
+   514→              Search
+   515→            </button>
+   516→
+   517→            {/* Effort dial — fast / medium / deep. Each level can
+   518→                route to a different pooled engine; the popover shows
+   519→                exactly which engine serves each level. */}
+   520→            <Popover open={effortOpen} onOpenChange={setEffortOpen}>
+   521→              <PopoverTrigger asChild>
+   522→                <button
+   523→                  aria-label={`Effort level: ${effort}. Change how hard the gateway works`}
+   524→                  aria-expanded={effortOpen}
+   525→                  className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+   526→                    effort === "medium"
+   527→                      ? "border-zinc-600 text-zinc-300 hover:bg-white/5"
+   528→                      : EFFORTS.find((e) => e.level === effort)?.pill ?? ""
+   529→                  }`}
+   530→                  title="Effort — Fast: fastest engine, brief · Medium: your model · Deep: strongest engine, thinking + deep research"
+   531→                >
+   532→                  {(() => {
+   533→                    const E = EFFORTS.find((e) => e.level === effort) ?? EFFORTS[1];
+   534→                    return <E.icon className="h-3.5 w-3.5" />;
+   535→                  })()}
+   536→                  {EFFORTS.find((e) => e.level === effort)?.label ?? "Medium"}
+   537→                  <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+   538→                </button>
+   539→              </PopoverTrigger>
+   540→              <PopoverContent
+   541→                side="top"
+   542→                align="start"
+   543→                className="w-80 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+   544→              >
+   545→                <div className="border-b border-zinc-800 px-3.5 py-2.5">
+   546→                  <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+   547→                    EFFORT — HOW HARD THIS TURN WORKS
+   548→                  </span>
+   549→                </div>
+   550→                <div className="py-1">
+   551→                  {EFFORTS.map(({ level, label, desc, icon: Icon }) => {
+   552→                    const routed = effortModel(models, model, level);
+   553→                    const routedMeta = modelMeta(routed);
+   554→                    return (
+   555→                      <button
+   556→                        key={level}
+   557→                        onClick={() => {
+   558→                          setEffort(level);
+   559→                          setEffortOpen(false);
+   560→                        }}
+   561→                        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-white/5 ${
+   562→                          level === effort ? "text-white" : "text-zinc-300"
+   563→                        }`}
+   564→                      >
+   565→                        <Icon
+   566→                          className={`h-4 w-4 shrink-0 ${
+   567→                            level === effort
+   568→                              ? level === "fast"
+   569→                                ? "text-yellow-300"
+   570→                                : level === "deep"
+   571→                                  ? "text-emerald-300"
+   572→                                  : "text-zinc-200"
+   573→                              : "text-zinc-500"
+   574→                          }`}
+   575→                        />
+   576→                        <span className="min-w-0 flex-1">
+   577→                          <span className="block text-[13px] font-medium">{label}</span>
+   578→                          <span className="block truncate text-[11px] text-zinc-500">
+   579→                            {desc}
+   580→                          </span>
+   581→                        </span>
+   582→                        <span
+   583→                          className="max-w-[96px] shrink-0 truncate text-[11px] text-zinc-400"
+   584→                          title={routed}
+   585→                        >
+   586→                          {routed === model ? routedMeta.name : `→ ${routedMeta.name}`}
+   587→                        </span>
+   588→                        {level === effort && (
+   589→                          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+   590→                        )}
+   591→                      </button>
+   592→                    );
+   593→                  })}
+   594→                </div>
+   595→                <p className="border-t border-zinc-800 px-3.5 py-2 text-[10.5px] leading-relaxed text-zinc-600">
+   596→                  Deep turns run multi-round audited search when Search is on —
+   597→                  plan → retrieve → cross-check — and always show their sources.
+   598→                </p>
+   599→              </PopoverContent>
+   600→            </Popover>
+   601→
+   602→            {/* Duel — race two models on one question, keep the winner.
+   603→                Only a pooled gateway can offer this in-chat. */}
+   604→            <button
+   605→              onClick={() => {
+   606→                if (!duelEnabled && duelAvailable) {
+   607→                  toast({
+   608→                    description:
+   609→                      "Duel armed — next message races two models; you pick the keeper.",
+   610→                  });
+   611→                }
+   612→                toggleDuel();
+   613→              }}
+   614→              disabled={!duelAvailable}
+   615→              aria-pressed={duelEnabled}
+   616→              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+   617→                duelEnabled
+   618→                  ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
+   619→                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+   620→              }`}
+   621→              title={duelAvailable ? "Duel — send to two models at once, keep the better answer (bills both)" : "Add a second model to the active provider to duel"}
+   622→            >
+   623→              <Swords className="h-3.5 w-3.5" />
+   624→              Duel
+   625→            </button>
+   626→
+   627→            {/* Challenger picker — shown while duel is armed */}
+   628→            {duelEnabled && challenger && (
+   629→              <Popover open={challengerOpen} onOpenChange={setChallengerOpen}>
+   630→                <PopoverTrigger asChild>
+   631→                  <button
+   632→                    aria-label="Pick the dueling challenger model"
+   633→                    title={`Challenger — currently ${modelMeta(challenger).name}`}
+   634→                    className="flex h-8 max-w-[92px] shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[170px]"
+   635→                  >
+   636→                    <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
+   637→                      vs
+   638→                    </span>
+   639→                    <span className="truncate font-medium">
+   640→                      {modelMeta(challenger).name}
+   641→                    </span>
+   642→                    <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+   643→                  </button>
+   644→                </PopoverTrigger>
+   645→                <PopoverContent
+   646→                  side="top"
+   647→                  align="start"
+   648→                  className="w-60 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+   649→                >
+   650→                  <div className="border-b border-zinc-800 px-3.5 py-2.5">
+   651→                    <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+   652→                      CHALLENGER MODEL
+   653→                    </span>
+   654→                  </div>
+   655→                  <div className="senku-scroll max-h-72 overflow-y-auto py-1">
+   656→                    {models
+   657→                      .filter((m) => m !== model)
+   658→                      .map((m) => {
+   659→                        const meta = modelMeta(m);
+   660→                        return (
+   661→                          <button
+   662→                            key={m}
+   663→                            onClick={() => {
+   664→                              setChallenger(m);
+   665→                              setChallengerOpen(false);
+   666→                            }}
+   667→                            title={m}
+   668→                            className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+   669→                              m === challenger ? "text-white" : "text-zinc-300"
+   670→                            }`}
+   671→                          >
+   672→                            <span className="min-w-0 truncate font-medium">
+   673→                              {meta.name}
+   674→                            </span>
+   675→                            {m === challenger ? (
+   676→                              <Check className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+   677→                            ) : (
+   678→                              modelHint(meta) && (
+   679→                                <span className="shrink-0 text-[11px] text-zinc-500">
+   680→                                  {modelHint(meta)}
+   681→                                </span>
+   682→                              )
+   683→                            )}
+   684→                          </button>
+   685→                        );
+   686→                      })}
+   687→                  </div>
+   688→                </PopoverContent>
+   689→              </Popover>
+   690→            )}
+   691→          </div>
+   692→
+   693→          {/* right controls */}
+   694→          <div className="flex shrink-0 items-center gap-1.5">
+   695→            {/* model selector — pretty name + tier badge + caret */}
+   696→            <Popover open={modelOpen} onOpenChange={setModelOpen}>
+   697→              <PopoverTrigger asChild>
+   698→                <button
+   699→                  aria-label="Select model"
+   700→                  title={model}
+   701→                  className="flex h-8 max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-600 px-2.5 text-[13px] text-zinc-200 transition-colors hover:bg-white/5"
+   702→                >
+   703→                  <span className="truncate font-medium">{activeMeta.name}</span>
+   704→                  {activeMeta.tier && (
+   705→                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400">
+   706→                      {activeMeta.tier}
+   707→                    </span>
+   708→                  )}
+   709→                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+   710→                </button>
+   711→              </PopoverTrigger>
+   712→              <PopoverContent
+   713→                side="top"
+   714→                align="end"
+   715→                className="w-72 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+   716→              >
+   717→                <div className="flex items-center justify-between border-b border-zinc-800 px-3.5 py-2.5">
+   718→                  <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+   719→                    SELECT MODEL
+   720→                  </span>
+   721→                  <button
+   722→                    onClick={async () => {
+   723→                      setSyncing(true);
+   724→                      const synced = await syncModels();
+   725→                      setSyncing(false);
+   726→                      toast({
+   727→                        description: synced
+   728→                          ? "Model list synced from provider."
+   729→                          : "Provider sync unavailable — using cached list.",
+   730→                      });
+   731→                    }}
+   732→                    className="flex items-center gap-1 text-[12px] text-zinc-300 hover:text-white"
+   733→                  >
+   734→                    <RefreshCw
+   735→                      className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`}
+   736→                    />
+   737→                    Sync
+   738→                  </button>
+   739→                </div>
+   740→                <div className="senku-scroll max-h-80 overflow-y-auto py-1">
+   741→                  {models.length === 0 && (
+   742→                    <p className="px-3.5 py-2 text-[13px] text-zinc-500">
+   743→                      No models configured
+   744→                    </p>
+   745→                  )}
+   746→                  {/* provider group header — shown ONCE, not stacked
+   747→                      on every model */}
+   748→                  {models.length > 0 && providerName && (
+   749→                    <p className="px-3.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+   750→                      {providerName}
+   751→                    </p>
+   752→                  )}
+   753→                  {models.map((m) => {
+   754→                    const meta = modelMeta(m);
+   755→                    const hint = modelHint(meta);
+   756→                    return (
+   757→                      <button
+   758→                        key={m}
+   759→                        onClick={() => {
+   760→                          setModel(m);
+   761→                          setModelOpen(false);
+   762→                        }}
+   763→                        title={m}
+   764→                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+   765→                          m === model ? "text-white" : "text-zinc-300"
+   766→                        }`}
+   767→                      >
+   768→                        <span className="min-w-0 truncate font-medium">
+   769→                          {meta.name}
+   770→                        </span>
+   771→                        {m === model ? (
+   772→                          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+   773→                        ) : (
+   774→                          hint && (
+   775→                            <span className="shrink-0 text-[11px] text-zinc-500">
+   776→                              {hint}
+   777→                            </span>
+   778→                          )
+   779→                        )}
+   780→                      </button>
+   781→                    );
+   782→                  })}
+   783→                </div>
+   784→              </PopoverContent>
+   785→            </Popover>
+   786→
+   787→            {/* voice — record → server ASR → text in the input */}
+   788→            {isRecording ? (
+   789→              <>
+   790→                <button
+   791→                  onClick={recorder.cancel}
+   792→                  aria-label="Cancel recording"
+   793→                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-red-400"
+   794→                  title="Discard recording"
+   795→                >
+   796→                  <Trash2 className="h-[17px] w-[17px]" />
+   797→                </button>
+   798→                <button
+   799→                  onClick={() => void finishDictation()}
+   800→                  aria-label="Stop and transcribe"
+   801→                  className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow-[0_0_0_4px_rgba(239,68,68,0.18)] transition-transform hover:scale-105"
+   802→                  title="Stop & transcribe"
+   803→                >
+   804→                  <Square className="h-3 w-3 fill-white" />
+   805→                </button>
+   806→              </>
+   807→            ) : isProcessing ? (
+   808→              <span
+   809→                className="flex h-8 w-8 items-center justify-center text-zinc-400"
+   810→                aria-label="Transcribing"
+   811→              >
+   812→                <Loader2 className="h-[18px] w-[18px] animate-spin" />
+   813→              </span>
+   814→            ) : (
+   815→              <>
+   816→                <button
+   817→                  onClick={onMicClick}
+   818→                  aria-label="Start voice dictation"
+   819→                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+   820→                  title="Voice dictation — recorded audio is transcribed in the cloud"
+   821→                >
+   822→                  <Mic className="h-[18px] w-[18px]" />
+   823→                </button>
+   824→                {streaming ? (
+   825→                  <button
+   826→                    onClick={stopStreaming}
+   827→                    aria-label="Stop generating"
+   828→                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+   829→                  >
+   830→                    <Square className="h-3.5 w-3.5 fill-black" />
+   831→                  </button>
+   832→                ) : (
+   833→                  <button
+   834→                    onClick={submit}
+   835→                    disabled={!canSend}
+   836→                    aria-label="Send message"
+   837→                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100"
+   838→                  >
+   839→                    <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.4} />
+   840→                  </button>
+   841→                )}
+   842→              </>
+   843→            )}
+   844→          </div>
+   845→        </div>
+   846→      </div>
+   847→
+   848→      <p className="pb-3 pt-2 text-center text-[11px] text-zinc-600">
+   849→        SenkuAPI can make mistakes. Verify important information.
+   850→      </p>
+   851→    </div>
+   852→  );
+   853→}
+   854→
