@@ -2487,3 +2487,59 @@ Live provider probe: 44 models, 21 free-tier.
 - Console clean after Fast Refresh settles; dev.log shows only
   healthy 200s. Test chat deleted (23 chats remain — no test
   residue); roster + default model state confirmed in DB.
+
+---
+
+## Run 25 — 2026-11-03: THE MOBILE DECK — the composer everything on a phone, and nothing hides
+
+**User request.** "Focus on making it perfect web app, responsive
+and has no problem on mobile — I see problems on mobile mode."
+
+**Observed first (phone walkthrough at 390×844, then 320×568).**
+Home / chat / gallery / palette / dialogs all rendered — the
+failures were concentrated in the composer and the drawer:
+
+- **The composer toolbar was 78% invisible.** The left tool strip
+  is an `overflow-x-auto` row; on a phone only 109px of its 514px
+  showed: `+` and a CLIPPED Search chip. Image Forge, the
+  dimensions picker, the effort dial and Duel were all
+  off-screen with zero affordance — the flagship Run 22/7/8
+  features were unreachable on mobile, and an armed Image mode
+  was invisible (placeholder changed, control didn't).
+- **The sidebar drawer stayed open after picking a chat** — every
+  navigation needed a second tap on the scrim.
+- **No iOS safe-area** under the disclaimer — it can sit under the
+  home indicator.
+
+**The change:**
+- **THE MOBILE DECK (the bold change).** On <640px the composer
+  bottom row becomes TWO intentional rows: a full-width icon dock
+  — `+ · Search · Image · (dimensions) · Effort · Duel` — every
+  control visible, evenly spread, 36px touch targets, then a
+  control row `model chip ··· mic · send` (send in the thumb
+  zone). State is legible at a glance: armed chips keep their
+  amber/white tints. ≥640px: byte-identical to the previous single
+  row (labels return, scroll strip returns). Worst case (320px
+  SE with duel + challenger armed) degrades to a 22px scroll, not
+  a hidden feature.
+- **Drawer auto-steps-aside.** New chat / open chat / open gallery
+  now close the mobile drawer (matchMedia ≤767px, matching the
+  backdrop's `md:hidden`); the desktop pinned panel never
+  collapses on navigation.
+- **Safe-area disclaimer**: `pb-[max(0.75rem,env(safe-area-inset-bottom))]`.
+
+**Verified (all real):**
+- Mobile 390px: dock renders all five tools; Image tap → amber +
+  dimensions chip appears (dock re-flows, still fits); Effort
+  popover opens above the dock with per-level routing previews;
+  Duel tap → amber + challenger chip appears; sidebar closes
+  itself on chat select (aria `expanded=false` right after click).
+- Golden path: "mobile deck works" sent from the deck composer →
+  real streamed reply, metadata "GLM 5.3 · APInex pool · 2.7k
+  tokens".
+- 320px: zero overflow in the normal state; 22px graceful scroll
+  with duel + challenger armed.
+- Desktop 1280px: single row byte-identical (labels + scroll
+  strip), pinned sidebar unaffected.
+- lint 0 errors; tsc unchanged (8 pre-existing, none in touched
+  files); console clean; dev.log clean.

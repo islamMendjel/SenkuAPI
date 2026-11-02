@@ -730,10 +730,16 @@ export function InputBar() {
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5 pt-0.5">
-          {/* left controls — horizontally scrollable on narrow screens
-              so Search + Duel + challenger never wrap or overflow */}
-          <div className="senku-scroll flex min-w-0 items-center gap-1.5 overflow-x-auto">
+        {/* Run 25 — the Mobile Deck. On phones this row splits into
+            two intentional rows: the tool dock (icon-only, fully
+            visible — nothing hides in an off-screen scroll strip)
+            above the model · mic · send row. ≥640px: the original
+            single row, byte-identical. */}
+        <div className="flex flex-col items-stretch gap-1.5 px-2.5 pb-2.5 pt-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+          {/* left controls — a full-width dock on phones (icon-only
+              chips, evenly spread); a horizontally scrollable strip
+              ≥640px so Search + Duel + challenger never wrap */}
+          <div className="senku-scroll flex w-full min-w-0 items-center justify-between gap-1 overflow-x-auto sm:w-auto sm:justify-start sm:gap-1.5">
             <Popover open={attachOpen} onOpenChange={setAttachOpen}>
               <PopoverTrigger asChild>
                 <button
@@ -837,7 +843,7 @@ export function InputBar() {
             <button
               onClick={toggleSearch}
               aria-pressed={searchEnabled}
-              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
                 searchEnabled
                   ? "border-zinc-400 bg-white/10 text-white"
                   : "border-zinc-600 text-zinc-300 hover:bg-white/5"
@@ -845,7 +851,7 @@ export function InputBar() {
               title="Toggle web search — grounded answers with cited sources (max 3 snippets, 300 chars each)"
             >
               <Globe className="h-3.5 w-3.5" />
-              Search
+              <span className="hidden sm:inline">Search</span>
             </button>
 
             {/* Run 22 — Image Forge toggle. Arms the forge pipeline for
@@ -862,7 +868,7 @@ export function InputBar() {
                 toggleImageMode();
               }}
               aria-pressed={imageMode}
-              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
                 imageMode
                   ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
                   : "border-zinc-600 text-zinc-300 hover:bg-white/5"
@@ -870,7 +876,7 @@ export function InputBar() {
               title="Image Forge — turn your next message into a generated image (runs on the Z.ai image engine, never spends pool tokens)"
             >
               <ImageIcon className="h-3.5 w-3.5" />
-              Image
+              <span className="hidden sm:inline">Image</span>
             </button>
 
             {/* Forge dimensions — shown while Image mode is armed */}
@@ -943,7 +949,7 @@ export function InputBar() {
                 <button
                   aria-label={`Effort level: ${effort}. Change how hard the gateway works`}
                   aria-expanded={effortOpen}
-                  className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
                     effort === "medium"
                       ? "border-zinc-600 text-zinc-300 hover:bg-white/5"
                       : EFFORTS.find((e) => e.level === effort)?.pill ?? ""
@@ -954,8 +960,10 @@ export function InputBar() {
                     const E = EFFORTS.find((e) => e.level === effort) ?? EFFORTS[1];
                     return <E.icon className="h-3.5 w-3.5" />;
                   })()}
-                  {EFFORTS.find((e) => e.level === effort)?.label ?? "Medium"}
-                  <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+                  <span className="hidden sm:inline">
+                    {EFFORTS.find((e) => e.level === effort)?.label ?? "Medium"}
+                  </span>
+                  <ChevronDown className="hidden h-3 w-3 shrink-0 text-zinc-500 sm:block" />
                 </button>
               </PopoverTrigger>
               <PopoverContent
@@ -1034,7 +1042,7 @@ export function InputBar() {
               }}
               disabled={!duelAvailable}
               aria-pressed={duelEnabled}
-              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-auto sm:px-2.5 ${
                 duelEnabled
                   ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
                   : "border-zinc-600 text-zinc-300 hover:bg-white/5"
@@ -1042,7 +1050,7 @@ export function InputBar() {
               title={duelAvailable ? "Duel — send to two models at once, keep the better answer (bills both)" : "Add a second model to the active provider to duel"}
             >
               <Swords className="h-3.5 w-3.5" />
-              Duel
+              <span className="hidden sm:inline">Duel</span>
             </button>
 
             {/* Challenger picker — shown while duel is armed */}
@@ -1118,8 +1126,9 @@ export function InputBar() {
             )}
           </div>
 
-          {/* right controls */}
-          <div className="flex shrink-0 items-center gap-1.5">
+          {/* right controls — on phones this is its own row under the
+              dock: model chip left, mic + send in the thumb zone */}
+          <div className="flex w-full shrink-0 items-center justify-between gap-1.5 sm:w-auto sm:justify-end">
             {/* model selector — pretty name + tier badge + caret */}
             <Popover open={modelOpen} onOpenChange={setModelOpen}>
               <PopoverTrigger asChild>
@@ -1290,7 +1299,7 @@ export function InputBar() {
         </div>
       </div>
 
-      <p className="pb-3 pt-2 text-center text-[11px] text-zinc-600">
+      <p className="pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 text-center text-[11px] text-zinc-600">
         SenkuAPI can make mistakes. Verify important information.
       </p>
     </div>

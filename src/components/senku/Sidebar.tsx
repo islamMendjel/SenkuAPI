@@ -83,6 +83,17 @@ export function Sidebar({
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [recentOpen, setRecentOpen] = useState(true);
 
+  // Run 25 — on phones the sidebar is a modal drawer (backdrop
+  // md:hidden): any navigation — new chat, open chat, open gallery —
+  // must step the drawer aside, the way every mobile chat app does.
+  // On desktop the panel is PINNED: clicking around must never
+  // collapse it. The md breakpoint (768px) matches the backdrop's.
+  const closeDrawerOnMobile = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+      onCollapse();
+    }
+  };
+
   // ── Inline rename (Run 15) ──
   // `renamingId` swaps one row's title button for an input; the ref
   // guards against double-commit when Enter/Escape unmount the
@@ -248,7 +259,10 @@ export function Sidebar({
 
       {/* New chat */}
       <button
-        onClick={newChat}
+        onClick={() => {
+          closeDrawerOnMobile();
+          newChat();
+        }}
         className="mx-3 mt-3 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-zinc-200 transition-colors hover:bg-white/5"
       >
         <Pencil className="h-4 w-4 text-zinc-400" />
@@ -258,7 +272,10 @@ export function Sidebar({
       {/* Run 23 — image history, the way chats have history. The
           count badge is the honest gallery size (disk-verified). */}
       <button
-        onClick={toggleGallery}
+        onClick={() => {
+          closeDrawerOnMobile();
+          toggleGallery();
+        }}
         aria-current={galleryOpen ? "page" : undefined}
         className={`mx-3 mt-1.5 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
           galleryOpen
@@ -381,7 +398,10 @@ export function Sidebar({
                       }`}
                     >
                       <button
-                        onClick={() => void selectChat(chat.id)}
+                        onClick={() => {
+                          closeDrawerOnMobile();
+                          void selectChat(chat.id);
+                        }}
                         className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px] text-zinc-300 group-hover:text-zinc-100"
                         title={chat.title}
                       >
