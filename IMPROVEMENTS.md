@@ -1939,6 +1939,77 @@ reduced-motion rule in `globals.css`):
 
 ---
 
+## Run 19 — 2026-11-03: THE LIVING GATEWAY — welcome screen becomes a live mission-control moment
+
+**User request (standing directive).** "Look at the site first,
+then innovate. Make ONE bold change that improves conversions or
+the look and feel, not a small tweak. Cook and ship every time."
+
+**Observed first.** agent-browser walkthrough of the live app:
+welcome + snapshot of every control; `/api/bootstrap` + `/api/usage`
+shapes inspected for real data. Finding: the welcome screen — the
+highest-traffic surface — was static and generic, while the
+product's actual identity (a LIVE gateway with pooled keys, usage
+honesty, per-message provenance) was invisible at first glance.
+Conversion gap = trust not shown in the first 3 seconds.
+
+**The bold change (one cohesive piece): the entry moment now
+shows the gateway's real pulse.**
+- Breathing HEALTH RING around the logo: a conic emerald sweep,
+  masked to a hairline circle, rotating 9s/turn — emerald while the
+  limiter is quiet, amber (`.senku-pulse-warn`) when the limiter
+  itself raises a `warning`. Hidden when limiter data is unknown.
+- LIVE STAT STRIP under the clock: `⚡ 96.3k tok today ·
+  ∞ 538k all-time · 🔑 2 keys live · APInex` — REAL numbers from
+  the bootstrap limiter (`dailyTokens`, `allTimeTokens`,
+  `activeKeys`, `providerName`), with tooltips carrying the exact
+  figures. Count-ups sweep from the settled value with one rAF
+  ease-out (new `src/hooks/use-count-up.ts`), re-sweep smoothly on
+  later usage refreshes, jump instantly under reduced-motion, and
+  render NOTHING when a value is unknown — the strip never guesses
+  and never fakes a digit.
+- Cinematic staggered entry: logo bloom (640 ms one-time), headline
+  → subtitle → clock → chips → starter cards cascade via
+  `senku-fade-up` + per-element `animation-delay` (60–320 ms);
+  starter cards gain a warm hover glow. All grouped into the
+  `prefers-reduced-motion` block (instant landing).
+
+**Two real bugs found & fixed during verification (not shipped
+broken):**
+1. `react-hooks/set-state-in-effect` (React 19 lint): the hook's
+   first version called setState synchronously in the effect body —
+   restructured so every write happens inside the rAF callback
+   (the effect only syncs with the external rAF system).
+2. CSS cascade defect: `.senku-fade-up` used the `animation:`
+   SHORTHAND, which resets `animation-delay` to 0 and, as unlayered
+   CSS, silently beat Tailwind's `[animation-delay:…]` utility —
+   every stagger in the app was dead at 0 s. Converted to longhand
+   (`animation-name/duration/timing/fill-mode`) so the delay
+   utilities actually apply. Also caught Turbopack serving a stale
+   CSS chunk mid-verification (dev-server restart; verified fresh
+   bundle by marker).
+3. Bonus: removed the pre-existing `useNow(1000)` tsc baseline
+   error while rewriting the file (`useNow()` takes no args).
+
+**Verified (all real):**
+- Strip shows exact ground truth vs bootstrap: 96264 → "96.3k",
+  538194 → "538k", 2 keys, APInex — matched.
+- Count-up sweep proven live: frame-zero sample "0" → settled
+  "96.3k" (rAF loop observed in the actual page).
+- Stagger delays computed in-browser: chips 0.18/0.24/0.30 s,
+  cards 0.14/0.20/0.26/0.32 s, headline 0.06 s; ring animation
+  `senku-spin-slow` running; logo bloom applied.
+- Desktop 1440×900 + mobile 390×844 screenshots: ring visible,
+  strip wraps cleanly on mobile, no horizontal overflow, composer
+  still bottom-anchored (Run 18 intact), zero page errors,
+  dev.log clean, lint 0 errors, tsc clean in touched files.
+
+**Scope discipline:** no backend changes, no new dependencies,
+no fake metrics anywhere (strip hides entirely without limiter
+data), reduced-motion fully honored.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we
