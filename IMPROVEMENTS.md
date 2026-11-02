@@ -1450,6 +1450,119 @@ footer; limited providers get "The daily window runs 01:00 →
 
 ---
 
+## Run 15 — 2026-11-03: SESSION MANAGEMENT, FOR REAL — sidebar launches closed + 3-dot chat menu (rename / export / delete)
+
+**User request.** (a) When SenkuAPI launches, the sidebar must be
+closed. (b) Audit recommendations for chat lifecycle: 3-dot action
+menu per chat (Rename / Export / Delete) and a Stop-generation
+button, plus mobile keyboard polish
+(`interactive-widget=resizes-content`).
+
+### What shipped
+
+**1. Sidebar closed on launch — everywhere.** The store default
+flipped `sidebarOpen: true → false`. Desktop launches full-width
+chat; mobile launches with the drawer translated off-screen and the
+backdrop inert. The redundant `<768px` force-close effect was
+removed (the default now covers it). Opening works exactly as
+before: click-pin, hover-peek, touch toggle — all Run 13 animation
+intact.
+
+**2. 3-dot action menu on every chat row** (replaces the bare trash
+icon): **Rename** (inline input in the row — autofocus + select,
+Enter commits, Escape cancels, blur commits; a ref guard makes
+double-commit impossible when unmount races the final blur),
+**Export as Markdown**, **Export as JSON**, **Delete** (wipes the
+SQLite chat + messages, as before).
+- Rename is optimistic in the store and PATCHes
+  `/api/chats/[id]` (endpoint already existed, unused until now);
+  failure rolls back via `refreshChats` and toasts.
+- Export is a new pure lib (`src/lib/senku/export.ts`): the open
+  chat exports straight from the live store; any other chat is
+  fetched once. Markdown carries the same honesty the timeline
+  shows — per-assistant `_tokens · via provider · served from
+  cache_` lines, attachment provenance (chars read, truncation,
+  method), and source links. JSON is full-fidelity. Filenames are
+  sanitized from the title; downloads go through a Blob + revoked
+  object URL.
+- **Latent touch defect fixed**: the old trash button (and the new
+  trigger) used `hidden group-hover:flex` — Tailwind v4 generates
+  group-hover inside `@media (hover: hover)`, so on touch devices
+  the button was *permanently invisible*: no rename, no delete on
+  mobile at all. The trigger now adds `[@media(hover:none)]:flex`
+  (always visible when the device cannot hover) plus
+  `group-focus-within:flex` (keyboard) and `data-[state=open]:flex`
+  (stays visible while its menu is open).
+
+**3. Mobile keyboard viewport.** `export const viewport` in the root
+layout ships `interactive-widget=resizes-content` — Android
+keyboards resize the page instead of covering the floating input
+bar (iOS already follows the visual viewport).
+
+**Stop-generation button**: already shipped in an earlier run
+(send square swaps in while streaming, `AbortController.abort()`) —
+re-verified end-to-end this run rather than rebuilt.
+
+### Verification (all live, agent-browser)
+
+- **Launch-closed**: fresh load at 1440×900 — no `senku-open`
+  class, sidebar width 0; reloaded again mid-session — still
+  closed; 390×844 — panel translated off-screen, backdrop inert.
+  Toggle opens to 264px with animation intact.
+- **3-dot reveal paths**: CSS audit — `group-hover:flex` generated
+  (idx 770, after `.hidden` idx 156; specificity (0,2,0) > (0,1,0))
+  inside `@media (hover: hover)`; the headless env reports
+  `hover:none` so the reveal was proven via the unguarded paths:
+  `[@media(hover:none)]:flex` (visible in this env, real mouse
+  click) + rule-existence analysis for desktop hover. Menu items
+  confirmed by DOM and by VLM screenshot.
+- **Rename**: clicked Rename → inline input focused with old title
+  selected → typed new title → Enter → row updated instantly, old
+  title gone, input closed; PATCH 200; DB shows new title +
+  bumped `updatedAt`.
+- **Export JSON** (empty test chat): captured via instrumented
+  `URL.createObjectURL`/anchor click — filename
+  `ZZ renamed by run15.json`, `application/json;charset=utf-8`,
+  correct `{title, model, provider, createdAt, exportedAt,
+  messages}`.
+- **Export Markdown** (real 8-message chat): 2,599 bytes,
+  `# title` + provenance header (`Exported from SenkuAPI · date ·
+  8 messages · free/glm-5.3 (APInex)`), `## You` /
+  `## Assistant — model` sections, `_4,652 tokens · via APInex_`
+  footer; first user message byte-identical to the API payload;
+  8/8 messages present. Toast "Exported … as Markdown." captured
+  live in `[role=status]`.
+- **Delete**: clean run — menu → Delete → row gone from UI,
+  `DELETE /api/chats/[id]` 200, row gone from DB.
+- **Stop**: sent a long-generation prompt — stop square appeared
+  71 ms after Enter; atomic in-page click aborted the stream:
+  stop gone, send button restored, partial reply retained, zero
+  error cards.
+- **Regression**: `bun run lint` 0 errors (2 pre-existing script
+  warnings); `tsc --noEmit` 14 errors = exact pre-existing
+  baseline; dev.log clean; 0 page errors; all 11 real chats
+  intact; both test chats + the aborted-essay chat purged.
+
+### Deferred / known trade-offs
+
+- Out-of-band deletions (another tab, direct API) don't
+  live-refresh an open sidebar — single-user gateway, in-app
+  deletes refresh correctly.
+- The 3-dot hover reveal could not be *visually* confirmed in the
+  headless CLI (`hover:none` media); it is proven by generated-CSS
+  audit (rule, guard, specificity, order) plus the identical
+  pattern shipped since the trash button. The touch path is
+  directly verified.
+- From the same audit, deferred to the backlog as higher-effort
+  items: Projects modal with per-project system prompts (top
+  candidate — the "No projects" label is still static), TTFT
+  badge, reasoning accordions, Canvas/artifacts drawer,
+  non-destructive branching, gateway dashboard panel, mobile
+  swipe-to-open, `/docs` (not possible under the single-route
+  constraint), homepage hero, OG tags.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we

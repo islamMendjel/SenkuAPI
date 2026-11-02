@@ -8,12 +8,19 @@
 // Run 13: always mounted — the app shell (SenkuApp) owns the
 // open/close animation and hover-peek lifecycle; this component
 // just renders the panel at its fixed 264px width.
+//
+// Run 15: every chat row gets a 3-dot action menu — Rename (inline,
+// no page refresh), Export as Markdown / JSON (clean download), and
+// Delete (SQLite wipe). The menu reveals on hover/focus, exactly
+// like the old trash button, but with all three actions.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ChevronRight,
   CircleHelp,
+  FileJson,
+  FileText,
   Folder,
   Languages,
   LogOut,
@@ -24,7 +31,7 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
-import { useSenku } from "@/lib/store";
+import { useSenku, type ChatListItem } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -35,6 +42,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
+import {
+  chatToMarkdown,
+  downloadText,
+  safeFilename,
+  type ExportMessage,
+} from "@/lib/senku/export";
 
 export function Sidebar({
   onManageProviders,
@@ -47,19 +60,118 @@ export function Sidebar({
     user,
     chats,
     currentChatId,
+    messages,
+    temporary,
     searchOpen,
     searchFilter,
-    temporary,
     setSearchOpen,
     setSearchFilter,
     newChat,
     selectChat,
     deleteChat,
+    renameChat,
   } = useSenku();
   const { toast } = useToast();
 
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [recentOpen, setRecentOpen] = useState(true);
+
+  // ── Inline rename (Run 15) ──
+  // `renamingId` swaps one row's title button for an input; the ref
+  // guards against double-commit when Enter/Escape unmount the
+  // input and the browser still fires a final blur.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameDone = useRef(false);
+
+  const startRename = (chat: ChatListItem) => {
+    renameDone.current = false;
+    setRenamingId(chat.id);
+    setRenameValue(chat.title);
+  };
+  const commitRename = async (id: string, title: string) => {
+    setRenamingId(null);
+    const t = title.trim();
+    if (!t) return;
+    const ok = await renameChat(id, t);
+    if (!ok) {
+      toast({
+        variant: "destructive",
+        description: "Rename failed — the title was restored.",
+      });
+    }
+  };
+
+  // ── Export (Run 15) ──
+  // The open chat exports straight from the live store; any other
+  // chat is fetched once from the API, then rendered to .md / .json
+  // and handed to the browser as a download.
+  const exportChat = async (chat: ChatListItem, fmt: "md" | "json") => {
+    try {
+      let msgs: ExportMessage[];
+      let model = chat.model;
+      let provider = chat.provider;
+      let createdAt = chat.createdAt;
+      if (chat.id === currentChatId && !temporary && messages.length > 0) {
+        msgs = messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          model: m.model ?? null,
+          provider: m.provider ?? null,
+          keyLabel: m.keyLabel ?? null,
+          tokens: m.tokens ?? null,
+          cached: m.cached ?? null,
+          servedBy: m.servedBy ?? null,
+          createdAt: m.createdAt ?? null,
+          sources: m.sources ?? null,
+          attachments: m.attachments ?? null,
+        }));
+      } else {
+        const res = await fetch(`/api/chats/${chat.id}`);
+        if (!res.ok) throw new Error("fetch failed");
+        const data = await res.json();
+        msgs = (data.messages ?? []) as ExportMessage[];
+        model = data.model ?? model;
+        provider = data.provider ?? provider;
+        createdAt = data.createdAt ?? createdAt;
+      }
+      const base = safeFilename(chat.title);
+      if (fmt === "md") {
+        downloadText(
+          `${base}.md`,
+          chatToMarkdown(chat.title, msgs, { model, provider, createdAt }),
+          "text/markdown;charset=utf-8"
+        );
+      } else {
+        downloadText(
+          `${base}.json`,
+          JSON.stringify(
+            {
+              title: chat.title,
+              model,
+              provider,
+              createdAt,
+              exportedAt: new Date().toISOString(),
+              messages: msgs,
+            },
+            null,
+            2
+          ),
+          "application/json;charset=utf-8"
+        );
+      }
+      toast({
+        description: `Exported “${chat.title}” as ${
+          fmt === "md" ? "Markdown" : "JSON"
+        }.`,
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        description: "Export failed — could not load this chat.",
+      });
+    }
+  };
 
   const filteredChats = useMemo(() => {
     const f = searchFilter.trim().toLowerCase();
@@ -177,31 +289,106 @@ export function Sidebar({
                   {searchFilter ? "No matches" : "No chats yet"}
                 </p>
               ) : (
-                filteredChats.map((chat) => (
-                  <div
-                    key={chat.id}
-                    className={`group flex items-center rounded-lg transition-colors ${
-                      currentChatId === chat.id && !temporary
-                        ? "bg-white/10"
-                        : "hover:bg-white/5"
-                    }`}
-                  >
-                    <button
-                      onClick={() => void selectChat(chat.id)}
-                      className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px] text-zinc-300 group-hover:text-zinc-100"
-                      title={chat.title}
+                filteredChats.map((chat) =>
+                  renamingId === chat.id ? (
+                    <div
+                      key={chat.id}
+                      className="flex items-center rounded-lg bg-white/10 px-1.5 py-1"
                     >
-                      {chat.title}
-                    </button>
-                    <button
-                      aria-label={`Delete chat: ${chat.title}`}
-                      onClick={() => void deleteChat(chat.id)}
-                      className="mr-1 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-white/10 hover:text-red-400 group-hover:flex"
+                      <Input
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            renameDone.current = true;
+                            void commitRename(chat.id, renameValue);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            renameDone.current = true;
+                            setRenamingId(null);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (renameDone.current) return;
+                          renameDone.current = true;
+                          void commitRename(chat.id, renameValue);
+                        }}
+                        aria-label="Rename chat"
+                        className="h-7 border-zinc-700/80 bg-[#18181b] text-[13px] text-zinc-200 focus-visible:ring-zinc-600"
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      key={chat.id}
+                      className={`group flex items-center rounded-lg transition-colors ${
+                        currentChatId === chat.id && !temporary
+                          ? "bg-white/10"
+                          : "hover:bg-white/5"
+                      }`}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))
+                      <button
+                        onClick={() => void selectChat(chat.id)}
+                        className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px] text-zinc-300 group-hover:text-zinc-100"
+                        title={chat.title}
+                      >
+                        {chat.title}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            aria-label={`Chat actions: ${chat.title}`}
+                            title="Chat actions"
+                            className="mr-1 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 group-hover:flex group-focus-within:flex data-[state=open]:flex [@media(hover:none)]:flex"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          side="right"
+                          align="end"
+                          className="w-48 border-zinc-800 bg-[#262627] text-zinc-200"
+                        >
+                          <DropdownMenuLabel className="truncate text-[11px] tracking-wide text-zinc-500">
+                            {chat.title}
+                          </DropdownMenuLabel>
+                          <DropdownMenuSeparator className="bg-zinc-800" />
+                          <DropdownMenuItem
+                            className="gap-2.5 py-2 text-[13px]"
+                            onClick={() => startRename(chat)}
+                          >
+                            <Pencil className="h-4 w-4 text-zinc-400" />
+                            Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="gap-2.5 py-2 text-[13px]"
+                            onClick={() => void exportChat(chat, "md")}
+                          >
+                            <FileText className="h-4 w-4 text-zinc-400" />
+                            Export as Markdown
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="gap-2.5 py-2 text-[13px]"
+                            onClick={() => void exportChat(chat, "json")}
+                          >
+                            <FileJson className="h-4 w-4 text-zinc-400" />
+                            Export as JSON
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator className="bg-zinc-800" />
+                          <DropdownMenuItem
+                            className="gap-2.5 py-2 text-[13px] text-red-400 focus:bg-red-500/10 focus:text-red-300"
+                            onClick={() => void deleteChat(chat.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )
+                )
               )}
             </div>
           )}

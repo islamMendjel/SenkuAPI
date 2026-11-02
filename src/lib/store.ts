@@ -150,6 +150,9 @@ interface SenkuState {
   newChat: () => void;
   selectChat: (id: string) => Promise<void>;
   deleteChat: (id: string) => Promise<void>;
+  /** Rename a chat (optimistic — rolls back to the server list on
+      failure). Returns true when the new title stuck. */
+  renameChat: (id: string, title: string) => Promise<boolean>;
   sendMessage: (content: string) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
   /** Re-run the turn that produced the last failed assistant reply,
@@ -197,7 +200,10 @@ export const useSenku = create<SenkuState>((set, get) => ({
   chats: [],
   models: [],
 
-  sidebarOpen: true,
+  // Run 15: the sidebar starts CLOSED on launch (the user asked for
+  // it explicitly). It opens on click, on hover-peek over the
+  // top-bar toggle, and — on mobile — stays an overlay drawer.
+  sidebarOpen: false,
   searchOpen: false,
   searchFilter: "",
   searchEnabled: false,
@@ -529,6 +535,29 @@ export const useSenku = create<SenkuState>((set, get) => ({
       }));
     }
     await get().refreshChats();
+  },
+
+  async renameChat(id, title) {
+    const t = title.trim().slice(0, 80);
+    const prev = get().chats.find((c) => c.id === id);
+    if (!t || !prev || prev.title === t) return true;
+    // Optimistic: the new title appears instantly in the sidebar…
+    set((s) => ({
+      chats: s.chats.map((c) => (c.id === id ? { ...c, title: t } : c)),
+    }));
+    try {
+      const res = await fetch(`/api/chats/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: t }),
+      });
+      if (!res.ok) throw new Error("rename failed");
+      return true;
+    } catch {
+      // …and rolls back to the server's truth if the write failed.
+      await get().refreshChats();
+      return false;
+    }
   },
 
   async sendMessage(content) {

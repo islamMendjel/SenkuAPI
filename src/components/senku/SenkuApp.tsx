@@ -71,11 +71,9 @@ export function SenkuApp() {
 
   useEffect(() => {
     void bootstrap();
-    // Close sidebar by default on small screens
-    if (typeof window !== "undefined" && window.innerWidth < 768) {
-      setSidebarOpen(false);
-    }
-  }, [bootstrap, setSidebarOpen]);
+    // Run 15: the sidebar starts CLOSED on every screen (store
+    // default) — nothing to force shut on mount anymore.
+  }, [bootstrap]);
 
   // Transitions stay OFF until after the first paint — the initial
   // hydration state must never animate (e.g. the mobile

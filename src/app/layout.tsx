@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
@@ -20,6 +20,15 @@ export const metadata: Metadata = {
   icons: {
     icon: "/senku-sparkle.png",
   },
+};
+
+/** Mobile virtual keyboards resize the page instead of covering
+ *  it — the floating input bar stays pinned above the keyboard on
+ *  Android (iOS Safari already follows the visual viewport). */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({
