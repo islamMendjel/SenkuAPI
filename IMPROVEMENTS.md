@@ -2584,3 +2584,43 @@ icon-only buttons across a strip that fought the keyboard and the thumb.
 - 1280×800: full labeled strip + FREE badge — desktop untouched.
 - Test chat deleted (23 chats remain). lint 0 errors; tsc 8 pre-existing
   (none in touched files); console clean; dev.log clean.
+---
+
+## Run 26 — "THE ENGINE RAIL + TABLES THAT EXIST"
+
+**Directive:** look first, then one bold conversion/look-and-feel change, no
+redundancy. The walk (desktop welcome, chat, canvas, limiter, palette, rail,
+mobile) surfaced two truths: the right rail — the most permanent piece of
+desktop chrome — was 6 dead "coming soon" stubs (Pinned · Video · Billing ·
+Library · Music · Add tool), while the app's REAL pillars hid behind small
+targets; and GFM tables from models never rendered at all (no remark-gfm —
+comparison answers came out as pipe-text soup).
+
+**The change:**
+- **THE ENGINE RAIL (bold).** RightRail rebuilt: every button is real now —
+  Canvas (sandboxed code preview, amber active state), **Image Gallery**
+  (opens the masonry, amber active state, corner badge with the honest
+  disk-verified count), **Usage** (Token Limiter dialog — today · month ·
+  all-time), **Keys** (Manage Providers — the pools behind the gateway,
+  bottom anchor where the fake Settings lived). Six vapor buttons deleted.
+  Desktop-only (lg+) — mobile reaches everything via the sidebar; zero
+  mobile churn.
+- **GFM tables (correction + upgrade).** remark-gfm added to the shared
+  Markdown renderer (covers streamed + settled paths): real tables with
+  tinted header row, hairline grid, quiet zebra, nowrap headers (no more
+  mid-word "Spee d"), GFM alignment preserved; wide tables scroll inside
+  a rounded wrapper (verified 440px min-width, scrollWidth > clientWidth
+  at 390px — the page never breaks). Also unlocks strikethrough, task
+  lists and autolinks that models emit.
+
+**Verified (all real):**
+- Rail: Gallery click → masonry (aria-pressed true, badge "5"); Usage →
+  Token Limiter dialog; Keys → Manage Providers dialog (OxionAI + APInex
+  pools); Canvas unchanged.
+- Golden path: "compare GLM/Kimi/DeepSeek" sent live → streamed reply
+  rendered AS a table, "GLM 5.3 · APInex pool · 2.8k tokens" (129k→131k).
+- 390px: table scrolls in wrapper, composer single row intact.
+- Test chat deleted (23 chats). lint 0 errors; tsc 8 pre-existing (none in
+  touched files); console clean.
+- A welcome-screen model roster was considered and REJECTED — Run 20's
+  engine bay was already removed on user feedback; the welcome stays pure.

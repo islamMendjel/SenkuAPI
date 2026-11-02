@@ -4,11 +4,17 @@
 // Pro code experience: blocks get syntax highlighting, a language
 // badge and one-click copy — the surface developers on an AI
 // gateway look at the most. Inline code stays subtle zinc.
+// Run 26 — remark-gfm: models emit GFM constantly (comparison
+// tables, ~~strikethrough~~, task lists, bare URLs). Without the
+// plugin a table rendered as raw pipe-text soup; now it renders as
+// a real, styled, scrollable table on both the streamed and the
+// settled path (StreamedMarkdown delegates to this component).
 
 import { memo, useCallback, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Check, Copy, PanelRight, WrapText } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -177,7 +183,12 @@ function extractCode(children: ReactNode): {
 
 const MarkdownInner = function Markdown({ content }: { content: string }) {
   return (
-    <ReactMarkdown components={MARKDOWN_COMPONENTS}>{content}</ReactMarkdown>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={MARKDOWN_COMPONENTS}
+    >
+      {content}
+    </ReactMarkdown>
   );
 };
 
@@ -205,6 +216,38 @@ const MARKDOWN_COMPONENTS: Components = {
     >
       {children}
     </a>
+  ),
+  // Run 26 — GFM tables: header row on the code-header tint, hairline
+  // grid, quiet zebra, scrollable when a wide table meets a narrow
+  // message column. th/td keep the GFM alignment style.
+  table: ({ children }) => (
+    <div className="senku-scroll my-3 overflow-x-auto rounded-xl border border-zinc-800">
+      <table className="w-full min-w-[440px] border-collapse text-[13px] sm:min-w-0">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-[#141417]">{children}</thead>,
+  th: ({ children, style }) => (
+    <th
+      style={style}
+      className="border-b border-zinc-800 px-3 py-2 text-left text-[12px] font-semibold whitespace-nowrap text-zinc-200 [&:not(:last-child)]:border-r [&:not(:last-child)]:border-zinc-800/60"
+    >
+      {children}
+    </th>
+  ),
+  td: ({ children, style }) => (
+    <td
+      style={style}
+      className="border-b border-zinc-800/60 px-3 py-2 align-top text-zinc-300 [&:not(:last-child)]:border-r [&:not(:last-child)]:border-zinc-800/40"
+    >
+      {children}
+    </td>
+  ),
+  tr: ({ children }) => (
+    <tr className="even:bg-white/[0.025] [&:last-child>td]:border-b-0">
+      {children}
+    </tr>
   ),
 };
 

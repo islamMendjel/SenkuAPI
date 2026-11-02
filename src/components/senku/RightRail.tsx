@@ -1,44 +1,38 @@
 "use client";
 
-// SenkuAPI — right icon rail (matches the reference screenshots).
-// Run 17: the rail's CANVAS button activates the Senku Canvas —
-// the Tools aside that previews code blocks in a sandboxed panel.
+// SenkuAPI — right engine rail. Run 26: every button is REAL. The
+// template-era stubs (Pinned · Video · Billing · Library · Music ·
+// "Add tool" — each was just a "coming soon" toast) are gone; the
+// rail is now one-tap access to the surfaces that actually exist:
+// the Senku Canvas (sandboxed code preview), the image Gallery,
+// the live Usage meter, and the provider Keys behind the gateway.
+// Desktop-only (lg+) — mobile reaches all of these via the sidebar.
 
-import {
-  BookOpen,
-  CreditCard,
-  Music,
-  PanelRight,
-  Pin,
-  Plus,
-  Settings,
-  Video,
-} from "lucide-react";
+import { Gauge, Images, KeyRound, PanelRight } from "lucide-react";
 import { useSenku } from "@/lib/store";
-import { useToast } from "@/hooks/use-toast";
 
-const TOOLS = [
-  { icon: Pin, label: "Pinned" },
-  { icon: Video, label: "Video" },
-  { icon: CreditCard, label: "Billing" },
-  { icon: BookOpen, label: "Library" },
-  { icon: Music, label: "Music" },
-  { icon: Plus, label: "Add tool" },
-];
-
-export function RightRail({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { toast } = useToast();
+export function RightRail({
+  onOpenProviders,
+  onOpenLimiter,
+}: {
+  onOpenProviders: () => void;
+  onOpenLimiter: () => void;
+}) {
   const canvasOpen = useSenku((s) => s.canvasOpen);
   const setCanvasOpen = useSenku((s) => s.setCanvasOpen);
   const hasSource = useSenku((s) => s.canvasSource != null);
+  const galleryOpen = useSenku((s) => s.galleryOpen);
+  const openGallery = useSenku((s) => s.openGallery);
+  const closeGallery = useSenku((s) => s.closeGallery);
+  const imageCount = useSenku((s) => s.imageCount);
 
   return (
     <aside
       className="hidden w-12 shrink-0 flex-col items-center gap-1 border-l border-zinc-800/60 py-3 lg:flex"
-      aria-label="Tools"
+      aria-label="Engine rail"
     >
-      {/* Senku Canvas — the one rail tool that is REAL: previews
-          code blocks in a sandboxed split panel. */}
+      {/* Senku Canvas — sandboxed preview for html / svg / mermaid /
+          js / python blocks surfaced from any conversation. */}
       <button
         title={
           hasSource
@@ -59,26 +53,54 @@ export function RightRail({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       <div className="my-1 h-px w-6 bg-zinc-800" aria-hidden />
 
-      {TOOLS.map(({ icon: Icon, label }) => (
-        <button
-          key={label}
-          title={label}
-          aria-label={label}
-          onClick={() =>
-            toast({ description: `${label} — coming soon to SenkuAPI.` })
-          }
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-300"
-        >
-          <Icon className="h-4 w-4" />
-        </button>
-      ))}
+      {/* Image Gallery — every forged image, from every saved chat.
+          The corner badge is the honest disk-verified count. */}
       <button
-        title="Settings"
-        aria-label="Settings"
-        onClick={onOpenSettings}
+        onClick={() => (galleryOpen ? closeGallery() : openGallery())}
+        aria-label="Image gallery"
+        aria-pressed={galleryOpen}
+        title={
+          galleryOpen
+            ? "Image Gallery — open (the timeline shows every forged image)"
+            : "Image Gallery — every image you have forged, across all chats"
+        }
+        className={`relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+          galleryOpen
+            ? "bg-amber-300/15 text-amber-200"
+            : "text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
+        }`}
+      >
+        <Images className="h-4 w-4" />
+        {imageCount > 0 && (
+          <span
+            className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border border-zinc-800 bg-[#1d1d20] px-0.5 text-[8.5px] font-semibold tabular-nums text-zinc-300"
+            title={`${imageCount} forged image${imageCount === 1 ? "" : "s"} across all chats`}
+          >
+            {imageCount > 99 ? "99+" : imageCount}
+          </span>
+        )}
+      </button>
+
+      {/* Usage — the live token limiter: today · this month ·
+          all-time, with the active pool's metering explained. */}
+      <button
+        onClick={onOpenLimiter}
+        aria-label="Token usage"
+        title="Usage — today · this month · all-time, live metering"
+        className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-300"
+      >
+        <Gauge className="h-4 w-4" />
+      </button>
+
+      {/* Provider keys — the pools behind the gateway. Bottom anchor,
+          where Settings used to live (this IS the settings surface). */}
+      <button
+        onClick={onOpenProviders}
+        aria-label="Provider keys"
+        title="Provider keys — manage the pools behind the gateway"
         className="mt-auto flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-300"
       >
-        <Settings className="h-4 w-4" />
+        <KeyRound className="h-4 w-4" />
       </button>
     </aside>
   );

@@ -270,7 +270,10 @@ export function SenkuApp() {
           so the conversation reflows, never overlaps. */}
       <CanvasPanel />
 
-      <RightRail onOpenSettings={() => setProvidersOpen(true)} />
+      <RightRail
+        onOpenProviders={() => setProvidersOpen(true)}
+        onOpenLimiter={() => setLimiterOpen(true)}
+      />
 
       {/* Command palette — mounted fresh on every open so state
           always starts clean (⌘K toggles it globally) */}
