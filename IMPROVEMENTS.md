@@ -1915,6 +1915,28 @@ states, no route or API changes; `booted` semantics untouched
 (failed bootstrap still boots by design — verified live via an
 aborted `/api/bootstrap`).
 
+**Follow-up (same report, 19:10 screenshot): the token pill was
+the last flashing element.** With the composer anchored, reloads
+still showed the pill pop amber `Tokens: 0 / 500k` → green
+`Tokens: 96.3k / ∞` when bootstrap landed. Root cause: pre-boot
+`limiter` is `null` and `TopBar` fell back to
+`pillLabel(0, 500_000)` — a FAKE state that misrepresents the
+account for the whole boot window. Fix in `TopBar.tsx` (+ one
+reduced-motion rule in `globals.css`):
+- Pre-boot the pill renders a neutral pulse SKELETON
+  (`TokenPillSkeleton`: `aria-busy`, "Loading usage…", width
+  148 px mirroring the settled pill) — no fake numbers, ever.
+- When `booted` flips, the real pill mounts (span→button remount
+  guarantees it) with the existing `senku-fade-up` settle; later
+  `refreshUsage` updates patch in place and never re-animate.
+- Verified: SSR HTML contains `senku-pill-loading` + `aria-busy`
+  and NO `500k`/`96.3k` anywhere (first paint honest,
+  browser-independent); live settled state shows the real pill
+  (width 150 vs skeleton 148 → 2 px delta ≈ zero shift), fade-up
+  applied, welcome visible, composer still bottom-anchored;
+  mobile 390×844 no horizontal overflow; no page errors; lint
+  0 errors, no new tsc errors.
+
 ---
 
 ## COMPETITOR GAP LIST

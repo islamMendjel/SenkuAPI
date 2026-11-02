@@ -21,6 +21,31 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
+/** Run 18 — pre-boot the pill shows a neutral pulse skeleton, NEVER
+ *  a fake "0 / 500k": before bootstrap answers the real limit isn't
+ *  known, and flashing amber-zero → green-real on every reload was
+ *  the last visible remnant of the entry flash. Width mirrors the
+ *  settled pill so nothing shifts when the truth lands. */
+function TokenPillSkeleton() {
+  return (
+    <span
+      aria-busy="true"
+      aria-label="Loading usage"
+      title="Loading usage…"
+      className="senku-pill-loading flex h-8 w-[148px] items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-800/40 px-3"
+    >
+      <span
+        className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-zinc-600"
+        aria-hidden
+      />
+      <span
+        className="h-2 w-[92px] animate-pulse rounded-full bg-zinc-700/70"
+        aria-hidden
+      />
+    </span>
+  );
+}
+
 export function TopBar({
   sidebarOpen,
   onToggleSidebar,
@@ -37,7 +62,7 @@ export function TopBar({
   onOpenLimiter: () => void;
   onOpenPalette: () => void;
 }) {
-  const { temporary, toggleTemporary, limiter } = useSenku();
+  const { temporary, toggleTemporary, limiter, booted } = useSenku();
 
   const unlimited = limiter?.unlimited ?? false;
   // Run 14: the pill's headline number is the DAILY usage — it resets
@@ -127,22 +152,26 @@ export function TopBar({
           </TooltipContent>
         </Tooltip>
 
-        <button
-          onClick={onOpenLimiter}
-          className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors ${
-            unlimited
-              ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
-              : "border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
-          }`}
-          title={pillTitle}
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              unlimited ? "bg-emerald-400" : "bg-amber-400"
+        {booted ? (
+          <button
+            onClick={onOpenLimiter}
+            className={`senku-fade-up flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors ${
+              unlimited
+                ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
+                : "border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
             }`}
-          />
-          {tokenPill}
-        </button>
+            title={pillTitle}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                unlimited ? "bg-emerald-400" : "bg-amber-400"
+              }`}
+            />
+            {tokenPill}
+          </button>
+        ) : (
+          <TokenPillSkeleton />
+        )}
       </div>
     </header>
   );

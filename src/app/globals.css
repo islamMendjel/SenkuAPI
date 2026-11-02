@@ -586,7 +586,9 @@
   /* Run 13: sidebar + view transitions become instant state
      changes — hover-peek still works, it just doesn't animate. */
   .senku-view-in,
-  .senku-input-in {
+  .senku-input-in,
+  .senku-pill-loading,
+  .senku-pill-loading * {
     animation: none !important;
   }
   .senku-sidebar,
