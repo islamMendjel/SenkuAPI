@@ -1,0 +1,1308 @@
+     1→"use client";
+     2→
+     3→// SenkuAPI — floating bottom input bar:
+     4→// "+" attachments menu (REAL file reading — extraction runs the
+     5→// moment a file is picked, chips show what the gateway read),
+     6→// Search toggle pill, effort dial, model selector chip (pretty name
+     7→// + tier badge + caret, grouped provider dropdown), server-backed
+     8→// voice dictation with a live waveform, send/stop.
+     9→
+    10→import { useEffect, useMemo, useRef, useState } from "react";
+    11→import {
+    12→  ArrowUp,
+    13→  Brain,
+    14→  ChevronDown,
+    15→  Check,
+    16→  Code2,
+    17→  Eye,
+    18→  FileImage,
+    19→  FileText,
+    20→  FoldVertical,
+    21→  Globe,
+    22→  Image as ImageIcon,
+    23→  Loader2,
+    24→  Mic,
+    25→  Paperclip,
+    26→  Plus,
+    27→  RefreshCw,
+    28→  Sparkles,
+    29→  Square,
+    30→  Swords,
+    31→  Trash2,
+    32→  TriangleAlert,
+    33→  X,
+    34→  Zap,
+    35→} from "lucide-react";
+    36→import { useSenku, type PendingAttachment } from "@/lib/store";
+    37→import { useToast } from "@/hooks/use-toast";
+    38→import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
+    39→import { effortModel, modelGlyph, modelHint, modelMeta } from "@/lib/senku/models";
+    40→import { IMAGE_SIZES, IMAGE_SIZE_KEYS } from "@/lib/senku/image-forge";
+    41→import { countLines } from "@/lib/senku/format";
+    42→import type { EffortLevel } from "@/lib/senku/types";
+    43→import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+    44→
+    45→const WAVE_BARS = 26;
+    46→const ATTACHMENT_CAP = 5;
+    47→
+    48→/** Run 17 — plain-text pastes longer than this many lines (LF/CRLF
+    49→ *  consistent) become a removable attachment pill instead of
+    50→ *  flooding the textarea. Exactly 60 lines stays inline. */
+    51→const PASTE_SNIPPET_LINES = 60;
+    52→
+    53→/** The slash commands offered in the / popover. /search reflects the
+    54→ *  REAL search capability (grounded pipeline with cited sources) and
+    55→ *  shows its live on/off state — nothing here implies a capability
+    56→ *  the gateway doesn't have. */
+    57→const SLASH_COMMANDS = [
+    58→  {
+    59→    cmd: "code",
+    60→    icon: Code2,
+    61→    desc: "Code-focused answer, no chatter — next message",
+    62→  },
+    63→  {
+    64→    cmd: "concise",
+    65→    icon: FoldVertical,
+    66→    desc: "Ultra-brief answer — next message",
+    67→  },
+    68→  {
+    69→    cmd: "search",
+    70→    icon: Globe,
+    71→    desc: "Web search with cited sources",
+    72→  },
+    73→  {
+    74→    cmd: "image",
+    75→    icon: ImageIcon,
+    76→    desc: "Forge an image from your next message",
+    77→  },
+    78→] as const;
+    79→type SlashCommand = (typeof SLASH_COMMANDS)[number];
+    80→
+    81→/** The /-token under the caret, if any. The "/" must sit at the very
+    82→ *  start of the input or right after whitespace — typing "/" mid-word
+    83→ *  ("a/b") or inside a URL ("https://x") never triggers the popover. */
+    84→function activeSlashToken(
+    85→  value: string,
+    86→  caret: number
+    87→): { query: string; start: number } | null {
+    88→  const upto = value.slice(0, caret);
+    89→  const m = /(^|\s)\/([\w-]{0,20})$/.exec(upto);
+    90→  if (!m) return null;
+    91→  return { query: m[2].toLowerCase(), start: caret - m[2].length - 1 };
+    92→}
+    93→
+    94→function formatChars(n: number): string {
+    95→  if (n >= 1000) return `${(n / 1000).toFixed(1)}k chars`;
+    96→  return `${n} chars`;
+    97→}
+    98→
+    99→function kindIcon(p: PendingAttachment) {
+   100→  return p.kindGuess === "image";
+   101→}
+   102→
+   103→/** One staged file: icon + name + live extraction status. The chip
+   104→ *  tells the user exactly what the model will receive — chars read,
+   105→ *  vision pass, truncation — or why the file can't be sent. */
+   106→function AttachmentChip({
+   107→  p,
+   108→  onRemove,
+   109→  disabled,
+   110→}: {
+   111→  p: PendingAttachment;
+   112→  onRemove: () => void;
+   113→  disabled: boolean;
+   114→}) {
+   115→  const isImage = kindIcon(p);
+   116→  return (
+   117→    <div
+   118→      className={`flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left ${
+   119→        p.status === "error"
+   120→          ? "border-red-500/30 bg-red-500/5"
+   121→          : "border-zinc-700/70 bg-[#1d1d20]"
+   122→      }`}
+   123→      aria-label={
+   124→        p.status === "ready"
+   125→          ? `Attachment ${p.name}, read by the gateway`
+   126→          : `Attachment ${p.name}`
+   127→      }
+   128→    >
+   129→      {isImage ? (
+   130→        <FileImage
+   131→          className={`h-4 w-4 shrink-0 ${
+   132→            p.status === "error" ? "text-red-400/80" : "text-zinc-400"
+   133→          }`}
+   134→          aria-hidden
+   135→        />
+   136→      ) : (
+   137→        <FileText
+   138→          className={`h-4 w-4 shrink-0 ${
+   139→            p.status === "error" ? "text-red-400/80" : "text-zinc-400"
+   140→          }`}
+   141→          aria-hidden
+   142→        />
+   143→      )}
+   144→      <span className="min-w-0 flex-1">
+   145→        <span className="block truncate text-[12.5px] font-medium text-zinc-200">
+   146→          {p.name}
+   147→        </span>
+   148→        {p.status === "extracting" && (
+   149→          <span className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+   150→            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+   151→            reading…
+   152→          </span>
+   153→        )}
+   154→        {p.status === "ready" && p.record && (
+   155→          <span
+   156→            className="flex items-center gap-1 text-[11px] text-emerald-300/80"
+   157→            title={
+   158→              p.record.truncated
+   159→                ? `Sent to the model: first ${formatChars(p.record.chars)} of ${p.record.totalChars} — the rest was cut to fit`
+   160→                : p.record.kind === "image"
+   161→                  ? `Sent to the model: ${p.record.chars} characters from a vision pass (OCR + description)`
+   162→                  : p.name.startsWith("Pasted snippet")
+   163→                    ? `Sent to the model: the pasted snippet, ${p.record.chars} characters`
+   164→                    : `Sent to the model: ${p.record.chars} characters read from the file`
+   165→            }
+   166→          >
+   167→            {p.record.kind === "image" ? (
+   168→              <Eye className="h-3 w-3 shrink-0" aria-hidden />
+   169→            ) : (
+   170→              <Check className="h-3 w-3 shrink-0" aria-hidden />
+   171→            )}
+   172→            {p.record.kind === "image" ? "vision pass · " : "read · "}
+   173→            {formatChars(p.record.chars)}
+   174→            {p.record.truncated ? " (truncated)" : ""}
+   175→          </span>
+   176→        )}
+   177→        {p.status === "error" && (
+   178→          <span className="flex items-start gap-1 text-[11px] leading-snug text-red-300/80">
+   179→            <TriangleAlert className="mt-px h-3 w-3 shrink-0" aria-hidden />
+   180→            {p.error} — not sent
+   181→          </span>
+   182→        )}
+   183→      </span>
+   184→      <button
+   185→        onClick={onRemove}
+   186→        disabled={disabled}
+   187→        aria-label={`Remove ${p.name}`}
+   188→        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-40"
+   189→      >
+   190→        <X className="h-3.5 w-3.5" />
+   191→      </button>
+   192→    </div>
+   193→  );
+   194→}
+   195→
+   196→// ── Effort dial ──────────────────────────────────────────────
+   197→// How hard the gateway works on one turn. On single-brand chats a
+   198→// fast/quality toggle flips one backend's switch; here each level
+   199→// can route to a different ENGINE from the pool.
+   200→const EFFORTS: {
+   201→  level: EffortLevel;
+   202→  label: string;
+   203→  desc: string;
+   204→  icon: typeof Zap;
+   205→  pill: string;
+   206→}[] = [
+   207→  {
+   208→    level: "fast",
+   209→    label: "Fast",
+   210→    desc: "Fastest engine in the pool · brief, direct answers",
+   211→    icon: Zap,
+   212→    pill: "border-yellow-300/60 bg-yellow-300/10 text-yellow-200",
+   213→  },
+   214→  {
+   215→    level: "medium",
+   216→    label: "Medium",
+   217→    desc: "Your selected model · balanced (default)",
+   218→    icon: Sparkles,
+   219→    pill: "",
+   220→  },
+   221→  {
+   222→    level: "deep",
+   223→    label: "Deep",
+   224→    desc: "Strongest engine · thinking · deep research with Search",
+   225→    icon: Brain,
+   226→    pill: "border-emerald-300/60 bg-emerald-300/10 text-emerald-200",
+   227→  },
+   228→];
+   229→
+   230→function formatElapsed(ms: number): string {
+   231→  const total = Math.floor(ms / 1000);
+   232→  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+   233→}
+   234→
+   235→export function InputBar() {
+   236→  const {
+   237→    searchEnabled,
+   238→    toggleSearch,
+   239→    temporary,
+   240→    model,
+   241→    models,
+   242→    setModel,
+   243→    syncModels,
+   244→    streaming,
+   245→    sendMessage,
+   246→    sendImage,
+   247→    stopStreaming,
+   248→    limiter,
+   249→    duelEnabled,
+   250→    toggleDuel,
+   251→    challenger,
+   252→    setChallenger,
+   253→    effort,
+   254→    setEffort,
+   255→    imageMode,
+   256→    toggleImageMode,
+   257→    imageSize,
+   258→    setImageSize,
+   259→    pendingAttachments,
+   260→    addAttachments,
+   261→    removePendingAttachment,
+   262→    turnStyle,
+   263→    setTurnStyle,
+   264→    stagePastedSnippet,
+   265→  } = useSenku();
+   266→  const { toast } = useToast();
+   267→
+   268→  const [value, setValue] = useState("");
+   269→  const [attachOpen, setAttachOpen] = useState(false);
+   270→  const [modelOpen, setModelOpen] = useState(false);
+   271→  const [challengerOpen, setChallengerOpen] = useState(false);
+   272→  const [effortOpen, setEffortOpen] = useState(false);
+   273→  const [imageSizeOpen, setImageSizeOpen] = useState(false);
+   274→  const [syncing, setSyncing] = useState(false);
+   275→  const [transcribing, setTranscribing] = useState(false);
+   276→  // Run 17 — slash popover: caret position drives the active /-token,
+   277→  // slashIndex is the highlighted option, and a dismissed token stays
+   278→  // dismissed (Escape) until the token itself changes.
+   279→  const [caret, setCaret] = useState(0);
+   280→  const [slashIndex, setSlashIndex] = useState(0);
+   281→  const [slashDismissedKey, setSlashDismissedKey] = useState<string | null>(null);
+   282→  const textareaRef = useRef<HTMLTextAreaElement>(null);
+   283→  const fileRef = useRef<HTMLInputElement>(null);
+   284→  const recorder = useVoiceRecorder();
+   285→  const waveBarsRef = useRef<(HTMLDivElement | null)[]>([]);
+   286→  const waveLevelsRef = useRef<number[]>(new Array(WAVE_BARS).fill(4));
+   287→
+   288→  const providerName = limiter?.providerName ?? "";
+   289→  const extractingAttachments = pendingAttachments.some(
+   290→    (p) => p.status === "extracting"
+   291→  );
+   292→  const canSend =
+   293→    value.trim().length > 0 && !streaming && !extractingAttachments;
+   294→  const isRecording = recorder.state === "recording";
+   295→  const isProcessing = recorder.state === "processing" || transcribing;
+   296→  // A duel needs a second model to race against.
+   297→  const duelAvailable = models.filter((m) => m !== model).length > 0;
+   298→
+   299→  // auto-grow textarea
+   300→  useEffect(() => {
+   301→    const el = textareaRef.current;
+   302→    if (!el) return;
+   303→    el.style.height = "0px";
+   304→    el.style.height = Math.min(el.scrollHeight, 208) + "px";
+   305→  }, [value]);
+   306→
+   307→  // surface recorder permission/device errors
+   308→  useEffect(() => {
+   309→    if (recorder.error) {
+   310→      toast({ description: recorder.error, variant: "destructive" });
+   311→    }
+   312→  }, [recorder.error, toast]);
+   313→
+   314→  // live waveform: push the smoothed mic level through a rolling window
+   315→  // and paint bar heights directly on the DOM (no re-render per frame)
+   316→  useEffect(() => {
+   317→    if (recorder.state !== "recording") return;
+   318→    let raf = 0;
+   319→    const loop = () => {
+   320→      const level = recorder.levelRef.current;
+   321→      const next = waveLevelsRef.current
+   322→        .slice(1)
+   323→        .concat(4 + level * level * 42 + Math.random() * 2);
+   324→      waveLevelsRef.current = next;
+   325→      for (let i = 0; i < WAVE_BARS; i++) {
+   326→        const el = waveBarsRef.current[i];
+   327→        if (el) el.style.height = `${Math.max(4, next[i]).toFixed(1)}px`;
+   328→      }
+   329→      raf = requestAnimationFrame(loop);
+   330→    };
+   331→    raf = requestAnimationFrame(loop);
+   332→    return () => cancelAnimationFrame(raf);
+   333→  }, [recorder.state, recorder.levelRef]);
+   334→
+   335→  const submit = () => {
+   336→    if (!canSend) return;
+   337→    const content = value.trim();
+   338→    setValue("");
+   339→    // Run 22 — Image mode routes the send to the forge pipeline.
+   340→    if (imageMode) {
+   341→      void sendImage(content);
+   342→    } else {
+   343→      void sendMessage(content);
+   344→    }
+   345→  };
+   346→
+   347→  // stop → transcribe (server ASR) → land the text in the input
+   348→  const finishDictation = async () => {
+   349→    recorder.stop();
+   350→    setTranscribing(true);
+   351→    try {
+   352→      const wav = await recorder.takeResult();
+   353→      if (!wav) {
+   354→        toast({ description: "Didn't catch that — try speaking a bit louder." });
+   355→        return;
+   356→      }
+   357→      const res = await fetch("/api/voice/transcribe", {
+   358→        method: "POST",
+   359→        headers: { "Content-Type": "application/json" },
+   360→        body: JSON.stringify({ audio: wav }),
+   361→      });
+   362→      const data = await res.json();
+   363→      if (!res.ok) throw new Error(data.error || "Transcription failed");
+   364→      const text = String(data.text ?? "").trim();
+   365→      if (!text) {
+   366→        toast({ description: "Didn't catch that — try speaking a bit louder." });
+   367→        return;
+   368→      }
+   369→      setValue((v) => (v ? `${v} ${text}` : text));
+   370→      requestAnimationFrame(() => {
+   371→        const el = textareaRef.current;
+   372→        if (el) {
+   373→          el.focus();
+   374→          el.setSelectionRange(el.value.length, el.value.length);
+   375→        }
+   376→      });
+   377→    } catch (e) {
+   378→      toast({
+   379→        description: (e as Error).message || "Transcription failed.",
+   380→        variant: "destructive",
+   381→      });
+   382→    } finally {
+   383→      setTranscribing(false);
+   384→    }
+   385→  };
+   386→
+   387→  const onMicClick = () => {
+   388→    if (recorder.state === "recording") {
+   389→      void finishDictation();
+   390→    } else if (recorder.state === "idle") {
+   391→      void recorder.start();
+   392→    }
+   393→  };
+   394→
+   395→  const onUpload = () => {
+   396→    setAttachOpen(false);
+   397→    fileRef.current?.click();
+   398→  };
+   399→
+   400→  const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+   401→    const files = Array.from(e.target.files ?? []);
+   402→    e.target.value = "";
+   403→    if (!files.length) return;
+   404→    const room = ATTACHMENT_CAP - pendingAttachments.length;
+   405→    if (room <= 0) {
+   406→      toast({
+   407→        description: `Up to ${ATTACHMENT_CAP} files per message.`,
+   408→        variant: "destructive",
+   409→      });
+   410→      return;
+   411→    }
+   412→    const accepted = files.slice(0, room);
+   413→    if (files.length > accepted.length) {
+   414→      toast({
+   415→        description: `Only ${accepted.length} of ${files.length} files added — up to ${ATTACHMENT_CAP} per message.`,
+   416→      });
+   417→    }
+   418→    void addAttachments(accepted).then(() => {
+   419→      /* per-file results are shown on the chips */
+   420→    });
+   421→  };
+   422→
+   423→  const activeMeta = modelMeta(model);
+   424→
+   425→  // ── Slash popover (Run 17) ──
+   426→  const slashToken = useMemo(
+   427→    () => activeSlashToken(value, caret),
+   428→    [value, caret]
+   429→  );
+   430→  const slashMatches = useMemo(() => {
+   431→    if (!slashToken) return [] as readonly SlashCommand[];
+   432→    return SLASH_COMMANDS.filter((c) => c.cmd.startsWith(slashToken.query));
+   433→  }, [slashToken]);
+   434→  const slashKey =
+   435→    slashToken != null ? `${slashToken.start}:${slashToken.query}` : null;
+   436→  const slashOpen =
+   437→    slashToken != null &&
+   438→    slashMatches.length > 0 &&
+   439→    slashDismissedKey !== slashKey;
+   440→  const slashActive =
+   441→    slashMatches.length > 0
+   442→      ? slashMatches[Math.min(slashIndex, slashMatches.length - 1)]
+   443→      : null;
+   444→
+   445→  const dismissSlash = () => {
+   446→    if (slashKey) setSlashDismissedKey(slashKey);
+   447→  };
+   448→
+   449→  /** Apply one slash command: strip the /token from the draft (it is
+   450→   *  NEVER sent as prompt text), then update the real mode state. */
+   451→  const applySlash = (c: SlashCommand) => {
+   452→    if (!slashToken) return;
+   453→    const before = value.slice(0, slashToken.start);
+   454→    const after = value.slice(caret);
+   455→    const next = (before + after).replace(/\s+$/, "");
+   456→    setValue(next);
+   457→    dismissSlash();
+   458→    if (c.cmd === "code") {
+   459→      setTurnStyle("code");
+   460→      toast({
+   461→        description: "Code mode — your next message gets a code-focused answer.",
+   462→      });
+   463→    } else if (c.cmd === "concise") {
+   464→      setTurnStyle("concise");
+   465→      toast({
+   466→        description: "Concise mode — your next message gets an ultra-brief answer.",
+   467→      });
+   468→    } else if (c.cmd === "search") {
+   469→      if (!searchEnabled) toggleSearch();
+   470→      toast({ description: "Web search on — answers will cite sources." });
+   471→    } else if (c.cmd === "image") {
+   472→      if (!imageMode) toggleImageMode();
+   473→      toast({
+   474→        description:
+   475→          "Image mode on — your next message becomes a generated image (30–90s).",
+   476→      });
+   477→    }
+   478→    requestAnimationFrame(() => {
+   479→      const el = textareaRef.current;
+   480→      if (el) {
+   481→        el.focus();
+   482→        const pos = next.length;
+   483→        el.setSelectionRange(pos, pos);
+   484→        setCaret(pos);
+   485→      }
+   486→    });
+   487→  };
+   488→
+   489→  /** >60-line plain-text pastes become a removable attachment pill —
+   490→   *  the exact text is preserved and only leaves with the next send.
+   491→   *  File pastes and short pastes keep the browser default. */
+   492→  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+   493→    const items = e.clipboardData?.items;
+   494→    if (items && Array.from(items).some((it) => it.kind === "file")) return;
+   495→    const text = e.clipboardData?.getData("text/plain") ?? "";
+   496→    if (!text) return;
+   497→    const lines = countLines(text);
+   498→    if (lines <= PASTE_SNIPPET_LINES) return; // exactly 60 stays inline
+   499→    e.preventDefault();
+   500→    const res = stagePastedSnippet(text);
+   501→    if (!res.ok) {
+   502→      toast({ description: res.error, variant: "destructive" });
+   503→      return;
+   504→    }
+   505→    toast({
+   506→      description: `Pasted snippet (${lines} lines) attached — it will be sent with your next message.`,
+   507→    });
+   508→  };
+   509→
+   510→  return (
+   511→    // senku-input-in — one gentle settle on load (Run 18): the bar
+   512→    // already sits in its final position from the first paint (the
+   513→    // view slot above is always rendered), so this is a purely
+   514→    // cosmetic 8px rise + fade, never a position jump.
+   515→    <div className="senku-input-in relative mx-auto w-full max-w-3xl shrink-0 px-4">
+   516→      <input
+   517→        ref={fileRef}
+   518→        type="file"
+   519→        multiple
+   520→        hidden
+   521→        onChange={onFilePicked}
+   522→        aria-hidden
+   523→      />
+   524→
+   525→      {/* Run 17 — armed one-shot style pill (/code, /concise).
+   526→          Removable; consumed by the next send. */}
+   527→      {turnStyle && (
+   528→        <div className="mb-2 flex items-center gap-2 pl-1.5">
+   529→          <div
+   530→            className="flex items-center gap-1.5 rounded-full border border-amber-300/40 bg-amber-300/10 py-1 pl-2.5 pr-1 text-[12px] text-amber-200"
+   531→            aria-live="polite"
+   532→          >
+   533→            {turnStyle === "code" ? (
+   534→              <Code2 className="h-3.5 w-3.5" aria-hidden />
+   535→            ) : (
+   536→              <FoldVertical className="h-3.5 w-3.5" aria-hidden />
+   537→            )}
+   538→            {turnStyle === "code" ? "Code mode" : "Concise mode"}
+   539→            <span className="text-amber-200/55">· next message</span>
+   540→            <button
+   541→              type="button"
+   542→              onClick={() => setTurnStyle(null)}
+   543→              aria-label={`Disable ${turnStyle} mode`}
+   544→              className="flex h-5 w-5 items-center justify-center rounded-full text-amber-200/70 transition-colors hover:bg-white/10 hover:text-amber-100"
+   545→            >
+   546→              <X className="h-3 w-3" />
+   547→            </button>
+   548→          </div>
+   549→        </div>
+   550→      )}
+   551→
+   552→      <div className="relative rounded-[26px] border border-zinc-700/70 bg-[#262627] shadow-[0_8px_32px_rgba(0,0,0,0.45)] transition-colors focus-within:border-zinc-500">
+   553→        {/* Slash-command popover (Run 17) — anchored above the text
+   554→            area while a /-token is under the caret. */}
+   555→        {slashOpen && slashActive && (
+   556→          <div
+   557→            id="senku-slash-menu"
+   558→            role="listbox"
+   559→            aria-label="Slash commands"
+   560→            className="absolute bottom-full left-2 z-20 mb-2 w-72 overflow-hidden rounded-xl border border-zinc-700/70 bg-[#212121] p-1 shadow-2xl"
+   561→          >
+   562→            {slashMatches.map((c, i) => {
+   563→              const active = c.cmd === slashActive.cmd;
+   564→              const Icon = c.icon;
+   565→              return (
+   566→                <button
+   567→                  key={c.cmd}
+   568→                  id={`senku-slash-opt-${c.cmd}`}
+   569→                  type="button"
+   570→                  role="option"
+   571→                  aria-selected={active}
+   572→                  onMouseDown={(e) => {
+   573→                    e.preventDefault(); // keep the textarea focused
+   574→                    applySlash(c);
+   575→                  }}
+   576→                  onMouseEnter={() => setSlashIndex(i)}
+   577→                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+   578→                    active ? "bg-white/5" : ""
+   579→                  }`}
+   580→                >
+   581→                  <Icon className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden />
+   582→                  <span className="min-w-0 flex-1">
+   583→                    <span className="block text-[13px] font-medium text-zinc-100">
+   584→                      /{c.cmd}
+   585→                    </span>
+   586→                    <span className="block truncate text-[11px] text-zinc-500">
+   587→                      {c.desc}
+   588→                    </span>
+   589→                  </span>
+   590→                  {c.cmd === "search" && (
+   591→                    <span
+   592→                      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   593→                        searchEnabled
+   594→                          ? "bg-emerald-400/15 text-emerald-300"
+   595→                          : "bg-zinc-700/60 text-zinc-400"
+   596→                      }`}
+   597→                    >
+   598→                      {searchEnabled ? "On" : "Off"}
+   599→                    </span>
+   600→                  )}
+   601→                  {c.cmd === "image" && (
+   602→                    <span
+   603→                      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   604→                        imageMode
+   605→                          ? "bg-amber-300/15 text-amber-200"
+   606→                          : "bg-zinc-700/60 text-zinc-400"
+   607→                      }`}
+   608→                    >
+   609→                      {imageMode ? "On" : "Off"}
+   610→                    </span>
+   611→                  )}
+   612→                </button>
+   613→              );
+   614→            })}
+   615→            <p className="px-2.5 pb-1 pt-1.5 text-[10px] text-zinc-600">
+   616→              ↑↓ navigate · Enter apply · Esc dismiss
+   617→            </p>
+   618→          </div>
+   619→        )}
+   620→        {isRecording ? (
+   621→          /* live waveform strip replaces the textarea while dictating */
+   622→          <div className="senku-rec-in flex h-[52px] items-center gap-3 px-4" aria-live="polite">
+   623→            <span className="flex shrink-0 items-center gap-2 tabular-nums text-[13px] text-red-400">
+   624→              <span className="senku-rec-dot inline-block h-2 w-2 rounded-full bg-red-400" />
+   625→              {formatElapsed(recorder.elapsedMs)}
+   626→            </span>
+   627→            <div className="flex h-10 min-w-0 flex-1 items-center justify-center gap-[3px]" aria-hidden>
+   628→              {Array.from({ length: WAVE_BARS }).map((_, i) => (
+   629→                <div
+   630→                  key={i}
+   631→                  ref={(el) => {
+   632→                    waveBarsRef.current[i] = el;
+   633→                  }}
+   634→                  className="senku-wave-bar"
+   635→                  style={{ height: 4 }}
+   636→                />
+   637→              ))}
+   638→            </div>
+   639→            <span className="hidden shrink-0 text-[11px] text-zinc-500 sm:block">
+   640→              tap ◼ to stop
+   641→            </span>
+   642→          </div>
+   643→        ) : isProcessing ? (
+   644→          <div className="flex h-[52px] items-center px-4" aria-live="polite">
+   645→            <span className="senku-thinking-label text-[14px] font-medium">
+   646→              Transcribing…
+   647→            </span>
+   648→          </div>
+   649→        ) : (
+   650→          <textarea
+   651→            ref={textareaRef}
+   652→            value={value}
+   653→            onChange={(e) => {
+   654→              setValue(e.target.value);
+   655→              setCaret(e.target.selectionStart ?? 0);
+   656→            }}
+   657→            onSelect={(e) =>
+   658→              setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)
+   659→            }
+   660→            onPaste={onPaste}
+   661→            onKeyDown={(e) => {
+   662→              // IME composition (CJK input…): the Enter that confirms
+   663→              // a composition must never submit or drive the popover.
+   664→              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+   665→
+   666→              if (slashOpen) {
+   667→                if (e.key === "ArrowDown") {
+   668→                  e.preventDefault();
+   669→                  setSlashIndex(
+   670→                    (i) => (i + 1) % Math.max(slashMatches.length, 1)
+   671→                  );
+   672→                  return;
+   673→                }
+   674→                if (e.key === "ArrowUp") {
+   675→                  e.preventDefault();
+   676→                  setSlashIndex(
+   677→                    (i) =>
+   678→                      (i - 1 + Math.max(slashMatches.length, 1)) %
+   679→                      Math.max(slashMatches.length, 1)
+   680→                  );
+   681→                  return;
+   682→                }
+   683→                if (e.key === "Enter" || e.key === "Tab") {
+   684→                  e.preventDefault();
+   685→                  if (slashActive) applySlash(slashActive);
+   686→                  return;
+   687→                }
+   688→                if (e.key === "Escape") {
+   689→                  e.preventDefault();
+   690→                  e.stopPropagation();
+   691→                  dismissSlash();
+   692→                  return;
+   693→                }
+   694→              }
+   695→              if (e.key === "Enter" && !e.shiftKey) {
+   696→                e.preventDefault();
+   697→                submit();
+   698→              }
+   699→            }}
+   700→            rows={1}
+   701→            placeholder={
+   702→              imageMode
+   703→                ? "Describe the image to forge… (/ for commands)"
+   704→                : "Message SenkuAPI... (/ for commands)"
+   705→            }
+   706→            aria-label="Message SenkuAPI"
+   707→            aria-controls={slashOpen ? "senku-slash-menu" : undefined}
+   708→            aria-activedescendant={
+   709→              slashOpen && slashActive
+   710→                ? `senku-slash-opt-${slashActive.cmd}`
+   711→                : undefined
+   712→            }
+   713→            aria-autocomplete="list"
+   714→            className="senku-scroll max-h-52 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-500"
+   715→          />
+   716→        )}
+   717→
+   718→        {/* staged attachments — one chip per file, live extraction
+   719→            status: what the gateway read is what the model gets */}
+   720→        {pendingAttachments.length > 0 && (
+   721→          <div className="senku-scroll max-h-44 space-y-1.5 overflow-y-auto px-3 pt-2">
+   722→            {pendingAttachments.map((p) => (
+   723→              <AttachmentChip
+   724→                key={p.id}
+   725→                p={p}
+   726→                disabled={streaming}
+   727→                onRemove={() => removePendingAttachment(p.id)}
+   728→              />
+   729→            ))}
+   730→          </div>
+   731→        )}
+   732→
+   733→        {/* Run 25 — the Mobile Deck. On phones this row splits into
+   734→            two intentional rows: the tool dock (icon-only, fully
+   735→            visible — nothing hides in an off-screen scroll strip)
+   736→            above the model · mic · send row. ≥640px: the original
+   737→            single row, byte-identical. */}
+   738→        <div className="flex flex-col items-stretch gap-1.5 px-2.5 pb-2.5 pt-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+   739→          {/* left controls — a full-width dock on phones (icon-only
+   740→              chips, evenly spread); a horizontally scrollable strip
+   741→              ≥640px so Search + Duel + challenger never wrap */}
+   742→          <div className="senku-scroll flex w-full min-w-0 items-center justify-between gap-1 overflow-x-auto sm:w-auto sm:justify-start sm:gap-1.5">
+   743→            <Popover open={attachOpen} onOpenChange={setAttachOpen}>
+   744→              <PopoverTrigger asChild>
+   745→                <button
+   746→                  aria-label="Add attachments"
+   747→                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+   748→                >
+   749→                  <Plus className="h-[18px] w-[18px]" />
+   750→                </button>
+   751→              </PopoverTrigger>
+   752→              <PopoverContent
+   753→                side="top"
+   754→                align="start"
+   755→                className="w-64 rounded-xl border-zinc-800 bg-[#262627] p-1.5 text-zinc-200 shadow-2xl"
+   756→              >
+   757→                <button
+   758→                  onClick={onUpload}
+   759→                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   760→                >
+   761→                  <Paperclip className="h-4 w-4 text-zinc-400" />
+   762→                  <span className="flex min-w-0 flex-col">
+   763→                    <span>Upload from computer</span>
+   764→                    <span className="truncate text-[10.5px] text-zinc-500">
+   765→                      Text · code · PDF · image — read before sending
+   766→                    </span>
+   767→                  </span>
+   768→                </button>
+   769→                <button
+   770→                  onClick={() => {
+   771→                    toggleSearch();
+   772→                    setAttachOpen(false);
+   773→                  }}
+   774→                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   775→                >
+   776→                  <Globe className="h-4 w-4 text-zinc-400" />
+   777→                  Search the web
+   778→                  <span
+   779→                    className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   780→                      searchEnabled
+   781→                        ? "bg-emerald-400/15 text-emerald-300"
+   782→                        : "bg-zinc-700/60 text-zinc-400"
+   783→                    }`}
+   784→                  >
+   785→                    {searchEnabled ? "On" : "Off"}
+   786→                  </span>
+   787→                </button>
+   788→                <button
+   789→                  onClick={() => {
+   790→                    if (!imageMode) {
+   791→                      toast({
+   792→                        description:
+   793→                          "Image mode — your next message becomes a generated image (30–90s).",
+   794→                      });
+   795→                    }
+   796→                    toggleImageMode();
+   797→                    setAttachOpen(false);
+   798→                  }}
+   799→                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   800→                >
+   801→                  <ImageIcon className="h-4 w-4 text-zinc-400" />
+   802→                  Generate an image
+   803→                  <span
+   804→                    className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   805→                      imageMode
+   806→                        ? "bg-amber-300/15 text-amber-200"
+   807→                        : "bg-zinc-700/60 text-zinc-400"
+   808→                    }`}
+   809→                  >
+   810→                    {imageMode ? "On" : "Off"}
+   811→                  </span>
+   812→                </button>
+   813→                {duelAvailable && (
+   814→                  <button
+   815→                    onClick={() => {
+   816→                      if (!duelEnabled) {
+   817→                        toast({
+   818→                          description:
+   819→                            "Duel armed — next message races two models; you pick the keeper.",
+   820→                        });
+   821→                      }
+   822→                      toggleDuel();
+   823→                      setAttachOpen(false);
+   824→                    }}
+   825→                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+   826→                  >
+   827→                    <Swords className="h-4 w-4 text-zinc-400" />
+   828→                    Duel two models
+   829→                    <span
+   830→                      className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+   831→                        duelEnabled
+   832→                          ? "bg-emerald-400/15 text-emerald-300"
+   833→                          : "bg-zinc-700/60 text-zinc-400"
+   834→                      }`}
+   835→                    >
+   836→                      {duelEnabled ? "On" : "Off"}
+   837→                    </span>
+   838→                  </button>
+   839→                )}
+   840→              </PopoverContent>
+   841→            </Popover>
+   842→
+   843→            <button
+   844→              onClick={toggleSearch}
+   845→              aria-pressed={searchEnabled}
+   846→              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
+   847→                searchEnabled
+   848→                  ? "border-zinc-400 bg-white/10 text-white"
+   849→                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+   850→              }`}
+   851→              title="Toggle web search — grounded answers with cited sources (max 3 snippets, 300 chars each)"
+   852→            >
+   853→              <Globe className="h-3.5 w-3.5" />
+   854→              <span className="hidden sm:inline">Search</span>
+   855→            </button>
+   856→
+   857→            {/* Run 22 — Image Forge toggle. Arms the forge pipeline for
+   858→                the next send; Search and Duel disarm automatically
+   859→                (different pipelines, never ambiguous). */}
+   860→            <button
+   861→              onClick={() => {
+   862→                if (!imageMode) {
+   863→                  toast({
+   864→                    description:
+   865→                      "Image mode — your next message becomes a generated image (30–90s).",
+   866→                  });
+   867→                }
+   868→                toggleImageMode();
+   869→              }}
+   870→              aria-pressed={imageMode}
+   871→              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
+   872→                imageMode
+   873→                  ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
+   874→                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+   875→              }`}
+   876→              title="Image Forge — turn your next message into a generated image (runs on the Z.ai image engine, never spends pool tokens)"
+   877→            >
+   878→              <ImageIcon className="h-3.5 w-3.5" />
+   879→              <span className="hidden sm:inline">Image</span>
+   880→            </button>
+   881→
+   882→            {/* Forge dimensions — shown while Image mode is armed */}
+   883→            {imageMode && (
+   884→              <Popover open={imageSizeOpen} onOpenChange={setImageSizeOpen}>
+   885→                <PopoverTrigger asChild>
+   886→                  <button
+   887→                    aria-label="Pick image dimensions"
+   888→                    title={`Dimensions — currently ${IMAGE_SIZES[imageSize].label} (${IMAGE_SIZES[imageSize].dims})`}
+   889→                    className="flex h-8 max-w-[110px] shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[150px]"
+   890→                  >
+   891→                    <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
+   892→                      at
+   893→                    </span>
+   894→                    <span className="truncate font-medium">
+   895→                      {IMAGE_SIZES[imageSize].label}
+   896→                    </span>
+   897→                    <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+   898→                  </button>
+   899→                </PopoverTrigger>
+   900→                <PopoverContent
+   901→                  side="top"
+   902→                  align="start"
+   903→                  className="w-64 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+   904→                >
+   905→                  <div className="border-b border-zinc-800 px-3.5 py-2.5">
+   906→                    <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+   907→                      IMAGE DIMENSIONS
+   908→                    </span>
+   909→                  </div>
+   910→                  <div className="py-1">
+   911→                    {IMAGE_SIZE_KEYS.map((k) => {
+   912→                      const s = IMAGE_SIZES[k];
+   913→                      const active = k === imageSize;
+   914→                      return (
+   915→                        <button
+   916→                          key={k}
+   917→                          onClick={() => {
+   918→                            setImageSize(k);
+   919→                            setImageSizeOpen(false);
+   920→                          }}
+   921→                          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-white/5 ${
+   922→                            active ? "text-white" : "text-zinc-300"
+   923→                          }`}
+   924→                        >
+   925→                          <span className="min-w-0 flex-1">
+   926→                            <span className="block text-[13px] font-medium">
+   927→                              {s.label}
+   928→                            </span>
+   929→                            <span className="block truncate text-[11px] text-zinc-500">
+   930→                              {s.dims} · {s.hint}
+   931→                            </span>
+   932→                          </span>
+   933→                          {active && (
+   934→                            <Check className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+   935→                          )}
+   936→                        </button>
+   937→                      );
+   938→                    })}
+   939→                  </div>
+   940→                </PopoverContent>
+   941→              </Popover>
+   942→            )}
+   943→
+   944→            {/* Effort dial — fast / medium / deep. Each level can
+   945→                route to a different pooled engine; the popover shows
+   946→                exactly which engine serves each level. */}
+   947→            <Popover open={effortOpen} onOpenChange={setEffortOpen}>
+   948→              <PopoverTrigger asChild>
+   949→                <button
+   950→                  aria-label={`Effort level: ${effort}. Change how hard the gateway works`}
+   951→                  aria-expanded={effortOpen}
+   952→                  className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
+   953→                    effort === "medium"
+   954→                      ? "border-zinc-600 text-zinc-300 hover:bg-white/5"
+   955→                      : EFFORTS.find((e) => e.level === effort)?.pill ?? ""
+   956→                  }`}
+   957→                  title="Effort — Fast: fastest engine, brief · Medium: your model · Deep: strongest engine, thinking + deep research"
+   958→                >
+   959→                  {(() => {
+   960→                    const E = EFFORTS.find((e) => e.level === effort) ?? EFFORTS[1];
+   961→                    return <E.icon className="h-3.5 w-3.5" />;
+   962→                  })()}
+   963→                  <span className="hidden sm:inline">
+   964→                    {EFFORTS.find((e) => e.level === effort)?.label ?? "Medium"}
+   965→                  </span>
+   966→                  <ChevronDown className="hidden h-3 w-3 shrink-0 text-zinc-500 sm:block" />
+   967→                </button>
+   968→              </PopoverTrigger>
+   969→              <PopoverContent
+   970→                side="top"
+   971→                align="start"
+   972→                className="w-80 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+   973→              >
+   974→                <div className="border-b border-zinc-800 px-3.5 py-2.5">
+   975→                  <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+   976→                    EFFORT — HOW HARD THIS TURN WORKS
+   977→                  </span>
+   978→                </div>
+   979→                <div className="py-1">
+   980→                  {EFFORTS.map(({ level, label, desc, icon: Icon }) => {
+   981→                    const routed = effortModel(models, model, level);
+   982→                    const routedMeta = modelMeta(routed);
+   983→                    return (
+   984→                      <button
+   985→                        key={level}
+   986→                        onClick={() => {
+   987→                          setEffort(level);
+   988→                          setEffortOpen(false);
+   989→                        }}
+   990→                        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-white/5 ${
+   991→                          level === effort ? "text-white" : "text-zinc-300"
+   992→                        }`}
+   993→                      >
+   994→                        <Icon
+   995→                          className={`h-4 w-4 shrink-0 ${
+   996→                            level === effort
+   997→                              ? level === "fast"
+   998→                                ? "text-yellow-300"
+   999→                                : level === "deep"
+  1000→                                  ? "text-emerald-300"
+  1001→                                  : "text-zinc-200"
+  1002→                              : "text-zinc-500"
+  1003→                          }`}
+  1004→                        />
+  1005→                        <span className="min-w-0 flex-1">
+  1006→                          <span className="block text-[13px] font-medium">{label}</span>
+  1007→                          <span className="block truncate text-[11px] text-zinc-500">
+  1008→                            {desc}
+  1009→                          </span>
+  1010→                        </span>
+  1011→                        <span
+  1012→                          className="max-w-[96px] shrink-0 truncate text-[11px] text-zinc-400"
+  1013→                          title={routed}
+  1014→                        >
+  1015→                          {routed === model ? routedMeta.name : `→ ${routedMeta.name}`}
+  1016→                        </span>
+  1017→                        {level === effort && (
+  1018→                          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+  1019→                        )}
+  1020→                      </button>
+  1021→                    );
+  1022→                  })}
+  1023→                </div>
+  1024→                <p className="border-t border-zinc-800 px-3.5 py-2 text-[10.5px] leading-relaxed text-zinc-600">
+  1025→                  Deep turns run multi-round audited search when Search is on —
+  1026→                  plan → retrieve → cross-check — and always show their sources.
+  1027→                </p>
+  1028→              </PopoverContent>
+  1029→            </Popover>
+  1030→
+  1031→            {/* Duel — race two models on one question, keep the winner.
+  1032→                Only a pooled gateway can offer this in-chat. */}
+  1033→            <button
+  1034→              onClick={() => {
+  1035→                if (!duelEnabled && duelAvailable) {
+  1036→                  toast({
+  1037→                    description:
+  1038→                      "Duel armed — next message races two models; you pick the keeper.",
+  1039→                  });
+  1040→                }
+  1041→                toggleDuel();
+  1042→              }}
+  1043→              disabled={!duelAvailable}
+  1044→              aria-pressed={duelEnabled}
+  1045→              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-auto sm:px-2.5 ${
+  1046→                duelEnabled
+  1047→                  ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
+  1048→                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+  1049→              }`}
+  1050→              title={duelAvailable ? "Duel — send to two models at once, keep the better answer (bills both)" : "Add a second model to the active provider to duel"}
+  1051→            >
+  1052→              <Swords className="h-3.5 w-3.5" />
+  1053→              <span className="hidden sm:inline">Duel</span>
+  1054→            </button>
+  1055→
+  1056→            {/* Challenger picker — shown while duel is armed */}
+  1057→            {duelEnabled && challenger && (
+  1058→              <Popover open={challengerOpen} onOpenChange={setChallengerOpen}>
+  1059→                <PopoverTrigger asChild>
+  1060→                  <button
+  1061→                    aria-label="Pick the dueling challenger model"
+  1062→                    title={`Challenger — currently ${modelMeta(challenger).name}`}
+  1063→                    className="flex h-8 max-w-[92px] shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[170px]"
+  1064→                  >
+  1065→                    <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
+  1066→                      vs
+  1067→                    </span>
+  1068→                    <span className="truncate font-medium">
+  1069→                      {modelMeta(challenger).name}
+  1070→                    </span>
+  1071→                    <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+  1072→                  </button>
+  1073→                </PopoverTrigger>
+  1074→                <PopoverContent
+  1075→                  side="top"
+  1076→                  align="start"
+  1077→                  className="w-60 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+  1078→                >
+  1079→                  <div className="border-b border-zinc-800 px-3.5 py-2.5">
+  1080→                    <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+  1081→                      CHALLENGER MODEL
+  1082→                    </span>
+  1083→                  </div>
+  1084→                  <div className="senku-scroll max-h-72 overflow-y-auto py-1">
+  1085→                    {models
+  1086→                      .filter((m) => m !== model)
+  1087→                      .map((m) => {
+  1088→                        const meta = modelMeta(m);
+  1089→                        const glyph = modelGlyph(m);
+  1090→                        return (
+  1091→                          <button
+  1092→                            key={m}
+  1093→                            onClick={() => {
+  1094→                              setChallenger(m);
+  1095→                              setChallengerOpen(false);
+  1096→                            }}
+  1097→                            title={m}
+  1098→                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+  1099→                              m === challenger ? "text-white" : "text-zinc-300"
+  1100→                            }`}
+  1101→                          >
+  1102→                            <span
+  1103→                              aria-hidden
+  1104→                              className={`flex h-[22px] w-[30px] shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide ${glyph.cls}`}
+  1105→                            >
+  1106→                              {glyph.tag}
+  1107→                            </span>
+  1108→                            <span className="min-w-0 flex-1 truncate font-medium">
+  1109→                              {meta.name}
+  1110→                            </span>
+  1111→                            {m === challenger ? (
+  1112→                              <Check className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+  1113→                            ) : (
+  1114→                              modelHint(meta) && (
+  1115→                                <span className="shrink-0 text-[11px] text-zinc-500">
+  1116→                                  {modelHint(meta)}
+  1117→                                </span>
+  1118→                              )
+  1119→                            )}
+  1120→                          </button>
+  1121→                        );
+  1122→                      })}
+  1123→                  </div>
+  1124→                </PopoverContent>
+  1125→              </Popover>
+  1126→            )}
+  1127→          </div>
+  1128→
+  1129→          {/* right controls — on phones this is its own row under the
+  1130→              dock: model chip left, mic + send in the thumb zone */}
+  1131→          <div className="flex w-full shrink-0 items-center justify-between gap-1.5 sm:w-auto sm:justify-end">
+  1132→            {/* model selector — pretty name + tier badge + caret */}
+  1133→            <Popover open={modelOpen} onOpenChange={setModelOpen}>
+  1134→              <PopoverTrigger asChild>
+  1135→                <button
+  1136→                  aria-label="Select model"
+  1137→                  title={model}
+  1138→                  className="flex h-8 max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-600 px-2.5 text-[13px] text-zinc-200 transition-colors hover:bg-white/5"
+  1139→                >
+  1140→                  <span className="truncate font-medium">{activeMeta.name}</span>
+  1141→                  {activeMeta.tier && (
+  1142→                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400">
+  1143→                      {activeMeta.tier}
+  1144→                    </span>
+  1145→                  )}
+  1146→                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+  1147→                </button>
+  1148→              </PopoverTrigger>
+  1149→              <PopoverContent
+  1150→                side="top"
+  1151→                align="end"
+  1152→                className="w-[300px] max-w-[calc(100vw-24px)] rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+  1153→              >
+  1154→                <div className="flex items-center justify-between border-b border-zinc-800 px-3.5 py-2.5">
+  1155→                  <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+  1156→                    SELECT MODEL
+  1157→                  </span>
+  1158→                  <div className="flex items-center gap-2">
+  1159→                    {models.length > 0 && (
+  1160→                      <span
+  1161→                        title={`${models.length} models live on ${providerName ?? "the active provider"}`}
+  1162→                        className="rounded-full border border-zinc-700 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400"
+  1163→                      >
+  1164→                        {models.length} live
+  1165→                      </span>
+  1166→                    )}
+  1167→                  <button
+  1168→                    onClick={async () => {
+  1169→                      setSyncing(true);
+  1170→                      const synced = await syncModels();
+  1171→                      setSyncing(false);
+  1172→                      toast({
+  1173→                        description: synced
+  1174→                          ? "Model list synced from provider."
+  1175→                          : "Provider sync unavailable — using cached list.",
+  1176→                      });
+  1177→                    }}
+  1178→                    className="flex items-center gap-1 text-[12px] text-zinc-300 hover:text-white"
+  1179→                  >
+  1180→                    <RefreshCw
+  1181→                      className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`}
+  1182→                    />
+  1183→                    Sync
+  1184→                  </button>
+  1185→                  </div>
+  1186→                </div>
+  1187→                <div className="senku-scroll max-h-80 overflow-y-auto py-1">
+  1188→                  {models.length === 0 && (
+  1189→                    <p className="px-3.5 py-2 text-[13px] text-zinc-500">
+  1190→                      No models configured
+  1191→                    </p>
+  1192→                  )}
+  1193→                  {/* provider group header — shown ONCE, not stacked
+  1194→                      on every model */}
+  1195→                  {models.length > 0 && providerName && (
+  1196→                    <p className="px-3.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+  1197→                      {providerName}
+  1198→                    </p>
+  1199→                  )}
+  1200→                  {models.map((m) => {
+  1201→                    const meta = modelMeta(m);
+  1202→                    const hint = modelHint(meta);
+  1203→                    const glyph = modelGlyph(m);
+  1204→                    return (
+  1205→                      <button
+  1206→                        key={m}
+  1207→                        onClick={() => {
+  1208→                          setModel(m);
+  1209→                          setModelOpen(false);
+  1210→                        }}
+  1211→                        title={m}
+  1212→                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+  1213→                          m === model ? "text-white" : "text-zinc-300"
+  1214→                        }`}
+  1215→                      >
+  1216→                        <span
+  1217→                          aria-hidden
+  1218→                          className={`flex h-[22px] w-[30px] shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide ${glyph.cls}`}
+  1219→                        >
+  1220→                          {glyph.tag}
+  1221→                        </span>
+  1222→                        <span className="min-w-0 flex-1 truncate font-medium">
+  1223→                          {meta.name}
+  1224→                        </span>
+  1225→                        {m === model ? (
+  1226→                          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+  1227→                        ) : (
+  1228→                          hint && (
+  1229→                            <span className="shrink-0 text-[11px] text-zinc-500">
+  1230→                              {hint}
+  1231→                            </span>
+  1232→                          )
+  1233→                        )}
+  1234→                      </button>
+  1235→                    );
+  1236→                  })}
+  1237→                </div>
+  1238→              </PopoverContent>
+  1239→            </Popover>
+  1240→
+  1241→            {/* voice — record → server ASR → text in the input */}
+  1242→            {isRecording ? (
+  1243→              <>
+  1244→                <button
+  1245→                  onClick={recorder.cancel}
+  1246→                  aria-label="Cancel recording"
+  1247→                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-red-400"
+  1248→                  title="Discard recording"
+  1249→                >
+  1250→                  <Trash2 className="h-[17px] w-[17px]" />
+  1251→                </button>
+  1252→                <button
+  1253→                  onClick={() => void finishDictation()}
+  1254→                  aria-label="Stop and transcribe"
+  1255→                  className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow-[0_0_0_4px_rgba(239,68,68,0.18)] transition-transform hover:scale-105"
+  1256→                  title="Stop & transcribe"
+  1257→                >
+  1258→                  <Square className="h-3 w-3 fill-white" />
+  1259→                </button>
+  1260→              </>
+  1261→            ) : isProcessing ? (
+  1262→              <span
+  1263→                className="flex h-8 w-8 items-center justify-center text-zinc-400"
+  1264→                aria-label="Transcribing"
+  1265→              >
+  1266→                <Loader2 className="h-[18px] w-[18px] animate-spin" />
+  1267→              </span>
+  1268→            ) : (
+  1269→              <>
+  1270→                <button
+  1271→                  onClick={onMicClick}
+  1272→                  aria-label="Start voice dictation"
+  1273→                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+  1274→                  title="Voice dictation — recorded audio is transcribed in the cloud"
+  1275→                >
+  1276→                  <Mic className="h-[18px] w-[18px]" />
+  1277→                </button>
+  1278→                {streaming ? (
+  1279→                  <button
+  1280→                    onClick={stopStreaming}
+  1281→                    aria-label="Stop generating"
+  1282→                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+  1283→                  >
+  1284→                    <Square className="h-3.5 w-3.5 fill-black" />
+  1285→                  </button>
+  1286→                ) : (
+  1287→                  <button
+  1288→                    onClick={submit}
+  1289→                    disabled={!canSend}
+  1290→                    aria-label="Send message"
+  1291→                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100"
+  1292→                  >
+  1293→                    <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.4} />
+  1294→                  </button>
+  1295→                )}
+  1296→              </>
+  1297→            )}
+  1298→          </div>
+  1299→        </div>
+  1300→      </div>
+  1301→
+  1302→      <p className="pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 text-center text-[11px] text-zinc-600">
+  1303→        SenkuAPI can make mistakes. Verify important information.
+  1304→      </p>
+  1305→    </div>
+  1306→  );
+  1307→}
+  1308→

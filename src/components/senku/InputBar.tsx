@@ -2,10 +2,11 @@
 
 // SenkuAPI — floating bottom input bar:
 // "+" attachments menu (REAL file reading — extraction runs the
-// moment a file is picked, chips show what the gateway read),
-// Search toggle pill, effort dial, model selector chip (pretty name
-// + tier badge + caret, grouped provider dropdown), server-backed
-// voice dictation with a live waveform, send/stop.
+// moment a file is picked, chips show what the gateway read; on
+// phones it also hosts Search / Image / Duel, keeping the deck a
+// single row), Search toggle pill, effort dial, model selector chip
+// (pretty name + tier badge + caret, grouped provider dropdown),
+// server-backed voice dictation with a live waveform, send/stop.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -730,23 +731,32 @@ export function InputBar() {
           </div>
         )}
 
-        {/* Run 25 — the Mobile Deck. On phones this row splits into
-            two intentional rows: the tool dock (icon-only, fully
-            visible — nothing hides in an off-screen scroll strip)
-            above the model · mic · send row. ≥640px: the original
-            single row, byte-identical. */}
-        <div className="flex flex-col items-stretch gap-1.5 px-2.5 pb-2.5 pt-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-          {/* left controls — a full-width dock on phones (icon-only
-              chips, evenly spread); a horizontally scrollable strip
-              ≥640px so Search + Duel + challenger never wrap */}
-          <div className="senku-scroll flex w-full min-w-0 items-center justify-between gap-1 overflow-x-auto sm:w-auto sm:justify-start sm:gap-1.5">
+        {/* Run 25.1 — the deck, ONE row on every screen. On phones
+            Search / Image / Duel are hidden: they live in the "+"
+            menu (which already carries them with live On/Off chips),
+            so the composer stays a single calm line — + · effort ·
+            model · mic · send. Armed modes still surface contextually
+            (dimensions chip, challenger chip, + dot). ≥640px keeps
+            the full labeled strip, byte-identical. */}
+        <div className="flex items-center justify-between gap-1.5 px-2.5 pb-2.5 pt-0.5">
+          {/* left controls — + and effort (plus contextual armed
+              chips); ≥640px also shows the Search / Image / Duel
+              strip, scrollable so labels + challenger never wrap */}
+          <div className="senku-scroll flex min-w-0 items-center gap-1 overflow-x-auto sm:gap-1.5">
             <Popover open={attachOpen} onOpenChange={setAttachOpen}>
               <PopoverTrigger asChild>
                 <button
                   aria-label="Add attachments"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+                  title="Files · Search · Image · Duel"
+                  className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
                 >
                   <Plus className="h-[18px] w-[18px]" />
+                  {(searchEnabled || imageMode || duelEnabled) && (
+                    <span
+                      aria-hidden
+                      className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-400"
+                    />
+                  )}
                 </button>
               </PopoverTrigger>
               <PopoverContent
@@ -843,7 +853,7 @@ export function InputBar() {
             <button
               onClick={toggleSearch}
               aria-pressed={searchEnabled}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
+              className={`hidden h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:flex sm:h-8 sm:w-auto sm:px-2.5 ${
                 searchEnabled
                   ? "border-zinc-400 bg-white/10 text-white"
                   : "border-zinc-600 text-zinc-300 hover:bg-white/5"
@@ -868,7 +878,7 @@ export function InputBar() {
                 toggleImageMode();
               }}
               aria-pressed={imageMode}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:h-8 sm:w-auto sm:px-2.5 ${
+              className={`hidden h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors sm:flex sm:h-8 sm:w-auto sm:px-2.5 ${
                 imageMode
                   ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
                   : "border-zinc-600 text-zinc-300 hover:bg-white/5"
@@ -886,12 +896,12 @@ export function InputBar() {
                   <button
                     aria-label="Pick image dimensions"
                     title={`Dimensions — currently ${IMAGE_SIZES[imageSize].label} (${IMAGE_SIZES[imageSize].dims})`}
-                    className="flex h-8 max-w-[110px] shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[150px]"
+                    className="flex h-8 shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[150px] sm:px-2.5"
                   >
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
                       at
                     </span>
-                    <span className="truncate font-medium">
+                    <span className="hidden truncate font-medium sm:inline">
                       {IMAGE_SIZES[imageSize].label}
                     </span>
                     <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
@@ -1042,7 +1052,7 @@ export function InputBar() {
               }}
               disabled={!duelAvailable}
               aria-pressed={duelEnabled}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-auto sm:px-2.5 ${
+              className={`hidden h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:flex sm:h-8 sm:w-auto sm:px-2.5 ${
                 duelEnabled
                   ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
                   : "border-zinc-600 text-zinc-300 hover:bg-white/5"
@@ -1126,20 +1136,20 @@ export function InputBar() {
             )}
           </div>
 
-          {/* right controls — on phones this is its own row under the
-              dock: model chip left, mic + send in the thumb zone */}
-          <div className="flex w-full shrink-0 items-center justify-between gap-1.5 sm:w-auto sm:justify-end">
+          {/* right controls — model chip, then mic + send in the
+              thumb zone; min-w-0 + truncation keep narrow phones calm */}
+          <div className="flex min-w-0 items-center gap-1.5">
             {/* model selector — pretty name + tier badge + caret */}
             <Popover open={modelOpen} onOpenChange={setModelOpen}>
               <PopoverTrigger asChild>
                 <button
                   aria-label="Select model"
                   title={model}
-                  className="flex h-8 max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-600 px-2.5 text-[13px] text-zinc-200 transition-colors hover:bg-white/5"
+                  className="flex h-8 min-w-0 max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-600 px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/5 sm:px-2.5"
                 >
                   <span className="truncate font-medium">{activeMeta.name}</span>
                   {activeMeta.tier && (
-                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400">
+                    <span className="hidden shrink-0 rounded-full border border-zinc-600 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400 sm:inline">
                       {activeMeta.tier}
                     </span>
                   )}
@@ -1244,7 +1254,7 @@ export function InputBar() {
                 <button
                   onClick={recorder.cancel}
                   aria-label="Cancel recording"
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-red-400"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-red-400"
                   title="Discard recording"
                 >
                   <Trash2 className="h-[17px] w-[17px]" />
@@ -1252,7 +1262,7 @@ export function InputBar() {
                 <button
                   onClick={() => void finishDictation()}
                   aria-label="Stop and transcribe"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow-[0_0_0_4px_rgba(239,68,68,0.18)] transition-transform hover:scale-105"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500 text-white shadow-[0_0_0_4px_rgba(239,68,68,0.18)] transition-transform hover:scale-105"
                   title="Stop & transcribe"
                 >
                   <Square className="h-3 w-3 fill-white" />
@@ -1260,7 +1270,7 @@ export function InputBar() {
               </>
             ) : isProcessing ? (
               <span
-                className="flex h-8 w-8 items-center justify-center text-zinc-400"
+                className="flex h-8 w-8 shrink-0 items-center justify-center text-zinc-400"
                 aria-label="Transcribing"
               >
                 <Loader2 className="h-[18px] w-[18px] animate-spin" />
@@ -1270,7 +1280,7 @@ export function InputBar() {
                 <button
                   onClick={onMicClick}
                   aria-label="Start voice dictation"
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
                   title="Voice dictation — recorded audio is transcribed in the cloud"
                 >
                   <Mic className="h-[18px] w-[18px]" />
@@ -1279,7 +1289,7 @@ export function InputBar() {
                   <button
                     onClick={stopStreaming}
                     aria-label="Stop generating"
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
                   >
                     <Square className="h-3.5 w-3.5 fill-black" />
                   </button>
@@ -1288,7 +1298,7 @@ export function InputBar() {
                     onClick={submit}
                     disabled={!canSend}
                     aria-label="Send message"
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100"
                   >
                     <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.4} />
                   </button>

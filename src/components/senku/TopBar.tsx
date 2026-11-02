@@ -128,7 +128,7 @@ export function TopBar({
             <button
               onClick={toggleTemporary}
               aria-pressed={temporary}
-              className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors ${
+              className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[13px] transition-colors sm:px-3 ${
                 temporary
                   ? "border-zinc-300 bg-white text-black hover:bg-zinc-200"
                   : "border-zinc-700 text-zinc-300 hover:bg-white/5 hover:text-white"
@@ -155,7 +155,7 @@ export function TopBar({
         {booted ? (
           <button
             onClick={onOpenLimiter}
-            className={`senku-fade-up flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors ${
+            className={`senku-fade-up flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[13px] transition-colors sm:px-3 ${
               unlimited
                 ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
                 : "border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"

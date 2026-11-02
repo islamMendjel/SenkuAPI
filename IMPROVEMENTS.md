@@ -2543,3 +2543,44 @@ failures were concentrated in the composer and the drawer:
   strip), pinned sidebar unaffected.
 - lint 0 errors; tsc unchanged (8 pre-existing, none in touched
   files); console clean; dev.log clean.
+---
+
+## Run 25.1 — "THE DECK, DEMOTED" (mobile correction, user-directed)
+
+**Directive:** *"the mobile deck is the problem — hide the web search, image,
+duel inside the + in mobile."* The previous Run 25 two-row icon dock was the
+wrong call: on a phone it doubled the composer's height and spread five
+icon-only buttons across a strip that fought the keyboard and the thumb.
+
+**The change (InputBar.tsx):**
+- **One row on every screen again.** `+ · effort · ···· model · mic · send`.
+  ≥640px keeps the full labeled strip (Search / Image / Effort / Duel pills),
+  byte-identical to desktop before this run.
+- **Search, Image, Duel → hidden <640px** (`hidden sm:flex`). They were
+  ALREADY in the "+" menu with live On/Off chips — so on phones the + menu
+  is now the single tools hub; nothing was rebuilt, only the dock removed.
+- **Armed state stays legible on mobile:** emerald dot on + when any of
+  Search/Image/Duel is armed; Image mode still surfaces the amber "at"
+  dimensions chip (now icon-compact <640px — label via title); Duel still
+  surfaces the "vs" challenger chip.
+- **Narrow-screen correctness:** model chip `min-w-0` + truncate-first,
+  tier badge `hidden sm:inline` (name + caret only on phones), AT/vs chips
+  and mic/send `shrink-0`, chip paddings `px-2 sm:px-2.5` — verified "GLM
+  5.3" fully readable with Image armed at 360px (was collapsing to
+  "FREE ⌄"-only before the fix).
+- **TopBar (found during the sweep):** the Tokens pill wrapped ("/ ∞" fell
+  to a second line) at 360px — `whitespace-nowrap shrink-0` + mobile
+  padding on both header pills. One line, always.
+
+**Verified (all real):**
+- 390×844: composer is one row; + menu shows Upload / Search / Generate an
+  image / Duel two models with Off chips; arming Search closes the menu,
+  dot appears (`span.bg-emerald-400` = true), desktop Search button
+  `display:none`; disarming clears the dot.
+- Golden path from the single-row composer: "mobile single row works" →
+  real streamed reply, "GLM 5.3 · APInex pool · 2.3k tokens", 126k→129k.
+- 360×800: unarmed row has generous air; Image armed → `+• AT ⌄ effort |
+  GLM 5.3 ⌄ mic send`, model name programmatically unclipped.
+- 1280×800: full labeled strip + FREE badge — desktop untouched.
+- Test chat deleted (23 chats remain). lint 0 errors; tsc 8 pre-existing
+  (none in touched files); console clean; dev.log clean.
