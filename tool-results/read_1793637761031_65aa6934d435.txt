@@ -1,0 +1,771 @@
+     1→// SenkuAPI — gateway pipeline (equivalent of main.py + router.py).
+     2→// One chat turn: seed → active provider → web search (optional) →
+     3→// exact-match cache → health-aware key dispatch (pool retry) →
+     4→// cloud completion → usage accounting → cache fill → persistence.
+     5→
+     6→import { db } from "@/lib/db";
+     7→import { computeCacheKey, getCached, putCached } from "./cache";
+     8→import {
+     9→  attachmentContextBlock,
+    10→  sanitizeAttachments,
+    11→} from "./attachments";
+    12→import {
+    13→  BASE_SYSTEM_PROMPT,
+    14→  DEEP_RESEARCH_ADDON,
+    15→  DEEP_THINKING_ADDON,
+    16→  FAST_SYSTEM_ADDON,
+    17→  SEARCH_SYSTEM_DIRECTIVE,
+    18→  liveContextBlock,
+    19→  liveContextBlockHourStable,
+    20→  searchContextBlock,
+    21→} from "./constants";
+    22→import { dispatchCompletion } from "./dispatch";
+    23→import { appendConfidenceLabel, estimateTokens, revealWords } from "./executor";
+    24→import { confidenceOf } from "./grounding";
+    25→import { effortModel } from "./models";
+    26→import { getActiveProvider } from "./router";
+    27→import { deepSearchDetailed, webSearchDetailed } from "./search";
+    28→import type {
+    29→  AttachmentRecord,
+    30→  ChatMessageData,
+    31→  EffortLevel,
+    32→  SearchSource,
+    33→} from "./types";
+    34→
+    35→export interface TurnEvent {
+    36→  type:
+    37→    | "meta"
+    38→    | "search_status"
+    39→    | "sources"
+    40→    | "delta"
+    41→    | "restart"
+    42→    | "duel_start"
+    43→    | "lane_done"
+    44→    | "done"
+    45→    | "error";
+    46→  [k: string]: unknown;
+    47→}
+    48→
+    49→export interface TurnParams {
+    50→  chatId?: string | null;
+    51→  history: ChatMessageData[]; // prior turns (already persisted)
+    52→  content: string; // new user message
+    53→  model: string;
+    54→  search: boolean;
+    55→  temporary: boolean; // temporary chats are never persisted
+    56→  persistUser?: boolean; // false when regenerating after an edit (message already updated)
+    57→  /** Effort dial. "medium" (default) = byte-identical legacy
+    58→   *  behavior; "fast" routes to the fastest pooled engine with a
+    59→   *  brevity directive; "deep" routes to the strongest pooled
+    60→   *  engine with thinking + multi-round audited retrieval. */
+    61→  effort?: EffortLevel;
+    62→  /** Files the gateway ALREADY read (extraction happened at pick
+    63→   *  time). Their text is appended to the request context — never
+    64→   *  to the stored message content — and persisted on the user
+    65→   *  message row so follow-up turns and reloads keep the context. */
+    66→  attachments?: AttachmentRecord[];
+    67→  emit: (ev: TurnEvent) => void;
+    68→}
+    69→
+    70→export interface TurnResult {
+    71→  chatId: string | null;
+    72→  userMessageId: string | null;
+    73→  assistantMessageId: string | null;
+    74→  title: string | null;
+    75→  sources: SearchSource[];
+    76→  content: string;
+    77→  cached: boolean;
+    78→  tokens: number; // effective (multiplied) tokens billed — 0 when cached
+    79→  rawTokens: number;
+    80→  servedBy: "provider" | "zai-cloud" | "cache";
+    81→  keyLabel: string | null;
+    82→  providerName: string;
+    83→  model: string;
+    84→  /** which effort level served this turn */
+    85→  effort: EffortLevel;
+    86→  /** true when search was requested but every engine failed */
+    87→  searchFailed: boolean;
+    88→}
+    89→
+    90→function deriveTitle(content: string): string {
+    91→  const clean = content
+    92→    .replace(/\s+/g, " ")
+    93→    .replace(/[^\p{L}\p{N} ?!.,'’-]/gu, "")
+    94→    .trim();
+    95→  const words = clean.split(" ").filter(Boolean).slice(0, 6).join(" ");
+    96→  return (words || "New chat").slice(0, 60);
+    97→}
+    98→
+    99→function monthKey(d = new Date()): string {
+   100→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+   101→}
+   102→
+   103→/** History rows keep their attachment extracts — a follow-up
+   104→ *  question ("what was the revenue figure?") must still see the
+   105→ *  file from the earlier turn, exactly like the incumbents. */
+   106→function expandHistory(history: ChatMessageData[]): ChatMessageData[] {
+   107→  return history.map((m) =>
+   108→    m.role === "user" && m.attachments?.length
+   109→      ? { ...m, content: m.content + attachmentContextBlock(m.attachments) }
+   110→      : m
+   111→  );
+   112→}
+   113→
+   114→export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
+   115→  const { emit } = params;
+   116→  const provider = await getActiveProvider();
+   117→  const providerModels = JSON.parse(provider.models || "[]") as string[];
+   118→  const requestedModel =
+   119→    params.model || providerModels[0] || "free/glm-5.3";
+   120→  const effort: EffortLevel = params.effort ?? "medium";
+   121→  // The effort dial routes across the POOL: fast → the fastest
+   122→  // engine the provider offers, deep → the strongest. Medium keeps
+   123→  // the user's selection untouched (legacy behavior).
+   124→  const model = effortModel(providerModels, requestedModel, effort);
+   125→  // Untrusted client payload — rebuilt field-by-field server-side.
+   126→  const attachments = sanitizeAttachments(params.attachments);
+   127→
+   128→  // ── 1. Web search ──
+   129→  // Medium/fast: strict discipline (≤3 snippets, ≤300 chars), one
+   130→  // pass. Deep: multi-round iterative retrieval — plan queries,
+   131→  // search the question verbatim, then the planned angles in
+   132→  // parallel, merged URL-deduped (≤8 sources), with live stage
+   133→  // labels streamed to the client.
+   134→  let sources: SearchSource[] = [];
+   135→  let searchEngine: string | undefined;
+   136→  if (params.search) {
+   137→    if (effort === "deep") {
+   138→      emit({ type: "search_status", status: "searching", depth: "deep" });
+   139→      const outcome = await deepSearchDetailed(params.content, (detail) =>
+   140→        emit({ type: "search_status", status: "searching", detail, depth: "deep" })
+   141→      );
+   142→      sources = outcome.results;
+   143→      searchEngine = "deep";
+   144→    } else {
+   145→      emit({ type: "search_status", status: "searching" });
+   146→      const outcome = await webSearchDetailed(params.content);
+   147→      sources = outcome.results;
+   148→      searchEngine = outcome.source;
+   149→    }
+   150→    emit({ type: "sources", sources });
+   151→    emit({
+   152→      type: "search_status",
+   153→      status: sources.length ? "ok" : "failed",
+   154→      engine: searchEngine,
+   155→      depth: effort === "deep" ? "deep" : undefined,
+   156→    });
+   157→  }
+   158→
+   159→  // Effort directives append AFTER the base contract. Medium adds
+   160→  // NOTHING — the prompt stays byte-identical to pre-dial turns so
+   161→  // the 24h response cache still hits. Fast/deep additions also
+   162→  // namespace the cache key per effort level for free.
+   163→  const effortAddon =
+   164→    effort === "fast"
+   165→      ? FAST_SYSTEM_ADDON
+   166→      : effort === "deep"
+   167→        ? sources.length
+   168→          ? DEEP_RESEARCH_ADDON
+   169→          : DEEP_THINKING_ADDON
+   170→        : "";
+   171→  const baseSystemPrompt =
+   172→    (params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT) +
+   173→    (effortAddon ? `\n\n${effortAddon}` : "");
+   174→  // The model always knows the real "now" (user's timezone).
+   175→  const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
+   176→
+   177→  const finalUserContent =
+   178→    params.content +
+   179→    attachmentContextBlock(attachments) +
+   180→    (sources.length ? searchContextBlock(sources) : "");
+   181→
+   182→  // ── 2. Exact-match cache (prompt + model + hour-stable system prompt) ──
+   183→  // The clock block is hour-stable here so repeat questions within the
+   184→  // same hour still hit the cache, while the model sees second-level time.
+   185→  const cacheKey = computeCacheKey(
+   186→    finalUserContent,
+   187→    model,
+   188→    `${baseSystemPrompt}\n\n${liveContextBlockHourStable()}`
+   189→  );
+   190→  const cached = await getCached(cacheKey);
+   191→
+   192→  // ── 3. Persistence: chat row + user message ──
+   193→  let chatId = params.chatId ?? null;
+   194→  let userMessageId: string | null = null;
+   195→  let title: string | null = null;
+   196→
+   197→  if (!params.temporary && params.persistUser !== false) {
+   198→    if (!chatId) {
+   199→      title = deriveTitle(params.content);
+   200→      const chat = await db.chat.create({
+   201→        data: {
+   202→          title,
+   203→          model,
+   204→          provider: provider.name,
+   205→          isTemporary: false,
+   206→        },
+   207→      });
+   208→      chatId = chat.id;
+   209→    }
+   210→    const userMsg = await db.message.create({
+   211→      data: {
+   212→        chatId,
+   213→        role: "user",
+   214→        content: params.content,
+   215→        sources: sources.length ? JSON.stringify(sources) : null,
+   216→        attachments: attachments.length ? JSON.stringify(attachments) : null,
+   217→      },
+   218→    });
+   219→    userMessageId = userMsg.id;
+   220→  } else if (!params.temporary && params.chatId) {
+   221→    chatId = params.chatId;
+   222→  }
+   223→
+   224→  emit({
+   225→    type: "meta",
+   226→    chatId,
+   227→    userMessageId,
+   228→    title,
+   229→    provider: provider.name,
+   230→    model,
+   231→    effort,
+   232→  });
+   233→
+   234→  // ── 4a. Cache hit → 0 tokens spent ──
+   235→  if (cached) {
+   236→    // Contract enforcement applies to cached search answers too
+   237→    // (older cache entries may predate the confidence-label rule).
+   238→    if (sources.length && !confidenceOf(cached.content)) {
+   239→      cached.content = await appendConfidenceLabel(cached.content);
+   240→    }
+   241→    // Cached answers type out live too — the answer never appears
+   242→    // in a single shot, even when it cost 0 tokens.
+   243→    await revealWords(cached.content, (text) => emit({ type: "delta", text }));
+   244→    let assistantMessageId: string | null = null;
+   245→    if (!params.temporary && chatId) {
+   246→      const msg = await db.message.create({
+   247→        data: {
+   248→          chatId,
+   249→          role: "assistant",
+   250→          content: cached.content,
+   251→          model,
+   252→          provider: provider.name,
+   253→          keyLabel: "cache",
+   254→          tokens: 0,
+   255→          cached: true,
+   256→        },
+   257→      });
+   258→      assistantMessageId = msg.id;
+   259→      await db.chat.update({
+   260→        where: { id: chatId },
+   261→        data: { updatedAt: new Date(), model, provider: provider.name },
+   262→      });
+   263→    }
+   264→    // Audit trail: cached hit, zero tokens.
+   265→    await db.usageEvent.create({
+   266→      data: {
+   267→        keyId: null,
+   268→        providerId: provider.id,
+   269→        chatId,
+   270→        model,
+   271→        promptTokens: 0,
+   272→        completionTokens: 0,
+   273→        totalTokens: 0,
+   274→        multiplier: provider.tokenMultiplier,
+   275→        cached: true,
+   276→      },
+   277→    });
+   278→    const done = {
+   279→      type: "done",
+   280→      chatId,
+   281→      assistantMessageId,
+   282→      content: cached.content,
+   283→      cached: true,
+   284→      tokens: 0,
+   285→      rawTokens: 0,
+   286→      servedBy: "cache" as const,
+   287→      keyLabel: "cache",
+   288→      providerName: provider.name,
+   289→      model,
+   290→      effort,
+   291→      sources,
+   292→      searchFailed: params.search && sources.length === 0,
+   293→    };
+   294→    emit(done);
+   295→    return done;
+   296→  }
+   297→
+   298→  // ── 4b + 5. Health-aware key dispatch, then cloud completion ──
+   299→  // The dispatcher round-robins pooled keys, quarantines dead ones
+   300→  // (auth failures), retries the next healthy key within the same
+   301→  // turn, and only fails over to the Z.ai cloud when every key
+   302→  // failed. Hard pool errors (no keys / limiter exhaustion) keep
+   303→  // their original coded messages.
+   304→  const messages: ChatMessageData[] = [
+   305→    { role: "system", content: systemPrompt },
+   306→    ...expandHistory(params.history).slice(-20),
+   307→    { role: "user", content: finalUserContent },
+   308→  ];
+   309→
+   310→  const routed = await dispatchCompletion({
+   311→    provider,
+   312→    model,
+   313→    messages,
+   314→    onDelta: (text) => emit({ type: "delta", text }),
+   315→    // Mid-stream provider death → the cloud re-emits from scratch;
+   316→    // "restart" tells the client to clear the partial text first.
+   317→    onRestart: () => emit({ type: "restart" }),
+   318→    // Deep effort → the cloud failover THINKS before answering.
+   319→    thinking: effort === "deep",
+   320→  });
+   321→  const exec = routed.exec;
+   322→  // The key that actually served — null when the Z.ai cloud did.
+   323→  const key = routed.key;
+   324→
+   325→  // ── Grounded-answer contract enforcement ──
+   326→  // On search turns the confidence label is mandatory. The directive
+   327→  // asks for it, but model compliance is probabilistic — when the
+   328→  // answer lacks the label, one cheap corrective pass appends it so
+   329→  // the contract holds deterministically (cache fills afterwards,
+   330→  // so corrected answers are reused corrected).
+   331→  if (sources.length && !confidenceOf(exec.content)) {
+   332→    exec.content = await appendConfidenceLabel(exec.content);
+   333→  }
+   334→
+   335→  // ── 6. Usage accounting (multiplier applies to effective totals) ──
+   336→  // Only the key that ACTUALLY served the response is billed — a
+   337→  // dead key that failed over to the cloud never gets charged.
+   338→  const rawTotal =
+   339→    exec.totalTokens ||
+   340→    exec.promptTokens + exec.completionTokens ||
+   341→    estimateTokens(finalUserContent) + estimateTokens(exec.content);
+   342→
+   343→  await db.usageEvent.create({
+   344→    data: {
+   345→      keyId: key?.id ?? null,
+   346→      providerId: provider.id,
+   347→      chatId,
+   348→      model,
+   349→      promptTokens: exec.promptTokens,
+   350→      completionTokens: exec.completionTokens,
+   351→      totalTokens: rawTotal,
+   352→      multiplier: provider.tokenMultiplier,
+   353→      cached: false,
+   354→    },
+   355→  });
+   356→
+   357→  // Roll the serving key's monthly accumulator forward (monthKey
+   358→  // flip safe). Skipped entirely on cloud failover — no key served.
+   359→  if (key) {
+   360→    const now = new Date();
+   361→    const mk = monthKey(now);
+   362→    const monthAgg = await db.usageEvent.aggregate({
+   363→      _sum: { totalTokens: true },
+   364→      where: {
+   365→        keyId: key.id,
+   366→        createdAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+   367→      },
+   368→    });
+   369→    await db.apiKey.update({
+   370→      where: { id: key.id },
+   371→      data: {
+   372→        lastUsedAt: now,
+   373→        monthKey: mk,
+   374→        tokensUsedThisMonth: monthAgg._sum.totalTokens ?? rawTotal,
+   375→      },
+   376→    });
+   377→  }
+   378→
+   379→  // ── 7. Cache fill (24h TTL) ──
+   380→  await putCached({
+   381→    cacheKey,
+   382→    model,
+   383→    provider: provider.name,
+   384→    content: exec.content,
+   385→    tokens: rawTotal,
+   386→  });
+   387→
+   388→  // ── 8. Persist assistant message ──
+   389→  // keyLabel is only recorded when a pooled key actually served the
+   390→  // response — a cloud-failover answer never claims a key it didn't use.
+   391→  const effectiveTokens = Math.round(rawTotal * provider.tokenMultiplier);
+   392→  const servedKeyLabel = key?.label ?? null;
+   393→  let assistantMessageId: string | null = null;
+   394→  if (!params.temporary && chatId) {
+   395→    const msg = await db.message.create({
+   396→      data: {
+   397→        chatId,
+   398→        role: "assistant",
+   399→        content: exec.content,
+   400→        model,
+   401→        provider: provider.name,
+   402→        keyLabel: servedKeyLabel,
+   403→        tokens: effectiveTokens,
+   404→        cached: false,
+   405→        effort,
+   406→      },
+   407→    });
+   408→    assistantMessageId = msg.id;
+   409→    await db.chat.update({
+   410→      where: { id: chatId },
+   411→      data: { updatedAt: new Date(), model, provider: provider.name },
+   412→    });
+   413→  }
+   414→
+   415→  const done: TurnResult = {
+   416→    chatId,
+   417→    userMessageId,
+   418→    assistantMessageId,
+   419→    title,
+   420→    sources,
+   421→    content: exec.content,
+   422→    cached: false,
+   423→    tokens: effectiveTokens,
+   424→    rawTokens: rawTotal,
+   425→    servedBy: exec.servedBy,
+   426→    keyLabel: servedKeyLabel,
+   427→    providerName: provider.name,
+   428→    model,
+   429→    effort,
+   430→    searchFailed: params.search && sources.length === 0,
+   431→  };
+   432→  emit({ type: "done", ...done });
+   433→  return done;
+   434→}
+   435→
+   436→// ── Duel turn ─────────────────────────────────────────────────
+   437→// TWO models race in parallel on one question: shared web search,
+   438→// shared chat + user-message persistence, per-lane cache lookup,
+   439→// health-aware dispatch, grounded-contract enforcement, usage
+   440→// accounting and cache fill. Both lanes are billed honestly for
+   441→// what they actually served. The WINNER is not persisted here —
+   442→// the client calls POST /api/chat/duel/pick once the user chooses;
+   443→// that endpoint stores the winner as the assistant message and the
+   444→// loser as its runner-up reference.
+   445→
+   446→export interface DuelLaneResult {
+   447→  lane: "a" | "b";
+   448→  model: string;
+   449→  content: string;
+   450→  tokens: number; // effective (multiplied) tokens billed — 0 when cached
+   451→  rawTokens: number;
+   452→  cached: boolean;
+   453→  servedBy: "provider" | "zai-cloud" | "cache" | null; // null on error
+   454→  keyLabel: string | null;
+   455→  error: string | null;
+   456→}
+   457→
+   458→export interface DuelParams {
+   459→  chatId?: string | null;
+   460→  history: ChatMessageData[];
+   461→  content: string;
+   462→  model: string; // lane A — the user's selected model
+   463→  challenger: string; // lane B
+   464→  search: boolean;
+   465→  temporary: boolean;
+   466→  persistUser?: boolean;
+   467→  /** Effort affects the duel's SHARED retrieval (deep → multi-round
+   468→   *  search + thinking on the cloud path) but never the lane models
+   469→   *  — a duel is explicitly about the two engines the user chose. */
+   470→  effort?: EffortLevel;
+   471→  /** Files the gateway read — shared by both lanes (the same
+   472→   *  material, the same rules as a normal turn). */
+   473→  attachments?: AttachmentRecord[];
+   474→  emit: (ev: TurnEvent) => void;
+   475→}
+   476→
+   477→export interface DuelTurnResult {
+   478→  chatId: string | null;
+   479→  userMessageId: string | null;
+   480→  title: string | null;
+   481→  sources: SearchSource[];
+   482→  lanes: { a: DuelLaneResult; b: DuelLaneResult };
+   483→  bothFailed: boolean;
+   484→}
+   485→
+   486→export async function runDuelTurn(
+   487→  params: DuelParams
+   488→): Promise<DuelTurnResult> {
+   489→  const { emit } = params;
+   490→  const provider = await getActiveProvider();
+   491→  const providerModels = JSON.parse(provider.models || "[]") as string[];
+   492→  const modelA = params.model || providerModels[0] || "free/glm-5.3";
+   493→  const modelB = params.challenger;
+   494→  const effort: EffortLevel = params.effort ?? "medium";
+   495→  const attachments = sanitizeAttachments(params.attachments);
+   496→
+   497→  if (!modelB || modelB === modelA) {
+   498→    throw new Error("Duel needs two different models");
+   499→  }
+   500→  if (
+   501→    providerModels.length &&
+   502→    (!providerModels.includes(modelA) || !providerModels.includes(modelB))
+   503→  ) {
+   504→    throw new Error("Both duel models must be available on the active provider");
+   505→  }
+   506→
+   507→  // ── 1. Shared web search — both lanes reason from the SAME retrieval ──
+   508→  let sources: SearchSource[] = [];
+   509→  if (params.search) {
+   510→    if (effort === "deep") {
+   511→      emit({ type: "search_status", status: "searching", depth: "deep" });
+   512→      const outcome = await deepSearchDetailed(params.content, (detail) =>
+   513→        emit({ type: "search_status", status: "searching", detail, depth: "deep" })
+   514→      );
+   515→      sources = outcome.results;
+   516→    } else {
+   517→      emit({ type: "search_status", status: "searching" });
+   518→      const outcome = await webSearchDetailed(params.content);
+   519→      sources = outcome.results;
+   520→    }
+   521→    emit({ type: "sources", sources });
+   522→    emit({
+   523→      type: "search_status",
+   524→      status: sources.length ? "ok" : "failed",
+   525→      depth: effort === "deep" ? "deep" : undefined,
+   526→    });
+   527→  }
+   528→
+   529→  const baseSystemPrompt =
+   530→    params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT;
+   531→  const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
+   532→  const finalUserContent =
+   533→    params.content +
+   534→    attachmentContextBlock(attachments) +
+   535→    (sources.length ? searchContextBlock(sources) : "");
+   536→
+   537→  // ── 2. Shared persistence: chat row + user message (same as a
+   538→  //      normal turn — the winner is appended later, at pick time) ──
+   539→  let chatId = params.chatId ?? null;
+   540→  let userMessageId: string | null = null;
+   541→  let title: string | null = null;
+   542→
+   543→  if (!params.temporary && params.persistUser !== false) {
+   544→    if (!chatId) {
+   545→      title = deriveTitle(params.content);
+   546→      const chat = await db.chat.create({
+   547→        data: {
+   548→          title,
+   549→          model: modelA,
+   550→          provider: provider.name,
+   551→          isTemporary: false,
+   552→        },
+   553→      });
+   554→      chatId = chat.id;
+   555→    }
+   556→    const userMsg = await db.message.create({
+   557→      data: {
+   558→        chatId,
+   559→        role: "user",
+   560→        content: params.content,
+   561→        sources: sources.length ? JSON.stringify(sources) : null,
+   562→        attachments: attachments.length ? JSON.stringify(attachments) : null,
+   563→      },
+   564→    });
+   565→    userMessageId = userMsg.id;
+   566→  } else if (!params.temporary && params.chatId) {
+   567→    chatId = params.chatId;
+   568→  }
+   569→
+   570→  emit({
+   571→    type: "meta",
+   572→    chatId,
+   573→    userMessageId,
+   574→    title,
+   575→    provider: provider.name,
+   576→    model: modelA,
+   577→    effort,
+   578→  });
+   579→  emit({ type: "duel_start", a: modelA, b: modelB });
+   580→
+   581→  const messages: ChatMessageData[] = [
+   582→    { role: "system", content: systemPrompt },
+   583→    ...expandHistory(params.history).slice(-20),
+   584→    { role: "user", content: finalUserContent },
+   585→  ];
+   586→
+   587→  // ── 3. The race: two independent lanes over the shared context ──
+   588→  const runLane = async (
+   589→    lane: "a" | "b",
+   590→    model: string
+   591→  ): Promise<DuelLaneResult> => {
+   592→    // Per-lane exact-match cache (the cache key includes the model).
+   593→    const cacheKey = computeCacheKey(
+   594→      finalUserContent,
+   595→      model,
+   596→      `${baseSystemPrompt}\n\n${liveContextBlockHourStable()}`
+   597→    );
+   598→    const cached = await getCached(cacheKey);
+   599→    if (cached) {
+   600→      // Contract enforcement applies to cached search answers too.
+   601→      if (sources.length && !confidenceOf(cached.content)) {
+   602→        cached.content = await appendConfidenceLabel(cached.content);
+   603→      }
+   604→      // Cached lane answers type out live too (word by word),
+   605→      // exactly like a fresh lane.
+   606→      await revealWords(cached.content, (text) =>
+   607→        emit({ type: "delta", lane, text })
+   608→      );
+   609→      await db.usageEvent.create({
+   610→        data: {
+   611→          keyId: null,
+   612→          providerId: provider.id,
+   613→          chatId,
+   614→          model,
+   615→          promptTokens: 0,
+   616→          completionTokens: 0,
+   617→          totalTokens: 0,
+   618→          multiplier: provider.tokenMultiplier,
+   619→          cached: true,
+   620→        },
+   621→      });
+   622→      const result: DuelLaneResult = {
+   623→        lane,
+   624→        model,
+   625→        content: cached.content,
+   626→        tokens: 0,
+   627→        rawTokens: 0,
+   628→        cached: true,
+   629→        servedBy: "cache",
+   630→        keyLabel: "cache",
+   631→        error: null,
+   632→      };
+   633→      emit({ type: "lane_done", ...result });
+   634→      return result;
+   635→    }
+   636→
+   637→    try {
+   638→      const routed = await dispatchCompletion({
+   639→        provider,
+   640→        model,
+   641→        messages,
+   642→        onDelta: (text) => emit({ type: "delta", lane, text }),
+   643→        // Mid-stream death in THIS lane → the cloud re-emits this
+   644→        // lane from scratch; clear only this lane's partial text.
+   645→        onRestart: () => emit({ type: "restart", lane }),
+   646→        // Deep effort → both lanes' cloud failover thinks too.
+   647→        thinking: effort === "deep",
+   648→      });
+   649→      const exec = routed.exec;
+   650→      const key = routed.key;
+   651→
+   652→      if (sources.length && !confidenceOf(exec.content)) {
+   653→        exec.content = await appendConfidenceLabel(exec.content);
+   654→      }
+   655→
+   656→      // Per-lane billing — identical rules to a normal turn: only
+   657→      // the key that actually served is charged; cloud lanes bill
+   658→      // no key.
+   659→      const rawTotal =
+   660→        exec.totalTokens ||
+   661→        exec.promptTokens + exec.completionTokens ||
+   662→        estimateTokens(finalUserContent) + estimateTokens(exec.content);
+   663→      await db.usageEvent.create({
+   664→        data: {
+   665→          keyId: key?.id ?? null,
+   666→          providerId: provider.id,
+   667→          chatId,
+   668→          model,
+   669→          promptTokens: exec.promptTokens,
+   670→          completionTokens: exec.completionTokens,
+   671→          totalTokens: rawTotal,
+   672→          multiplier: provider.tokenMultiplier,
+   673→          cached: false,
+   674→        },
+   675→      });
+   676→      if (key) {
+   677→        const now = new Date();
+   678→        const mk = monthKey(now);
+   679→        const monthAgg = await db.usageEvent.aggregate({
+   680→          _sum: { totalTokens: true },
+   681→          where: {
+   682→            keyId: key.id,
+   683→            createdAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+   684→          },
+   685→        });
+   686→        await db.apiKey.update({
+   687→          where: { id: key.id },
+   688→          data: {
+   689→            lastUsedAt: now,
+   690→            monthKey: mk,
+   691→            tokensUsedThisMonth: monthAgg._sum.totalTokens ?? rawTotal,
+   692→          },
+   693→        });
+   694→      }
+   695→
+   696→      await putCached({
+   697→        cacheKey,
+   698→        model,
+   699→        provider: provider.name,
+   700→        content: exec.content,
+   701→        tokens: rawTotal,
+   702→      });
+   703→
+   704→      const result: DuelLaneResult = {
+   705→        lane,
+   706→        model,
+   707→        content: exec.content,
+   708→        tokens: Math.round(rawTotal * provider.tokenMultiplier),
+   709→        rawTokens: rawTotal,
+   710→        cached: false,
+   711→        servedBy: exec.servedBy,
+   712→        keyLabel: key?.label ?? null,
+   713→        error: null,
+   714→      };
+   715→      emit({ type: "lane_done", ...result });
+   716→      return result;
+   717→    } catch (e) {
+   718→      // One lane failing must never kill the other — the duel
+   719→      // degrades to a single-lane answer the user can still keep.
+   720→      const result: DuelLaneResult = {
+   721→        lane,
+   722→        model,
+   723→        content: "",
+   724→        tokens: 0,
+   725→        rawTokens: 0,
+   726→        cached: false,
+   727→        servedBy: null,
+   728→        keyLabel: null,
+   729→        error: (e as Error).message || "Generation failed",
+   730→      };
+   731→      emit({ type: "lane_done", ...result });
+   732→      return result;
+   733→    }
+   734→  };
+   735→
+   736→  const [a, b] = await Promise.all([
+   737→    runLane("a", modelA),
+   738→    runLane("b", modelB),
+   739→  ]);
+   740→
+   741→  if (a.error && b.error) {
+   742→    emit({
+   743→      type: "error",
+   744→      message: `Both models failed — A (${modelA}): ${a.error} · B (${modelB}): ${b.error}`,
+   745→    });
+   746→    return { chatId, userMessageId, title, sources, lanes: { a, b }, bothFailed: true };
+   747→  }
+   748→
+   749→  // No assistant message is persisted here — the client picks the
+   750→  // winner and /api/chat/duel/pick stores it (with the runner-up).
+   751→  emit({
+   752→    type: "done",
+   753→    chatId,
+   754→    userMessageId,
+   755→    assistantMessageId: null,
+   756→    duel: { a, b },
+   757→    // Top-level fields mirror lane A for simple/legacy consumers.
+   758→    content: a.content,
+   759→    cached: a.cached,
+   760→    tokens: a.tokens,
+   761→    rawTokens: a.rawTokens,
+   762→    servedBy: a.servedBy,
+   763→    keyLabel: a.keyLabel,
+   764→    providerName: provider.name,
+   765→    model: modelA,
+   766→    sources,
+   767→    searchFailed: params.search && sources.length === 0,
+   768→  });
+   769→  return { chatId, userMessageId, title, sources, lanes: { a, b }, bothFailed: false };
+   770→}
+   771→

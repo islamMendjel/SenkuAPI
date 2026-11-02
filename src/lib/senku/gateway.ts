@@ -64,6 +64,11 @@ export interface TurnParams {
    *  to the stored message content — and persisted on the user
    *  message row so follow-up turns and reloads keep the context. */
   attachments?: AttachmentRecord[];
+  /** Fires when the CLIENT disconnects (Stop button, tab close).
+   *  The upstream generation is cancelled at the source, the
+   *  partial reply is persisted, and the truncated answer NEVER
+   *  enters the response cache. */
+  signal?: AbortSignal;
   emit: (ev: TurnEvent) => void;
 }
 
@@ -85,6 +90,9 @@ export interface TurnResult {
   effort: EffortLevel;
   /** true when search was requested but every engine failed */
   searchFailed: boolean;
+  /** true when the client disconnected mid-generation — content is
+   *  the partial text that actually streamed */
+  aborted?: boolean;
 }
 
 function deriveTitle(content: string): string {
@@ -240,7 +248,12 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     }
     // Cached answers type out live too — the answer never appears
     // in a single shot, even when it cost 0 tokens.
-    await revealWords(cached.content, (text) => emit({ type: "delta", text }));
+    await revealWords(
+      cached.content,
+      (text) => emit({ type: "delta", text }),
+      6,
+      () => params.signal?.aborted === true
+    );
     let assistantMessageId: string | null = null;
     if (!params.temporary && chatId) {
       const msg = await db.message.create({
@@ -301,6 +314,10 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
   // turn, and only fails over to the Z.ai cloud when every key
   // failed. Hard pool errors (no keys / limiter exhaustion) keep
   // their original coded messages.
+  //
+  // `signal` is the CLIENT's connection: the moment it drops, the
+  // upstream fetch is aborted at the source — the pooled keys stop
+  // paying for tokens nobody will ever see.
   const messages: ChatMessageData[] = [
     { role: "system", content: systemPrompt },
     ...expandHistory(params.history).slice(-20),
@@ -317,18 +334,23 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     onRestart: () => emit({ type: "restart" }),
     // Deep effort → the cloud failover THINKS before answering.
     thinking: effort === "deep",
+    signal: params.signal,
   });
   const exec = routed.exec;
   // The key that actually served — null when the Z.ai cloud did.
   const key = routed.key;
+  // True when the CLIENT disconnected mid-generation: the partial
+  // text is final for this turn.
+  const aborted = routed.aborted === true;
 
   // ── Grounded-answer contract enforcement ──
   // On search turns the confidence label is mandatory. The directive
   // asks for it, but model compliance is probabilistic — when the
   // answer lacks the label, one cheap corrective pass appends it so
   // the contract holds deterministically (cache fills afterwards,
-  // so corrected answers are reused corrected).
-  if (sources.length && !confidenceOf(exec.content)) {
+  // so corrected answers are reused corrected). Aborted turns skip
+  // it: no corrective cloud spend on an answer nobody is watching.
+  if (!aborted && sources.length && !confidenceOf(exec.content)) {
     exec.content = await appendConfidenceLabel(exec.content);
   }
 
@@ -377,13 +399,17 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
   }
 
   // ── 7. Cache fill (24h TTL) ──
-  await putCached({
-    cacheKey,
-    model,
-    provider: provider.name,
-    content: exec.content,
-    tokens: rawTotal,
-  });
+  // A turn the user ABORTED never fills the cache: a truncated
+  // answer must never be served to a future identical question.
+  if (!aborted) {
+    await putCached({
+      cacheKey,
+      model,
+      provider: provider.name,
+      content: exec.content,
+      tokens: rawTotal,
+    });
+  }
 
   // ── 8. Persist assistant message ──
   // keyLabel is only recorded when a pooled key actually served the
@@ -391,7 +417,10 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
   const effectiveTokens = Math.round(rawTotal * provider.tokenMultiplier);
   const servedKeyLabel = key?.label ?? null;
   let assistantMessageId: string | null = null;
-  if (!params.temporary && chatId) {
+  // The partial of an aborted turn is persisted too — the timeline
+  // keeps exactly what streamed before the user pressed stop (and
+  // an empty partial creates no ghost message).
+  if (!params.temporary && chatId && exec.content.trim()) {
     const msg = await db.message.create({
       data: {
         chatId,
@@ -428,8 +457,15 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     model,
     effort,
     searchFailed: params.search && sources.length === 0,
+    ...(aborted ? { aborted: true } : {}),
   };
   emit({ type: "done", ...done });
+  if (aborted) {
+    console.log(
+      `[gateway] turn cancelled by client — persisted ${exec.content.length} chars, ` +
+        `${effectiveTokens} tokens billed, cache skipped`
+    );
+  }
   return done;
 }
 
@@ -471,6 +507,8 @@ export interface DuelParams {
   /** Files the gateway read — shared by both lanes (the same
    *  material, the same rules as a normal turn). */
   attachments?: AttachmentRecord[];
+  /** Client disconnect cancels BOTH racing lanes at the source. */
+  signal?: AbortSignal;
   emit: (ev: TurnEvent) => void;
 }
 
@@ -603,8 +641,11 @@ export async function runDuelTurn(
       }
       // Cached lane answers type out live too (word by word),
       // exactly like a fresh lane.
-      await revealWords(cached.content, (text) =>
-        emit({ type: "delta", lane, text })
+      await revealWords(
+        cached.content,
+        (text) => emit({ type: "delta", lane, text }),
+        6,
+        () => params.signal?.aborted === true
       );
       await db.usageEvent.create({
         data: {
@@ -645,11 +686,14 @@ export async function runDuelTurn(
         onRestart: () => emit({ type: "restart", lane }),
         // Deep effort → both lanes' cloud failover thinks too.
         thinking: effort === "deep",
+        // Client disconnect cancels this lane's upstream too.
+        signal: params.signal,
       });
       const exec = routed.exec;
       const key = routed.key;
+      const aborted = routed.aborted === true;
 
-      if (sources.length && !confidenceOf(exec.content)) {
+      if (!aborted && sources.length && !confidenceOf(exec.content)) {
         exec.content = await appendConfidenceLabel(exec.content);
       }
 
@@ -693,13 +737,17 @@ export async function runDuelTurn(
         });
       }
 
-      await putCached({
-        cacheKey,
-        model,
-        provider: provider.name,
-        content: exec.content,
-        tokens: rawTotal,
-      });
+      // An aborted lane never fills the cache (truncated text must
+      // never be served to a future identical question).
+      if (!aborted) {
+        await putCached({
+          cacheKey,
+          model,
+          provider: provider.name,
+          content: exec.content,
+          tokens: rawTotal,
+        });
+      }
 
       const result: DuelLaneResult = {
         lane,

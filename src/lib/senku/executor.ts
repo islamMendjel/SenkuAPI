@@ -16,6 +16,10 @@ export interface ExecResult {
   completionTokens: number;
   totalTokens: number;
   servedBy: "provider" | "zai-cloud";
+  /** True when generation ended early because the CLIENT
+   *  disconnected — `content` is the partial text generated so far
+   *  and must NEVER be cached. */
+  aborted?: boolean;
 }
 
 export interface ExecOptions {
@@ -29,6 +33,10 @@ export interface ExecOptions {
    *  thinking params, so the effort dial's rigor there comes from
    *  the directive + the retrieval pipeline). */
   thinking?: boolean;
+  /** Aborts generation the moment the CLIENT disconnects. Without
+   *  this the upstream provider keeps generating tokens nobody
+   *  will ever see — pure key-pool drain. */
+  signal?: AbortSignal;
 }
 
 /** ~4 chars per token — only used when the provider omits usage. */
@@ -46,12 +54,17 @@ function messagesTokens(msgs: ChatMessageData[]): number {
  *   auth        → the key credential was rejected (401/403)
  *   unreachable → endpoint down / network cut / non-ok response
  *   empty       → stream finished but produced no content
+ *   aborted     → the CLIENT disconnected mid-stream; `partial`
+ *                 carries the text generated so far (terminal —
+ *                 never retried, never failed over: the consumer
+ *                 is gone)
  * `emitted` tells whether any deltas already reached the client
  * (mid-stream death) — retrying then would duplicate output.
  */
 export type ProviderAttempt =
   | { ok: true; result: ExecResult }
-  | { ok: false; reason: "auth" | "unreachable" | "empty"; emitted: boolean };
+  | { ok: false; reason: "auth" | "unreachable" | "empty"; emitted: boolean }
+  | { ok: false; reason: "aborted"; emitted: boolean; partial: ExecResult };
 
 interface OpenAIChunk {
   choices?: { delta?: { content?: string }; message?: { content?: string } }[];
@@ -77,9 +90,26 @@ export async function tryProviderStream(
     timer = setTimeout(() => controller.abort(), 25_000);
   };
 
-  // Hoisted so the catch block can tell whether partial output
-  // already streamed to the client before the failure.
+  // Client disconnect → abort the upstream fetch immediately. The
+  // 25s inactivity timeout keeps guarding against genuine stalls.
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else
+      opts.signal.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+  }
+
+  // Hoisted so the catch block can read the partial text and any
+  // usage stats that arrived before an abort mid-stream, and so it
+  // can tell whether partial output already streamed to the client.
   let emitted = false;
+  let content = "";
+  let usage: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  } | null = null;
 
   try {
     const res = await fetch(`${opts.baseUrl}/chat/completions`, {
@@ -103,12 +133,6 @@ export async function tryProviderStream(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let content = "";
-    let usage: {
-      prompt_tokens?: number;
-      completion_tokens?: number;
-      total_tokens?: number;
-    } | null = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -155,6 +179,27 @@ export async function tryProviderStream(
       },
     };
   } catch {
+    // The client disconnected mid-stream — terminal. Bill only what
+    // was actually consumed (usage stats rarely arrive on abort, so
+    // fall back to the standard estimates) and hand back the partial.
+    if (opts.signal?.aborted) {
+      const promptTokens = usage?.prompt_tokens ?? messagesTokens(opts.messages);
+      const completionTokens =
+        usage?.completion_tokens ?? estimateTokens(content);
+      return {
+        ok: false,
+        reason: "aborted",
+        emitted,
+        partial: {
+          content,
+          promptTokens,
+          completionTokens,
+          totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
+          servedBy: "provider",
+          aborted: true,
+        },
+      };
+    }
     // Network cut / abort mid-flight: typed as unreachable, with a
     // flag when partial output already streamed to the client.
     return { ok: false, reason: "unreachable", emitted };
@@ -172,7 +217,10 @@ export async function tryProviderStream(
 export async function revealWords(
   content: string,
   onDelta: (text: string) => void,
-  msPerTick = 6
+  msPerTick = 6,
+  /** Stops the reveal when it returns true (client disconnected —
+   *  no point typing into a dead pipe). */
+  isCancelled?: () => boolean
 ): Promise<void> {
   if (!content) return;
   // Each chunk = one word plus its surrounding whitespace, so the
@@ -181,6 +229,7 @@ export async function revealWords(
   const maxTicks = Math.ceil(2000 / Math.max(msPerTick, 1));
   const batch = Math.max(1, Math.ceil(words.length / maxTicks));
   for (let i = 0; i < words.length; i += batch) {
+    if (isCancelled?.()) return;
     onDelta(words.slice(i, i + batch).join(""));
     if (i + batch < words.length) {
       await new Promise((r) => setTimeout(r, msPerTick));
@@ -212,16 +261,28 @@ export async function zaiCloudExec(opts: ExecOptions): Promise<ExecResult> {
 
   let content = "";
   let usage: CloudChunk["usage"] = null;
+  let aborted = false;
 
   if (
     completion &&
     typeof (completion as ReadableStream<Uint8Array>).getReader === "function"
   ) {
     // Real SSE stream (OpenAI chunk shape) — parse and emit live.
+    // Each read checks the client signal: a disconnected consumer
+    // stops draining the cloud stream immediately.
     const reader = (completion as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     while (true) {
+      if (opts.signal?.aborted) {
+        aborted = true;
+        try {
+          await reader.cancel();
+        } catch {
+          // stream already released
+        }
+        break;
+      }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -261,7 +322,11 @@ export async function zaiCloudExec(opts: ExecOptions): Promise<ExecResult> {
     }
   }
 
-  if (!content.trim()) throw new Error("Cloud runtime returned an empty response");
+  // An aborted turn may legitimately have no content — the client
+  // left before the first token. That is not an error.
+  if (!content.trim() && !aborted) {
+    throw new Error("Cloud runtime returned an empty response");
+  }
 
   const promptTokens = usage?.prompt_tokens ?? messagesTokens(opts.messages);
   const completionTokens = usage?.completion_tokens ?? estimateTokens(content);
@@ -272,6 +337,7 @@ export async function zaiCloudExec(opts: ExecOptions): Promise<ExecResult> {
     completionTokens,
     totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
     servedBy: "zai-cloud",
+    ...(aborted ? { aborted: true } : {}),
   };
 }
 

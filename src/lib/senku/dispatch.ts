@@ -31,6 +31,10 @@ export interface RoutedExecution {
   key: DispatchKey | null;
   /** How many pooled keys were attempted this turn. */
   attempts: number;
+  /** True when the turn ended because the CLIENT disconnected —
+   *  `exec.content` is the partial text generated so far. Terminal
+   *  state: never retried, never failed over. */
+  aborted?: boolean;
 }
 
 export interface DispatchParams {
@@ -53,16 +57,38 @@ export interface DispatchParams {
   /** Deep-effort flag: lets the Z.ai cloud THINK before answering
    *  on the failover path. Provider endpoints are unchanged. */
   thinking?: boolean;
+  /** Aborts the upstream request the moment the CLIENT disconnects
+   *  (Stop button, tab close, navigation) — the pooled keys stop
+   *  paying for tokens nobody will ever see. */
+  signal?: AbortSignal;
 }
 
 export async function dispatchCompletion(
   params: DispatchParams
 ): Promise<RoutedExecution> {
-  const { provider, model, messages, onDelta, onRestart, thinking } = params;
+  const { provider, model, messages, onDelta, onRestart, thinking, signal } = params;
   const tried = new Set<string>();
   // Set when a provider died mid-stream AFTER deltas reached the
   // client — the upcoming cloud re-emission then needs a restart.
   let emittedBeforeCloud = false;
+
+  // The client is already gone (aborted during the search phase) —
+  // nothing to generate, nothing to bill, no key to pick.
+  if (signal?.aborted) {
+    return {
+      exec: {
+        content: "",
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        servedBy: "provider",
+        aborted: true,
+      },
+      key: null,
+      attempts: 0,
+      aborted: true,
+    };
+  }
 
   for (;;) {
     const picked = await pickKey(provider, tried);
@@ -92,11 +118,25 @@ export async function dispatchCompletion(
       model,
       messages,
       onDelta,
+      signal,
     });
 
     if (attempt.ok) {
       noteKeySuccess(key.id);
       return { exec: attempt.result, key, attempts: tried.size };
+    }
+
+    // The CLIENT disconnected mid-stream — terminal. No key retry
+    // (nobody is listening), no cloud failover (it would regenerate
+    // an answer nobody asked for): bill what this key actually
+    // consumed and hand back the partial text.
+    if (attempt.reason === "aborted") {
+      return {
+        exec: attempt.partial,
+        key,
+        attempts: tried.size,
+        aborted: true,
+      };
     }
 
     noteKeyFailure(key.id, attempt.reason === "auth" ? "auth" : "transient");
@@ -122,6 +162,12 @@ export async function dispatchCompletion(
     messages,
     onDelta,
     thinking,
+    signal,
   });
-  return { exec, key: null, attempts: tried.size };
+  return {
+    exec,
+    key: null,
+    attempts: tried.size,
+    ...(exec.aborted ? { aborted: true } : {}),
+  };
 }

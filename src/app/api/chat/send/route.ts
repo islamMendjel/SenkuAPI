@@ -36,6 +36,19 @@ export async function POST(req: NextRequest) {
   await ensureSeed();
   const body = (await req.json().catch(() => ({}))) as SendBody;
 
+  // Client's connection (Stop button / tab close / navigation).
+  // Aborting this signal cancels the UPSTREAM generation at the
+  // source — without it, the provider keeps generating tokens into
+  // a dead stream and drains the key pool.
+  const clientSignal = req.signal;
+  if (clientSignal) {
+    clientSignal.addEventListener(
+      "abort",
+      () => console.log("[chat/send] client disconnected — cancelling upstream generation"),
+      { once: true }
+    );
+  }
+
   const content = (body.content ?? "").trim();
   if (!content) {
     return new Response(JSON.stringify({ error: "content is required" }), {
@@ -88,6 +101,7 @@ export async function POST(req: NextRequest) {
             persistUser: body.persistUser !== false,
             effort: normalizeEffort(body.effort),
             attachments,
+            signal: clientSignal,
             emit: (ev) => emit(ev as Record<string, unknown>),
           });
         } else {
@@ -101,6 +115,7 @@ export async function POST(req: NextRequest) {
             persistUser: body.persistUser !== false,
             effort: normalizeEffort(body.effort),
             attachments,
+            signal: clientSignal,
             emit: (ev) => emit(ev as Record<string, unknown>),
           });
         }

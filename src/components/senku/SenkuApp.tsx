@@ -174,7 +174,19 @@ export function SenkuApp() {
           Mobile: fixed overlay sliding in from the left. Desktop:
           in-flow column whose width animates 0 ↔ 264px (the chat
           reflows smoothly). Inert while closed so focus and screen
-          readers never wander into the hidden panel. */}
+          readers never wander into the hidden panel.
+
+          INVARIANT (audited Run 16): `inert` while CLOSED is
+          deliberate and correct — a hidden (0-width / off-screen)
+          panel must never be focusable or clickable. The control
+          that OPENS the sidebar (top-bar toggle) lives OUTSIDE this
+          subtree and stays fully enabled, so the panel can never be
+          "locked out": closed+inert → toggle (outside, active) →
+          open+focusable. React 19 serializes the boolean `inert`
+          attribute correctly in SSR, and it is removed entirely the
+          moment `open` flips true. Do NOT default inert to false on
+          the server render — that would leave a hidden panel in the
+          tab order and break keyboard accessibility. */}
       <div
         ref={shellRef}
         inert={!open}

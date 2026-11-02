@@ -1563,6 +1563,116 @@ re-verified end-to-end this run rather than rebuilt.
 
 ---
 
+## Run 16 — 2026-11-03: STOP REALLY STOPS — true upstream cancellation + SQLite WAL
+
+**User request (audit "fix" list).** The backend section: (a) when
+the user clicks Stop, the backend must cancel the upstream provider
+stream (`request.is_disconnected()` equivalent) — otherwise the
+provider keeps generating tokens into a dead stream and drains the
+key pool; (b) SQLite needs WAL + busy_timeout for concurrent
+writes; (c) the `<div inert>` sidebar wrapper looked stuck; (d)
+mid-stream key failover on 429/502.
+
+### Diagnosis first (what was real)
+
+- **(c) inert — NOT a defect.** Live-verified: `inert` is present
+  exactly while the sidebar is closed (correct a11y — a hidden
+  0-width panel must never be focusable), the top-bar toggle that
+  OPENS the sidebar lives outside the inert subtree and stays
+  fully enabled, and the attribute is removed entirely when open.
+  The audit's proposed fix ("default inert to false on desktop
+  SSR") would leave a hidden panel in the tab order — a keyboard
+  a11y regression. Shipped an INVARIANT comment on the shell div
+  instead so future audits don't flag it.
+- **(d) key failover — already shipped** (dispatch retry loop +
+  key-health circuit breaker: typed auth/transient failures, next
+  healthy key retried inside the same turn whenever no deltas were
+  emitted). No change needed; re-confirmed by code read.
+- **(a) upstream cancellation — REAL and the money leak.** The
+  route never observed `req.signal`; the gateway/dispatcher/
+  executor had no abort path; `tryProviderStream` only had its own
+  25 s inactivity timeout. A stopped turn kept the provider
+  generating to completion into a dead pipe.
+- **(b) WAL — real.** `journal_mode=delete` (SQLite default),
+  no busy_timeout, while SSE persistence + usage accounting + key
+  updates + titling all write concurrently.
+
+### What shipped
+
+**1. End-to-end cancellation chain.** `req.signal` (the client's
+connection) now threads route → `runChatTurn`/`runDuelTurn` →
+`dispatchCompletion` → `tryProviderStream`/`zaiCloudExec`:
+- Executor links the client signal into the upstream fetch's
+  AbortController — the provider connection is killed at the
+  source the moment the consumer is gone. The 25 s stall timeout
+  remains for genuine hangs.
+- A client-abort is a NEW typed outcome (`reason: "aborted"`,
+  carrying the partial text + estimated consumed tokens) —
+  **terminal**: never retried with another key, never failed over
+  to the cloud (regenerating an answer nobody asked for would be
+  the opposite of saving tokens).
+- Cloud path (Z.ai SDK) checks the signal between chunks and
+  cancels the SDK stream; `revealWords` (cache-hit typing) stops
+  typing into a dead pipe.
+- **Aborted-turn semantics:** the partial assistant reply IS
+  persisted (the timeline keeps exactly what streamed — the DB now
+  matches the UI instead of silently holding a longer full answer);
+  usage is billed for what was actually consumed (prompt + partial
+  estimate — the standard fallback when the provider's usage chunk
+  never arrives); the serving key's accumulator rolls forward; the
+  confidence-label corrective pass is skipped (no cloud spend on an
+  abandoned answer); and the truncated answer **never enters the
+  24 h response cache**. Duel lanes: both racing upstreams cancel.
+
+**2. SQLite WAL + busy_timeout.** The database file switched
+`delete → wal` (persistent in the file header; done via a one-off
+Prisma PRAGMA so no CLI dependency) and the connection URL now
+carries `journal_mode=WAL&busy_timeout=5000` so every fresh
+connection requests both. Verified live through the running
+server: `journal_mode: wal`, `busy_timeout(ms): 5000`. Next dev
+reloaded the env cleanly and all APIs kept serving 200.
+
+### Verification (all live)
+
+- **curl kill mid-stream** (900-word Casbah essay, SIGKILL at
+  1.8 s): dev.log shows both markers — `[chat/send] client
+  disconnected — cancelling upstream generation` and `[gateway]
+  turn cancelled by client — persisted 61 chars, 2432 tokens
+  billed, cache skipped`. DB: user msg + 61-char assistant partial
+  (byte-identical to the deltas the client received), UsageEvent
+  on the serving key with partial tokens (591 prompt + 17
+  completion, ×4 multiplier applied), ResponseCache rows **64 →
+  64** (no row for the truncated answer).
+- **UI Stop button**: abort landed 130 ms after send (before the
+  first delta) — both markers fired, 0-char partial created no
+  ghost message, stop→send swap instant, no error card.
+- **Regressions**: full send intact (3.1 s stream, persisted,
+  cached); identical resend served from cache (`cached: 1`,
+  `tokens: 0`, reveal typing intact); `lint` 0 errors; `tsc` 14
+  errors = exact pre-existing baseline (one scoping slip caught
+  and fixed during the run); 0 page errors; dev.log clean.
+- Test artifacts purged (3 test chats deleted; the user's own
+  "What Model Am I Talking To" chat from 16:37 preserved — 12
+  chats remain).
+
+### Deferred / known trade-offs
+
+- Aborting before the first token bills the estimated prompt (the
+  provider may or may not have started generating — unknowable
+  from our side; the estimate is the same fallback used when
+  providers omit usage stats).
+- The Z.ai SDK accepts `signal` via per-chunk checks rather than a
+  native abort option — cancellation is prompt (checked before
+  every read) but not instruction-level.
+- From the same audit, deferred to the backlog: SSR skeleton
+  paint, Tools-rail Canvas/artifacts drawer, reasoning accordions
+  (␐/`reasoning_content` normalization), non-destructive
+  branching (`parent_message_id`), Projects with scoped system
+  prompts, IndexedDB backup, sliding-window context compressor,
+  TTFT badge.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we
