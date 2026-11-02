@@ -106,7 +106,7 @@ export interface TurnResult {
   aborted?: boolean;
 }
 
-function deriveTitle(content: string): string {
+export function deriveTitle(content: string): string {
   const clean = content
     .replace(/\s+/g, " ")
     .replace(/[^\p{L}\p{N} ?!.,'’-]/gu, "")

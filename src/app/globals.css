@@ -626,6 +626,34 @@
   animation: senku-rec-in 0.18s ease-out both;
 }
 
+/* ── Run 22 — Image Forge ─────────────────────────────────────
+   The generating card's amber shimmer sweep. A wide soft gradient
+   traverses the placeholder once every 1.9s — slow enough to read
+   as “working”, never as a glitch. The float on the icon reuses
+   .senku-float (already in the kill group). */
+@keyframes senku-forge-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.senku-forge-card {
+  contain: paint;
+}
+.senku-forge-shimmer {
+  background: linear-gradient(
+    105deg,
+    transparent 32%,
+    rgba(251, 191, 36, 0.07) 46%,
+    rgba(255, 255, 255, 0.06) 52%,
+    transparent 68%
+  );
+  animation: senku-forge-sweep 1.9s ease-in-out infinite;
+  will-change: transform;
+}
+
 /* Respect users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .senku-aurora,
@@ -651,13 +679,15 @@
      changes — hover-peek still works, it just doesn't animate.
      Run 19: the living-gateway ring stops spinning, the bloom and
      stat chips land instantly (count-ups jump via the hook's own
-     reduced-motion check). */
+     reduced-motion check).
+     Run 22: the Image Forge shimmer freezes to a static tint. */
   .senku-view-in,
   .senku-input-in,
   .senku-pill-loading,
   .senku-pill-loading *,
   .senku-pulse-ring,
-  .senku-bloom {
+  .senku-bloom,
+  .senku-forge-shimmer {
     animation: none !important;
   }
   .senku-sidebar,

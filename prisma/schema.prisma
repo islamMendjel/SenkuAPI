@@ -102,6 +102,12 @@ model Message {
   // holds the earlier ones so the user can flip back through them.
   variants     String? // JSON AnswerVariant[] (regenerate history)
   variantIndex Int?    // index of the active answer inside `variants`
+  // Run 22 — Image Forge: JSON ImageRef of the ACTIVE generated image
+  // (id on disk, dimensions, bytes, ms, prompt). `content` carries a
+  // text marker for search/export/model history; the timeline renders
+  // the image card whenever this is set. Re-rolls snapshot earlier
+  // images inside `variants` entries (image field there too).
+  image        String? // JSON ImageRef
   createdAt DateTime @default(now())
 
   @@index([chatId, createdAt])

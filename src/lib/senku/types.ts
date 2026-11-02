@@ -63,6 +63,30 @@ export interface SearchSource {
 
 export type LimiterTierKey = "monthly" | "daily" | "burst5h";
 
+/**
+ * Run 22 — Image Forge dimensions. The composer's Image mode picks
+ * one; the server maps it onto the engine's supported sizes.
+ */
+export type ImageSize = "square" | "portrait" | "landscape" | "wide";
+
+/**
+ * One image forged by the Image Forge (Run 22). Self-contained so it
+ * can travel on a message, inside a variant, or alone over the wire:
+ *   id     — file id on disk (includes the extension)
+ *   bytes  — decoded file size
+ *   ms     — wall-clock forge duration
+ *   prompt — the prompt that produced it (captions, alt text, re-rolls)
+ */
+export interface ImageRef {
+  id: string;
+  mime: string;
+  width: number;
+  height: number;
+  bytes: number;
+  ms: number;
+  prompt: string;
+}
+
 export interface TierInfo {
   key: LimiterTierKey;
   label: string;

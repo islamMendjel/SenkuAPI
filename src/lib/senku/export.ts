@@ -5,7 +5,7 @@
 // either from the live store for the open chat or from
 // GET /api/chats/[id] for any other).
 
-import type { AttachmentRecord, SearchSource } from "@/lib/senku/types";
+import type { AttachmentRecord, ImageRef, SearchSource } from "@/lib/senku/types";
 
 /** A message in a shape both the live store and the persisted API
  *  response can be mapped onto without lossy coercion. */
@@ -21,6 +21,8 @@ export interface ExportMessage {
   createdAt?: string | null;
   sources?: SearchSource[] | null;
   attachments?: AttachmentRecord[] | null;
+  /** Run 22 — forged image on assistant messages. */
+  image?: ImageRef | null;
 }
 
 export interface ExportMeta {
@@ -94,6 +96,14 @@ export function chatToMarkdown(
       }
     } else if (m.role === "assistant") {
       out.push(`## Assistant — ${m.model ?? "model"}`, "", m.content, "");
+      // Run 22 — a forged image exports as a real markdown image
+      // pointing at the local file route (the bytes stay on disk).
+      if (m.image) {
+        out.push(
+          `![Generated image](/api/image/file/${m.image.id})`,
+          ""
+        );
+      }
       const bits: string[] = [];
       if (m.tokens) bits.push(`${m.tokens.toLocaleString()} tokens`);
       if (m.provider) bits.push(`via ${m.provider}`);

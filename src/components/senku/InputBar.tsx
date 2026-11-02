@@ -19,6 +19,7 @@ import {
   FileText,
   FoldVertical,
   Globe,
+  Image as ImageIcon,
   Loader2,
   Mic,
   Paperclip,
@@ -36,6 +37,7 @@ import { useSenku, type PendingAttachment } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
 import { effortModel, modelHint, modelMeta } from "@/lib/senku/models";
+import { IMAGE_SIZES, IMAGE_SIZE_KEYS } from "@/lib/senku/image-forge";
 import { countLines } from "@/lib/senku/format";
 import type { EffortLevel } from "@/lib/senku/types";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -67,6 +69,11 @@ const SLASH_COMMANDS = [
     cmd: "search",
     icon: Globe,
     desc: "Web search with cited sources",
+  },
+  {
+    cmd: "image",
+    icon: ImageIcon,
+    desc: "Forge an image from your next message",
   },
 ] as const;
 type SlashCommand = (typeof SLASH_COMMANDS)[number];
@@ -236,6 +243,7 @@ export function InputBar() {
     syncModels,
     streaming,
     sendMessage,
+    sendImage,
     stopStreaming,
     limiter,
     duelEnabled,
@@ -244,6 +252,10 @@ export function InputBar() {
     setChallenger,
     effort,
     setEffort,
+    imageMode,
+    toggleImageMode,
+    imageSize,
+    setImageSize,
     pendingAttachments,
     addAttachments,
     removePendingAttachment,
@@ -258,6 +270,7 @@ export function InputBar() {
   const [modelOpen, setModelOpen] = useState(false);
   const [challengerOpen, setChallengerOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
+  const [imageSizeOpen, setImageSizeOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   // Run 17 — slash popover: caret position drives the active /-token,
@@ -323,7 +336,12 @@ export function InputBar() {
     if (!canSend) return;
     const content = value.trim();
     setValue("");
-    void sendMessage(content);
+    // Run 22 — Image mode routes the send to the forge pipeline.
+    if (imageMode) {
+      void sendImage(content);
+    } else {
+      void sendMessage(content);
+    }
   };
 
   // stop → transcribe (server ASR) → land the text in the input
@@ -450,6 +468,12 @@ export function InputBar() {
     } else if (c.cmd === "search") {
       if (!searchEnabled) toggleSearch();
       toast({ description: "Web search on — answers will cite sources." });
+    } else if (c.cmd === "image") {
+      if (!imageMode) toggleImageMode();
+      toast({
+        description:
+          "Image mode on — your next message becomes a generated image (30–90s).",
+      });
     }
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -574,6 +598,17 @@ export function InputBar() {
                       {searchEnabled ? "On" : "Off"}
                     </span>
                   )}
+                  {c.cmd === "image" && (
+                    <span
+                      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                        imageMode
+                          ? "bg-amber-300/15 text-amber-200"
+                          : "bg-zinc-700/60 text-zinc-400"
+                      }`}
+                    >
+                      {imageMode ? "On" : "Off"}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -663,7 +698,11 @@ export function InputBar() {
               }
             }}
             rows={1}
-            placeholder="Message SenkuAPI... (/ for commands)"
+            placeholder={
+              imageMode
+                ? "Describe the image to forge… (/ for commands)"
+                : "Message SenkuAPI... (/ for commands)"
+            }
             aria-label="Message SenkuAPI"
             aria-controls={slashOpen ? "senku-slash-menu" : undefined}
             aria-activedescendant={
@@ -740,6 +779,31 @@ export function InputBar() {
                     {searchEnabled ? "On" : "Off"}
                   </span>
                 </button>
+                <button
+                  onClick={() => {
+                    if (!imageMode) {
+                      toast({
+                        description:
+                          "Image mode — your next message becomes a generated image (30–90s).",
+                      });
+                    }
+                    toggleImageMode();
+                    setAttachOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+                >
+                  <ImageIcon className="h-4 w-4 text-zinc-400" />
+                  Generate an image
+                  <span
+                    className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                      imageMode
+                        ? "bg-amber-300/15 text-amber-200"
+                        : "bg-zinc-700/60 text-zinc-400"
+                    }`}
+                  >
+                    {imageMode ? "On" : "Off"}
+                  </span>
+                </button>
                 {duelAvailable && (
                   <button
                     onClick={() => {
@@ -783,6 +847,93 @@ export function InputBar() {
               <Globe className="h-3.5 w-3.5" />
               Search
             </button>
+
+            {/* Run 22 — Image Forge toggle. Arms the forge pipeline for
+                the next send; Search and Duel disarm automatically
+                (different pipelines, never ambiguous). */}
+            <button
+              onClick={() => {
+                if (!imageMode) {
+                  toast({
+                    description:
+                      "Image mode — your next message becomes a generated image (30–90s).",
+                  });
+                }
+                toggleImageMode();
+              }}
+              aria-pressed={imageMode}
+              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+                imageMode
+                  ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
+                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+              }`}
+              title="Image Forge — turn your next message into a generated image (runs on the Z.ai image engine, never spends pool tokens)"
+            >
+              <ImageIcon className="h-3.5 w-3.5" />
+              Image
+            </button>
+
+            {/* Forge dimensions — shown while Image mode is armed */}
+            {imageMode && (
+              <Popover open={imageSizeOpen} onOpenChange={setImageSizeOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    aria-label="Pick image dimensions"
+                    title={`Dimensions — currently ${IMAGE_SIZES[imageSize].label} (${IMAGE_SIZES[imageSize].dims})`}
+                    className="flex h-8 max-w-[110px] shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[150px]"
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
+                      at
+                    </span>
+                    <span className="truncate font-medium">
+                      {IMAGE_SIZES[imageSize].label}
+                    </span>
+                    <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  side="top"
+                  align="start"
+                  className="w-64 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+                >
+                  <div className="border-b border-zinc-800 px-3.5 py-2.5">
+                    <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+                      IMAGE DIMENSIONS
+                    </span>
+                  </div>
+                  <div className="py-1">
+                    {IMAGE_SIZE_KEYS.map((k) => {
+                      const s = IMAGE_SIZES[k];
+                      const active = k === imageSize;
+                      return (
+                        <button
+                          key={k}
+                          onClick={() => {
+                            setImageSize(k);
+                            setImageSizeOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-white/5 ${
+                            active ? "text-white" : "text-zinc-300"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[13px] font-medium">
+                              {s.label}
+                            </span>
+                            <span className="block truncate text-[11px] text-zinc-500">
+                              {s.dims} · {s.hint}
+                            </span>
+                          </span>
+                          {active && (
+                            <Check className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
 
             {/* Effort dial — fast / medium / deep. Each level can
                 route to a different pooled engine; the popover shows

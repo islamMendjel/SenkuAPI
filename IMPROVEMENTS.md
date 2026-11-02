@@ -2185,6 +2185,116 @@ capability upgrade on the surface users live on.
 
 ---
 
+## Run 22 — 2026-11-03: THE IMAGE FORGE — images are born in the chat
+
+**User request.** "Good job, again look at the site first, then
+innovate. Think about the user experience and think outside the box.
+Make one bold change that improves conversions or the look and feel,
+not a small tweak… don't make redundant things — only improvements
+and upgrades, correcting wrong things and adding useful things, cook
+but not break or downgrade."
+
+**Observed first.** Fresh walkthrough (welcome intact at Run 19
+form, chat flows with Run 21's regenerate verified live, rail
+audited). Gap scan against the standing list: the app had text,
+search, duels, canvas, files, voice, regenerate — but ZERO image
+capability, while both ChatGPT and Gemini generate images in-chat.
+Image generation is one of the top reasons people try an AI chat
+product at all; for a "personal gateway" it was the single boldest
+non-redundant addition available. The studio's Z.ai image engine
+(probed first from the backend: 1024² JPEG in 65s, base64 response)
+made it real — no pooling tricks, no fakes.
+
+**The change: Image Forge — a full image pipeline in the chat.**
+- **Composer Image pill** (between Search and Effort): arms the
+  forge for the next send. Mutually exclusive with Search + Duel by
+  construction (arming one disarms the others — a send can never be
+  ambiguous). Also in the "+" menu, the /image slash command, and
+  the ⌘K palette ("Generate an image").
+- **Dimensions picker** ("at Landscape" pill while armed): Square
+  1024², Portrait 768×1344, Landscape 1344×768, Wide 1440×720 —
+  each with an honest use-case hint.
+- **Live generating card**: amber shimmer sweep at the chosen aspect
+  ratio, floating icon, and a REAL elapsed-seconds counter ("4s ·
+  the forge usually takes 30–90s · 1344x768") — the engine is slow,
+  so the card proves it's alive. Reduced-motion: static tint.
+- **Settled image card**: rounded bordered image, hover-zoom
+  affordance, click → fullscreen lightbox (Esc closes), one-click
+  download (`?download=1` → Content-Disposition), prompt caption.
+- **Honest provenance, per image**: "Image Forge · 1344×768 ·
+  121 KB · 27.1s · 0 pool tokens" — the receipt states the engine,
+  the dimensions, the file size, the forge duration, and that ZERO
+  pooled tokens were spent (the forge runs on the Z.ai image
+  engine, never on the pool's keys).
+- **Re-rolls keep everything (Run 21 machinery, extended)**:
+  regenerate on an image turn snapshots the current image into the
+  variant history and re-forges the same prompt + dimensions; the
+  ‹ 2/2 › navigator flips between images AND their receipts; the
+  variant route now mirrors the active ImageRef into the row's
+  `image` column exactly as it mirrors content/model.
+- **Persistence, honestly**: `Message.image` (JSON ImageRef — id on
+  disk, dims, bytes, ms, prompt). `content` carries a text marker
+  ("Generated image — "…" (1344×768)") so search, export (real
+  markdown image link), and model history all stay meaningful.
+  Image bytes live in `generated-images/` on disk (never in
+  SQLite), served by `/api/image/file/[id]` with a strict id
+  pattern (traversal-proof, verified 404) and immutable caching.
+- **Lifecycle parity with text turns**: Stop aborts the forge (the
+  server discards the orphan file — verified: no third file after
+  the aborted run); failures render the standard error card with a
+  forge-specific "Retry the forge" button (no meaningless
+  "Switch model"); temporary chats forge with ZERO DB writes.
+
+**One real bug caught during verification (fixed before ship):**
+opening an image chat ADOPTED its stored `model: "image-forge"` as
+the composer's model — a text follow-up then requested a model the
+pool doesn't have and fell to cloud failover with a wrong receipt
+("Image Forge · cloud failover · 1.3k tokens"). Fix: selectChat now
+refuses to adopt the pseudo-model (falls back to the default pool
+model); the stray test row was corrected in the DB; re-verified:
+follow-up renders "GLM 5.3 · APInex pool · 2.7k tokens · cache:
+miss". Exactly the "cook but not break" failure mode the user
+warned about — caught by reading the receipt, not the screenshot.
+
+**Verified (all real):**
+- Armed state: placeholder swaps to "Describe the image to forge…",
+  amber pill, "at" dimensions pill, toast.
+- Forge: 1344×768 PNG generated (27.1s first, 72.6s re-roll);
+  generating card screenshotted mid-count; user bubble shows the
+  "Image · 1344x768" badge.
+- Receipt: "Image Forge · 1344×768 · 121 KB · 27.1s · 0 pool
+  tokens"; DB shows exactly ONE assistant row with the ImageRef.
+- Lightbox opens (aria-dialog) and closes via Escape.
+- Re-roll → "2/2"; flip back → ORIGINAL image returns with ITS OWN
+  receipt (27.1s vs 72.6s); DB: vCount 2, variantIndex 0 mirrored,
+  per-variant ms [27134, 72616], still exactly one row.
+- Reload → sidebar → chat reopens with image loaded, "1/2" nav,
+  receipt restored (immutable file cache hit); refined title
+  "Bioluminescent Forest Night" (title pass works for image chats).
+- Text follow-up in an image chat: correct GLM 5.3 provenance.
+- Temporary chat + Stop: error card "Image generation stopped.
+  Retry the forge"; 0 DB rows; no orphan file.
+- Mobile 390×844: image card fits (316px), nav visible, no page
+  overflow; desktop welcome byte-stable (headline, pills, no
+  lineup).
+- Hydration: 0 warnings on clean welcome load AND on chat open
+  (the two console entries were mid-session Fast-Refresh artifacts
+  during editing — non-reproducible on clean loads, matching the
+  Run 21 baseline note).
+- lint 0 errors (2 pre-existing script warnings); tsc 8 errors =
+  exact pre-run baseline, zero new; page errors none; dev.log
+  clean (image column flowing through Prisma).
+
+**Scope discipline:** schema +1 column, 2 new API routes (generate
++ file serve), one server lib (SDK call + disk store), store state
+(imageMode/imageSize/sendImage) reusing the existing
+abort/variant/truncate/title machinery, one pill + one popover +
+two cards in the timeline. Welcome untouched, no existing behavior
+changed except the mutual-exclusion toggles and the selectChat
+pseudo-model guard (both fixes, not regressions).
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we
@@ -2198,7 +2308,7 @@ they ship).
 | Scheduled prompts / recurring tasks | ChatGPT, Gemini | OPEN |
 | Memory across chats | ChatGPT, Claude | OPEN (deliberately: personal gateway, no profile harvesting) |
 | Code interpreter / sandboxed execution | ChatGPT | OPEN |
-| Image generation in-chat | ChatGPT, Gemini | OPEN |
+| Image generation in-chat | ChatGPT, Gemini | **MATCHED (Run 22)** — the Image Forge: composer mode + dimensions picker, live elapsed-time generating card, lightbox + download, per-image provenance receipts (dims · KB · seconds · 0 pool tokens) and re-roll variant history with per-image receipts — ChatGPT shows none of that honesty |
 | Projects / folders with per-project instructions | ChatGPT, Claude | OPEN |
 | Voice mode (live duplex conversation) | ChatGPT, Gemini | PARTIAL — we have push-to-talk dictation + read-aloud |
 | Deep research (multi-step agentic search) | Gemini, ChatGPT | **MATCHED (Run 8)** — plan → multi-angle retrieve → cross-check, with per-source date/authority audits the incumbents don't surface; every stage streams live |

@@ -125,6 +125,8 @@ export function Sidebar({
           createdAt: m.createdAt ?? null,
           sources: m.sources ?? null,
           attachments: m.attachments ?? null,
+          // Run 22 — forged images export as markdown image links.
+          image: m.image ?? null,
         }));
       } else {
         const res = await fetch(`/api/chats/${chat.id}`);

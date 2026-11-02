@@ -5,6 +5,7 @@
 
 import { create } from "zustand";
 import { DEFAULT_MODEL } from "@/lib/senku/constants";
+import { sizeFromDims } from "@/lib/senku/image-forge";
 import { countLines } from "@/lib/senku/format";
 import { autoChallenger } from "@/lib/senku/models";
 import { StreamFlushScheduler } from "@/lib/senku/raf-throttle";
@@ -12,6 +13,8 @@ import type {
   AttachmentRecord,
   ChatMessageData,
   EffortLevel,
+  ImageRef,
+  ImageSize,
   LimiterStatus,
   ProviderView,
   SearchSource,
@@ -65,6 +68,9 @@ export interface AnswerVariant {
   servedBy: string | null;
   keyLabel: string | null;
   effort: EffortLevel | null;
+  /** Run 22 — image re-roll variants carry their ImageRef; text
+   *  variants simply omit it. */
+  image?: ImageRef | null;
 }
 
 export interface UIMessage {
@@ -105,6 +111,16 @@ export interface UIMessage {
   variants?: AnswerVariant[] | null;
   /** index of the active answer inside `variants` */
   variantIndex?: number | null;
+  /** Run 22 — the ACTIVE forged image (rendered as an image card
+   *  instead of markdown). `content` keeps a text marker so search,
+   *  export and model history stay meaningful. */
+  image?: ImageRef | null;
+  /** true while the Image Forge is generating this turn's image */
+  imagePending?: boolean;
+  /** set on USER bubbles sent through Image mode — drives the
+   *  bubble badge and routes Retry back to the forge (client-only:
+   *  failed turns are never persisted, so no column is needed) */
+  imageRequest?: { size: ImageSize } | null;
 }
 
 export interface ChatListItem {
@@ -141,6 +157,27 @@ interface SenkuState {
   challenger: string | null;
   /** effort dial — fast / medium (default) / deep */
   effort: EffortLevel;
+  /** Run 22 — Image Forge mode: the next message is forged into an
+   *  image instead of streamed as text. Mutually exclusive with
+   *  Search and Duel (different pipelines — arming one disarms the
+   *  others, so a send can never be ambiguous). */
+  imageMode: boolean;
+  /** dimensions for the next forged image */
+  imageSize: ImageSize;
+  toggleImageMode: () => void;
+  setImageSize: (s: ImageSize) => void;
+  /** Forge an image from a prompt (Run 22). Mirrors sendMessage's
+   *  lifecycle: optimistic bubbles, abortable via Stop, error card
+   *  with retry, re-rolls arrive with variant snapshots attached. */
+  sendImage: (
+    prompt: string,
+    opts?: {
+      appendUserBubble?: boolean;
+      persistUser?: boolean;
+      size?: ImageSize;
+      regenVariants?: AnswerVariant[];
+    }
+  ) => Promise<void>;
 
   currentChatId: string | null;
   messages: UIMessage[];
@@ -271,6 +308,8 @@ export const useSenku = create<SenkuState>((set, get) => ({
   duelEnabled: false,
   challenger: null,
   effort: "medium",
+  imageMode: false,
+  imageSize: "square",
 
   currentChatId: null,
   messages: [],
@@ -414,7 +453,13 @@ export const useSenku = create<SenkuState>((set, get) => ({
   setSidebarOpen: (v) => set({ sidebarOpen: v }),
   setSearchOpen: (v) => set({ searchOpen: v, searchFilter: v ? get().searchFilter : "" }),
   setSearchFilter: (v) => set({ searchFilter: v }),
-  toggleSearch: () => set((s) => ({ searchEnabled: !s.searchEnabled })),
+  // Arming search disarms Image mode (a forged image never runs a
+  // web search — the modes are different pipelines, Run 22).
+  toggleSearch: () =>
+    set((s) => ({
+      searchEnabled: !s.searchEnabled,
+      imageMode: !s.searchEnabled ? false : s.imageMode,
+    })),
   setSearchEnabled: (v) => set({ searchEnabled: v }),
   toggleTemporary: () =>
     set((s) => ({
@@ -448,13 +493,24 @@ export const useSenku = create<SenkuState>((set, get) => ({
           ? s.challenger
           : autoChallenger(s.models, s.model);
       if (!challenger) return; // nothing to duel against
-      set({ duelEnabled: true, challenger });
+      // Arming duel disarms Image mode (duels race text models).
+      set({ duelEnabled: true, challenger, imageMode: false });
     } else {
       set({ duelEnabled: false });
     }
   },
   setChallenger: (m) => set({ challenger: m }),
   setEffort: (e) => set({ effort: e }),
+
+  // Arming Image mode disarms Search + Duel: a forged image is
+  // neither grounded nor a race — the composer pill, placeholder and
+  // send all switch to the forge pipeline (Run 22).
+  toggleImageMode: () =>
+    set((s) => ({
+      imageMode: !s.imageMode,
+      ...(!s.imageMode ? { searchEnabled: false, duelEnabled: false } : {}),
+    })),
+  setImageSize: (v) => set({ imageSize: v }),
 
   async syncModels() {
     try {
@@ -623,7 +679,16 @@ export const useSenku = create<SenkuState>((set, get) => ({
       set((s) => ({
         currentChatId: id,
         temporary: false,
-        model: chat.model ?? s.model,
+        // Run 22 guard: image chats store "image-forge" as their model
+        // (honest in exports/search) but the composer may never ADOPT
+        // it — a text follow-up would request a model the pool doesn't
+        // have. Keep the session's real model instead.
+        model:
+          chat.model && chat.model !== "image-forge"
+            ? chat.model
+            : s.models.includes(DEFAULT_MODEL)
+              ? DEFAULT_MODEL
+              : s.model,
         // staged files belong to the previous conversation
         pendingAttachments: [],
         viewEpoch: s.viewEpoch + 1,
@@ -638,6 +703,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
               altModel?: unknown;
               variants?: unknown;
               variantIndex?: unknown;
+              image?: unknown;
             }
           ) => ({
             ...m,
@@ -658,6 +724,11 @@ export const useSenku = create<SenkuState>((set, get) => ({
                 : null,
             variantIndex:
               typeof m.variantIndex === "number" ? m.variantIndex : null,
+            // Run 22 — forged image reference (parsed by the GET route).
+            image:
+              m.image && typeof m.image === "object"
+                ? (m.image as ImageRef)
+                : null,
           })
         ),
       }));
@@ -753,6 +824,185 @@ export const useSenku = create<SenkuState>((set, get) => ({
     });
   },
 
+  /** Run 22 — Image Forge send. Mirrors sendMessage's lifecycle:
+   *  optimistic user bubble (badged as an image request), a live
+   *  generating card (imagePending), abortable via Stop (the server
+   *  discards the orphan file), error card with retry, and re-rolls
+   *  that arrive with variant snapshots (earlier images kept). */
+  async sendImage(prompt, opts) {
+    const state = get();
+    const text = prompt.trim();
+    if (state.streaming || !text) return;
+    // A duel still awaiting its pick? Resolve it first, exactly like
+    // a text send (the turn history must have one voice).
+    const pending = [...state.messages].reverse().find((m) => m.duel && !m.duelPicked);
+    if (pending) {
+      await get().pickDuelWinner(pending.id, "a");
+    }
+    const s2 = get();
+    const temporary = s2.temporary;
+    const size = opts?.size ?? s2.imageSize;
+    const appendUserBubble = opts?.appendUserBubble !== false;
+    const persistUser = opts?.persistUser !== false;
+    const userId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const assistantId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Did this turn walk in WITHOUT a chat? (Then a successful forge
+    // created one — its derived title deserves the refine pass.)
+    const hadChat = s2.currentChatId != null;
+
+    set({
+      streaming: true,
+      messages: [
+        ...s2.messages,
+        ...(appendUserBubble
+          ? [
+              {
+                id: userId,
+                role: "user" as const,
+                content: text,
+                imageRequest: { size },
+              },
+            ]
+          : []),
+        {
+          id: assistantId,
+          role: "assistant" as const,
+          content: "",
+          streaming: true,
+          model: "image-forge",
+          imagePending: true,
+        },
+      ],
+    });
+
+    const updateAssistant = (patch: Partial<UIMessage>) => {
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === assistantId ? { ...m, ...patch } : m
+        ),
+      }));
+    };
+
+    const controller = new AbortController();
+    streamController = controller;
+
+    try {
+      const res = await fetch("/api/image/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          chatId: temporary ? null : s2.currentChatId,
+          prompt: text,
+          size,
+          temporary,
+          persistUser,
+          ...(opts?.regenVariants?.length
+            ? { regenVariants: opts.regenVariants }
+            : {}),
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        let message = errText;
+        try {
+          message = (JSON.parse(errText) as { error?: string }).error ?? errText;
+        } catch {
+          // raw text fallback
+        }
+        throw new Error(message || `Image generation failed (${res.status})`);
+      }
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        chatId?: string | null;
+        userMessageId?: string | null;
+        assistantMessageId?: string | null;
+        content?: string;
+        image?: ImageRef;
+      };
+      if (!data.ok || !data.image) {
+        throw new Error(data.error || "Image generation failed.");
+      }
+      if (!temporary && typeof data.chatId === "string" && data.chatId) {
+        set({ currentChatId: data.chatId });
+      }
+      // Re-roll: the fresh image joins the variant history (earlier
+      // images first, the new one last + active) — nothing is lost.
+      const regenVariants = opts?.regenVariants;
+      const variants = regenVariants
+        ? ([
+            ...regenVariants,
+            {
+              content: data.content ?? "",
+              model: "image-forge",
+              tokens: 0,
+              cached: false,
+              servedBy: "zai-cloud",
+              keyLabel: null,
+              effort: null,
+              image: data.image,
+            },
+          ] satisfies AnswerVariant[])
+        : undefined;
+      updateAssistant({
+        id: data.assistantMessageId ?? assistantId,
+        content: data.content ?? "",
+        image: data.image,
+        imagePending: false,
+        streaming: false,
+        model: "image-forge",
+        provider: "Z.ai cloud",
+        servedBy: "zai-cloud",
+        tokens: 0,
+        cached: false,
+        phase: null,
+        ...(variants
+          ? { variants, variantIndex: regenVariants!.length }
+          : {}),
+      });
+      // The user bubble gets its server id (edit/regen flows target it).
+      if (appendUserBubble && data.userMessageId) {
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === userId ? { ...m, id: data.userMessageId! } : m
+          ),
+        }));
+      }
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === "AbortError") {
+        // Stop pressed — like a stopped text turn, nothing survives.
+        updateAssistant({
+          streaming: false,
+          imagePending: false,
+          phase: null,
+          error: "Image generation stopped.",
+        });
+      } else {
+        updateAssistant({
+          streaming: false,
+          imagePending: false,
+          phase: null,
+          error: err.message || "Image generation failed.",
+          content: "",
+        });
+      }
+    } finally {
+      streamController = null;
+      set({ streaming: false });
+      if (!temporary) {
+        await get().refreshChats();
+        if (!hadChat) {
+          // A brand-new image chat — refine its derived title too.
+          const freshId = get().currentChatId;
+          if (freshId) void refineTitle(set, freshId);
+        }
+      }
+      void get().refreshUsage();
+    }
+  },
+
   async editMessage(messageId, content) {
     const state = get();
     if (state.streaming || !content.trim()) return;
@@ -839,6 +1089,21 @@ export const useSenku = create<SenkuState>((set, get) => ({
     if (userIdx === -1) return;
     const userMsg = state.messages[userIdx];
 
+    // Run 22 — the failed turn was an Image Forge request: retry
+    // re-forges the image (same prompt, same dimensions) instead of
+    // streaming a text answer. The imageRequest flag lives on the
+    // in-memory bubble — failed turns are never persisted, so no
+    // server round-trip is needed to know this was an image turn.
+    if (userMsg.imageRequest) {
+      set({ messages: state.messages.slice(0, failedIdx) });
+      await get().sendImage(userMsg.content, {
+        appendUserBubble: false,
+        persistUser: userMsg.id.startsWith("u-"),
+        size: userMsg.imageRequest.size,
+      });
+      return;
+    }
+
     const history: ChatMessageData[] = state.messages
       .slice(0, userIdx)
       .map((m) => ({
@@ -889,7 +1154,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
       last.error ||
       last.duel ||
       last.runnerUp ||
-      !last.content.trim()
+      (!last.content.trim() && !last.image)
     ) {
       return;
     }
@@ -903,6 +1168,47 @@ export const useSenku = create<SenkuState>((set, get) => ({
     }
     if (userIdx === -1) return;
     const userMsg = msgs[userIdx];
+
+    // ── Run 22 — IMAGE RE-ROLL: the last answer is a forged image.
+    // The current image is snapshotted into the variant history
+    // (nothing is ever lost — re-rolls are the point of image gen),
+    // the old row is truncated server-side, and the same prompt is
+    // re-forged with the same dimensions. ──
+    if (last.image) {
+      const regenVariants: AnswerVariant[] = [
+        ...(last.variants ?? []),
+        {
+          content: last.content,
+          model: last.model ?? "image-forge",
+          tokens: 0,
+          cached: false,
+          servedBy: last.servedBy ?? null,
+          keyLabel: last.keyLabel ?? null,
+          effort: last.effort ?? null,
+          image: last.image,
+        },
+      ];
+      const userPersisted = !userMsg.id.startsWith("u-");
+      if (!state.temporary && state.currentChatId && userPersisted) {
+        await fetch("/api/chat/truncate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageId: userMsg.id }),
+        }).catch(() => {});
+      }
+      set({ messages: msgs.slice(0, userIdx + 1) });
+      const size =
+        userMsg.imageRequest?.size ??
+        sizeFromDims(last.image.width, last.image.height) ??
+        state.imageSize;
+      await get().sendImage(userMsg.content, {
+        appendUserBubble: false,
+        persistUser: userMsg.id.startsWith("u-"),
+        size,
+        regenVariants,
+      });
+      return;
+    }
 
     // Snapshot every earlier answer of this turn (existing variant
     // history + the current one), full provenance included.
@@ -1013,6 +1319,9 @@ export const useSenku = create<SenkuState>((set, get) => ({
               servedBy: v.servedBy,
               keyLabel: v.keyLabel,
               effort: v.effort,
+              // Image re-roll variants swap their image with the rest
+              // of the receipt (Run 22) — text variants clear it.
+              image: v.image ?? null,
             }
           : m
       ),
@@ -1032,6 +1341,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
           servedBy: v.servedBy,
           keyLabel: v.keyLabel,
           effort: v.effort,
+          image: v.image ?? null,
         }),
       }).catch(() => {});
     }

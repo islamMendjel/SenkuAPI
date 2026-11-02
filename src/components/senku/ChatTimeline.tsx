@@ -20,11 +20,14 @@ import {
   ChevronRight,
   Copy,
   Database,
+  Download,
   Eye,
   FileImage,
   FileText,
+  Image as ImageIcon,
   Link2Off,
   Loader2,
+  Maximize2,
   Pencil,
   RefreshCcw,
   Swords,
@@ -36,8 +39,9 @@ import { useSenku, type DuelLane, type UIMessage } from "@/lib/store";
 import { formatCompact } from "@/lib/senku/format";
 import { confidenceOf } from "@/lib/senku/grounding";
 import type { ConfidenceLabel } from "@/lib/senku/grounding";
+import { IMAGE_SIZES } from "@/lib/senku/image-forge";
 import { modelMeta } from "@/lib/senku/models";
-import type { AttachmentRecord } from "@/lib/senku/types";
+import type { AttachmentRecord, ImageRef } from "@/lib/senku/types";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -210,6 +214,15 @@ function UserMessage({ message }: { message: UIMessage }) {
   return (
     <div className="group senku-fade-up flex flex-col items-end">
       <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[#2f2f30] px-4 py-2.5 text-[15px] leading-relaxed text-zinc-100">
+        {message.imageRequest && (
+          <span
+            className="mb-1.5 inline-flex items-center gap-1.5 rounded-lg border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200"
+            title={`Forged at ${IMAGE_SIZES[message.imageRequest.size].dims}`}
+          >
+            <ImageIcon className="h-3 w-3 shrink-0" aria-hidden />
+            Image · {IMAGE_SIZES[message.imageRequest.size].dims}
+          </span>
+        )}
         {message.attachments?.length ? (
           <AttachmentChips attachments={message.attachments} />
         ) : null}
@@ -240,6 +253,22 @@ function UserMessage({ message }: { message: UIMessage }) {
 
 /** One quiet provenance line: "GLM 5.3 · APInex pool · 1.9k tokens · cache: hit". */
 function provenanceLine(m: UIMessage): string {
+  // Run 22 — forged images carry their own receipt: dimensions, file
+  // size, forge duration, and the fact that zero pool tokens were
+  // spent (the forge runs on the Z.ai image engine, not the pool).
+  if (m.image) {
+    const parts = ["Image Forge", `${m.image.width}×${m.image.height}`];
+    if (m.image.bytes > 0) {
+      parts.push(
+        m.image.bytes >= 1024 * 1024
+          ? `${(m.image.bytes / (1024 * 1024)).toFixed(1)} MB`
+          : `${Math.max(1, Math.round(m.image.bytes / 1024))} KB`
+      );
+    }
+    if (m.image.ms > 0) parts.push(`${(m.image.ms / 1000).toFixed(1)}s`);
+    parts.push("0 pool tokens");
+    return parts.join(" · ");
+  }
   const parts: string[] = [];
   // The effort dial leaves its mark — fast/deep turns say so.
   if (m.effort === "fast") parts.push("Fast mode");
@@ -426,6 +455,145 @@ function DuelMessage({ message }: { message: UIMessage }) {
   );
 }
 
+/** Run 22 — the Image Forge's live generating card. A shimmering
+ *  placeholder at the chosen aspect ratio with a real elapsed-seconds
+ *  counter (the forge takes 30–90s — the number proves it's alive). */
+function ImageForgePending() {
+  const imageSize = useSenku((s) => s.imageSize);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = IMAGE_SIZES[imageSize];
+  return (
+    <div
+      className="senku-forge-card relative w-full max-w-[min(440px,100%)] overflow-hidden rounded-xl border border-amber-300/20 bg-[#1d1d20]"
+      role="status"
+      aria-live="polite"
+      style={{ aspectRatio: `${s.width} / ${s.height}` }}
+    >
+      <div className="senku-forge-shimmer absolute inset-0" aria-hidden />
+      <div className="relative flex h-full w-full flex-col items-center justify-center gap-2.5 p-6">
+        <ImageIcon
+          className="h-7 w-7 text-amber-300 senku-float"
+          aria-hidden
+        />
+        <p className="senku-thinking-label text-[14px] font-medium">
+          Forging your image…
+        </p>
+        <p className="text-[11.5px] tabular-nums text-zinc-500">
+          {elapsed}s · the forge usually takes 30–90s · {s.dims}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Run 22 — a settled forged image: rounded card, hover-zoom affordance,
+ *  click → fullscreen lightbox (Esc closes), one-click download, prompt
+ *  caption. Served from the local file route with immutable caching. */
+function GeneratedImageCard({ image }: { image: ImageRef }) {
+  const [zoom, setZoom] = useState(false);
+  const url = `/api/image/file/${image.id}`;
+
+  // Esc closes the lightbox — the keyboard path is first-class.
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setZoom(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoom]);
+
+  return (
+    <figure className="senku-fade-up mt-0.5 w-full max-w-[min(480px,100%)]">
+      <button
+        type="button"
+        onClick={() => setZoom(true)}
+        aria-label="Open image full size"
+        title="Open full size"
+        className="group relative block w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#1d1d20] transition-colors hover:border-zinc-600"
+      >
+        {/* Plain img: the file route serves with immutable caching and
+            exact dimensions — next/image adds nothing here. */}
+        <img
+          src={url}
+          alt={`Generated image — ${image.prompt}`}
+          width={image.width}
+          height={image.height}
+          className="h-auto w-full"
+        />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover:bg-black/30 group-hover:opacity-100"
+        >
+          <Maximize2 className="h-5 w-5 text-white drop-shadow" />
+        </span>
+      </button>
+      <figcaption className="mt-1.5 flex items-center justify-between gap-2">
+        <span
+          className="min-w-0 truncate text-[11.5px] text-zinc-500"
+          title={image.prompt}
+        >
+          {image.prompt}
+        </span>
+        <a
+          href={`${url}?download=1`}
+          download
+          aria-label="Download image"
+          title="Download image"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </a>
+      </figcaption>
+
+      {zoom && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-black/90 p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Generated image — full size"
+          onClick={() => setZoom(false)}
+        >
+          <img
+            src={url}
+            alt={`Generated image — ${image.prompt}`}
+            className="max-h-[80vh] max-w-full cursor-zoom-out rounded-lg object-contain shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div
+            className="flex items-center gap-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="text-[12px] tabular-nums text-zinc-400">
+              {image.width}×{image.height}
+            </span>
+            <a
+              href={`${url}?download=1`}
+              download
+              className="flex h-8 items-center gap-1.5 rounded-full border border-zinc-600 bg-white/10 px-3.5 text-[12px] font-medium text-zinc-100 transition-colors hover:bg-white/20"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={() => setZoom(false)}
+              className="flex h-8 items-center gap-1.5 rounded-full border border-zinc-700 px-3.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/10"
+            >
+              <X className="h-3.5 w-3.5" />
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </figure>
+  );
+}
+
 function AssistantMessage({
   message,
   speech,
@@ -459,6 +627,9 @@ function AssistantMessage({
     !message.streaming && confidence
       ? withoutConfidenceLine(message.content)
       : message.content;
+  // Run 22 — image turns never offer "switch model" retries: the
+  // forge is a single engine, retrying re-forges the same prompt.
+  const isForgeError = message.error && message.model === "image-forge";
 
   return (
     <div className="group senku-fade-up">
@@ -489,9 +660,9 @@ function AssistantMessage({
                   className="flex h-7 items-center gap-1.5 rounded-full border border-zinc-500/60 bg-white/10 px-3 text-[12px] font-medium text-zinc-100 transition-colors hover:bg-white/20 disabled:opacity-40"
                 >
                   <RefreshCcw className="h-3 w-3" />
-                  Retry
+                  {isForgeError ? "Retry the forge" : "Retry"}
                 </button>
-                {switchTarget && (
+                {switchTarget && !isForgeError && (
                   <button
                     onClick={() => {
                       setModel(switchTarget);
@@ -511,6 +682,13 @@ function AssistantMessage({
             /* Awaiting-pick duel: two racing lanes instead of one
                answer — per-lane thinking, streaming, badges, Keep. */
             <DuelMessage message={message} />
+          ) : message.imagePending ? (
+            /* Run 22 — the forge is running: live shimmer card with a
+               real elapsed counter (30–90s, honestly labeled). */
+            <ImageForgePending />
+          ) : message.image ? (
+            /* Run 22 — a settled forged image (variant swaps included). */
+            <GeneratedImageCard image={message.image} />
           ) : isThinking ? (
             <div className="flex h-7 items-center" aria-live="polite">
               <span className="senku-thinking-label text-[14px] font-medium">

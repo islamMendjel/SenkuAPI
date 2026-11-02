@@ -29,6 +29,8 @@ export async function GET(
       attachments: m.attachments ? JSON.parse(m.attachments) : null,
       // Regenerate variant history (JSON column → array).
       variants: m.variants ? JSON.parse(m.variants) : null,
+      // Image Forge reference (JSON column → object, Run 22).
+      image: m.image ? JSON.parse(m.image) : null,
     })),
   });
 }

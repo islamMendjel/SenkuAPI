@@ -31,6 +31,10 @@ const KNOWN: Record<string, ModelMeta> = {
   "claude-sonnet-5.5": { name: "Claude Sonnet 5.5", tier: "Pool", note: "Balanced" },
   "deepseek-v4-flash": { name: "DeepSeek V4 Flash", tier: "Pool", note: "Fast" },
   "deepseek-v4-pro": { name: "DeepSeek V4 Pro", tier: "Pool", note: "Deep reasoning" },
+  // Run 22 — Image Forge pseudo-model: never listed in the provider
+  // pickers (it is not a pool model); only the timeline provenance,
+  // exports and history rows ever render its name.
+  "image-forge": { name: "Image Forge", tier: null, note: "Text → image" },
 };
 
 /** Capitalize one token, keeping version numbers ("5.3") intact. */

@@ -17,6 +17,7 @@ import {
   Clock,
   Gauge,
   Globe,
+  Image as ImageIcon,
   MessageSquare,
   Pencil,
   RefreshCw,
@@ -81,6 +82,8 @@ export function CommandPalette({
     toggleSearch,
     duelEnabled,
     toggleDuel,
+    imageMode,
+    toggleImageMode,
     effort,
     setEffort,
     temporary,
@@ -151,6 +154,23 @@ export function CommandPalette({
             description: duelEnabled
               ? "Duel disabled."
               : "Duel armed — next message races two models; you pick the keeper.",
+          });
+        },
+      },
+      {
+        id: "act-image",
+        group: "Actions",
+        label: imageMode ? "Disable image mode" : "Generate an image",
+        hint: imageMode ? "On" : "Forge",
+        icon: <ImageIcon className="h-4 w-4" />,
+        keywords: "image picture draw paint generate art forge photo",
+        active: imageMode,
+        run: () => {
+          toggleImageMode();
+          toast({
+            description: imageMode
+              ? "Image mode disabled."
+              : "Image mode — your next message becomes a generated image (30–90s).",
           });
         },
       },
@@ -310,6 +330,8 @@ export function CommandPalette({
     toast,
     onOpenLimiter,
     onManageProviders,
+    imageMode,
+    toggleImageMode,
   ]);
 
   const filtered = useMemo(() => {
