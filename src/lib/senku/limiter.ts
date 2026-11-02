@@ -1,7 +1,8 @@
 // SenkuAPI — 3-tier pacing limiter.
 // Strictly monitors every pooled key of token-limited providers:
 //   Tier 1  Monthly Pool  — 500,000 tokens / key / month
-//   Tier 2  Daily Pace    — monthly pool ÷ 30 per calendar day
+//   Tier 2  Daily Pace    — monthly pool ÷ 30 per usage day
+//                           (usage day = 01:00 → 01:00, Africa/Algiers)
 //   Tier 3  5H Burst      — rolling 5-hour window at 2× average pace
 // Unlimited providers (APInex, hasTokenLimit=false) NEVER block.
 
@@ -13,6 +14,101 @@ import {
   MONTHLY_POOL_PER_KEY,
 } from "./constants";
 import type { LimiterStatus, PaceStatus, TierInfo } from "./types";
+
+// ── Usage day (Run 14) ─────────────────────────────────────
+// "Daily" means the user's billing day: 01:00 → 01:00 in
+// Africa/Algiers — NOT the server's local midnight. The reset is
+// COMPUTED, not scheduled: every aggregate asks "what did the
+// current usage day start at?", so the counter rolls over by
+// itself at 01:00 with no cron to miss or corrupt.
+export const USAGE_DAY_TIMEZONE = "Africa/Algiers";
+export const USAGE_DAY_START_HOUR = 1; // 01:00 local
+
+/** Minutes the zone is offset from UTC at that instant
+ *  (positive = east). Re-derived per call — survives DST rule
+ *  changes, which Africa/Algiers may someday have again. */
+function tzOffsetMinutes(instant: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+  const get = (t: string) =>
+    Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour") % 24,
+    get("minute"),
+    get("second")
+  );
+  return Math.round((asUtc - instant.getTime()) / 60000);
+}
+
+/** The UTC instant of a wall-clock date+hour in the usage timezone
+ *  (two-pass to resolve DST-edge ambiguity). */
+function zonedInstant(
+  y: number,
+  m: number,
+  d: number,
+  hour: number
+): Date {
+  const guess = Date.UTC(y, m - 1, d, hour, 0, 0);
+  const first = guess - tzOffsetMinutes(new Date(guess), USAGE_DAY_TIMEZONE) * 60000;
+  const second = guess - tzOffsetMinutes(new Date(first), USAGE_DAY_TIMEZONE) * 60000;
+  return new Date(second);
+}
+
+/** Algiers Y/M/D + hour for an instant. */
+function usageZoneParts(instant: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: USAGE_DAY_TIMEZONE,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+  }).formatToParts(instant);
+  const get = (t: string) =>
+    Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return {
+    y: get("year"),
+    m: get("month"),
+    d: get("day"),
+    hour: get("hour") % 24,
+  };
+}
+
+function shiftDay(y: number, m: number, d: number, delta: number) {
+  const shifted = new Date(Date.UTC(y, m - 1, d + delta));
+  return {
+    y: shifted.getUTCFullYear(),
+    m: shifted.getUTCMonth() + 1,
+    d: shifted.getUTCDate(),
+  };
+}
+
+/** Start of the usage day containing `now`: 01:00 Africa/Algiers.
+ *  Between 00:00 and 00:59 the usage day still "belongs" to the
+ *  previous evening — it started yesterday at 01:00. */
+export function usageDayStart(now = new Date()): Date {
+  const { y, m, d, hour } = usageZoneParts(now);
+  const day = hour < USAGE_DAY_START_HOUR ? shiftDay(y, m, d, -1) : { y, m, d };
+  return zonedInstant(day.y, day.m, day.d, USAGE_DAY_START_HOUR);
+}
+
+/** Next instant the daily counter rolls over (the coming 01:00). */
+export function nextUsageDayRollover(now = new Date()): Date {
+  const { y, m, d, hour } = usageZoneParts(now);
+  const day = hour < USAGE_DAY_START_HOUR ? { y, m, d } : shiftDay(y, m, d, 1);
+  return zonedInstant(day.y, day.m, day.d, USAGE_DAY_START_HOUR);
+}
 
 export interface KeyWindowUsage {
   monthly: number;
@@ -29,9 +125,6 @@ export interface KeyCheck {
 function startOfMonth(d = new Date()): Date {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
-function startOfDay(d = new Date()): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
 function fiveHoursAgo(d = new Date()): Date {
   return new Date(d.getTime() - 5 * 3600 * 1000);
 }
@@ -45,7 +138,7 @@ export async function keyWindowUsage(keyId: string): Promise<KeyWindowUsage> {
     }),
     db.usageEvent.aggregate({
       _sum: { totalTokens: true },
-      where: { keyId, createdAt: { gte: startOfDay() } },
+      where: { keyId, createdAt: { gte: usageDayStart() } },
     }),
     db.usageEvent.aggregate({
       _sum: { totalTokens: true },
@@ -128,6 +221,28 @@ export async function limiterStatus(provider: {
     (lifetime._sum.totalTokens ?? 0) * provider.tokenMultiplier
   );
 
+  // ── Run 14: daily (01:00 → 01:00) + gateway-wide all-time ──
+  // The DISPLAYED daily counter counts everything through this
+  // provider since the usage day began — including cloud-failover
+  // turns (keyId: null) the per-key tier math above skips.
+  const dailyAgg = await db.usageEvent.aggregate({
+    _sum: { totalTokens: true },
+    where: { providerId: provider.id, createdAt: { gte: usageDayStart() } },
+  });
+  const dailyTokens = Math.round(
+    (dailyAgg._sum.totalTokens ?? 0) * provider.tokenMultiplier
+  );
+  const dailyResetsAt = nextUsageDayRollover().toISOString();
+  const [allProviders, groupedByProvider] = await Promise.all([
+    db.provider.findMany({ select: { id: true, tokenMultiplier: true } }),
+    db.usageEvent.groupBy({ by: ["providerId"], _sum: { totalTokens: true } }),
+  ]);
+  const allTimeTokens = groupedByProvider.reduce((acc, g) => {
+    const mult =
+      allProviders.find((p) => p.id === g.providerId)?.tokenMultiplier ?? 1;
+    return acc + Math.round((g._sum.totalTokens ?? 0) * mult);
+  }, 0);
+
   const unlimited = !provider.hasTokenLimit;
   const monthlyLimit = provider.tokenLimitPerKey || MONTHLY_POOL_PER_KEY;
 
@@ -184,6 +299,9 @@ export async function limiterStatus(provider: {
     poolUsed: monthly,
     poolLimit: unlimited ? 0 : monthlyLimit * keys.length,
     totalTokens,
+    dailyTokens,
+    dailyResetsAt,
+    allTimeTokens,
     activeKeys: keys.length,
   };
 }

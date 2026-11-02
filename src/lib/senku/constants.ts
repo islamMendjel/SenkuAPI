@@ -116,7 +116,8 @@ export const DEEP_SEARCH_MAX_SOURCES = 8; // merged, URL-deduped cap
 
 // ── 3-tier pacing limiter (OxionAI) ──────────────────────────
 // Tier 1 — Monthly Pool : 500,000 tokens / key / month
-// Tier 2 — Daily Pace   : monthly pool spread over 30 days
+// Tier 2 — Daily Pace   : monthly pool spread over 30 usage days
+//                         (usage day = 01:00 → 01:00, Africa/Algiers)
 // Tier 3 — 5H Burst     : rolling 5-hour window at 2× average pace
 export const MONTHLY_POOL_PER_KEY = 500_000;
 export const DAILY_PACE_TARGET = Math.ceil(MONTHLY_POOL_PER_KEY / 30); // 16,667

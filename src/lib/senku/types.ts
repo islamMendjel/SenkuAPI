@@ -87,6 +87,13 @@ export interface LimiterStatus {
   poolUsed: number; // month-to-date raw tokens across active keys
   poolLimit: number; // monthly pool across active keys (limit × keys)
   totalTokens: number; // lifetime effective tokens through provider
+  /** Effective tokens since the current usage day began
+   *  (01:00 → 01:00, Africa/Algiers) — the daily-resetting counter. */
+  dailyTokens: number;
+  /** ISO instant of the next 01:00 Africa/Algiers rollover. */
+  dailyResetsAt: string;
+  /** Effective tokens across every provider, all time — never resets. */
+  allTimeTokens: number;
   activeKeys: number;
 }
 

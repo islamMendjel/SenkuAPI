@@ -1,13 +1,16 @@
 "use client";
 
 // SenkuAPI — TOKEN LIMITER breakdown modal.
-// Ultimate (unlimited) providers: a single live usage counter that
-// starts at 0 and grows ×4 with every request — limit is ∞, never blocks.
-// Limited providers: Monthly Pool / Daily Pace / 5H Burst bars.
+// Ultimate (unlimited) providers: TODAY'S live usage counter (resets
+// at 01:00 Africa/Algiers, grows ×4 with every request) plus This
+// month and never-resetting All time. Limit is ∞, never blocks.
+// Limited providers: Monthly Pool / Daily Pace / 5H Burst bars —
+// the daily window runs 01:00 → 01:00 Africa/Algiers (Run 14).
 
 import { TriangleAlert } from "lucide-react";
 import { useSenku } from "@/lib/store";
-import { formatCompact, formatFull } from "@/lib/senku/format";
+import { countdownTo, formatCompact, formatFull } from "@/lib/senku/format";
+import { useNow } from "@/hooks/use-now";
 import {
   Dialog,
   DialogContent,
@@ -73,6 +76,7 @@ export function TokenLimiterDialog({
   onManageProviders: () => void;
 }) {
   const { limiter } = useSenku();
+  const now = useNow();
   if (!limiter) return null;
 
   const monthlyEffective = Math.round(
@@ -106,13 +110,18 @@ export function TokenLimiterDialog({
         </DialogHeader>
 
         {limiter.unlimited ? (
-          /* ── Ultimate: one live counter — starts at 0, grows ×4 ── */
+          /* ── Ultimate: TODAY'S counter (01:00 reset) + all-time ── */
           <div className="space-y-4 py-3">
             <div>
               <div className="mb-1.5 flex items-baseline justify-between">
-                <span className="text-[13px] text-zinc-300">Token usage</span>
+                <span className="text-[13px] text-zinc-300">
+                  Today
+                  <span className="ml-2 text-[11px] font-normal text-zinc-500">
+                    resets 01:00
+                  </span>
+                </span>
                 <span className="text-[15px] font-semibold tabular-nums text-zinc-100">
-                  {formatFull(limiter.totalTokens)}{" "}
+                  {formatFull(limiter.dailyTokens)}{" "}
                   <span className="text-[12px] font-normal text-zinc-500">
                     / ∞
                   </span>
@@ -121,12 +130,30 @@ export function TokenLimiterDialog({
               <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
                 <div className="h-full w-full rounded-full bg-gradient-to-r from-emerald-500/40 to-emerald-400/80" />
               </div>
+              <p className="mt-1.5 text-[11px] text-zinc-500">
+                Usage day runs 01:00 → 01:00 · Africa/Algiers
+                {limiter.dailyResetsAt && now
+                  ? ` · ${countdownTo(limiter.dailyResetsAt, now)}`
+                  : ""}
+              </p>
             </div>
 
             <div className="flex items-baseline justify-between">
               <span className="text-[13px] text-zinc-300">This month</span>
               <span className="text-[13px] tabular-nums text-zinc-200">
                 {formatFull(monthlyEffective)} / ∞
+              </span>
+            </div>
+
+            <div className="flex items-baseline justify-between">
+              <span className="text-[13px] text-zinc-300">
+                All time
+                <span className="ml-2 text-[11px] font-normal text-zinc-500">
+                  never resets
+                </span>
+              </span>
+              <span className="text-[13px] tabular-nums text-zinc-200">
+                {formatFull(limiter.allTimeTokens)} / ∞
               </span>
             </div>
 
@@ -147,6 +174,9 @@ export function TokenLimiterDialog({
             <TierRow tier={limiter.tiers.monthly} />
             <TierRow tier={limiter.tiers.daily} />
             <TierRow tier={limiter.tiers.burst5h} />
+            <p className="text-[11px] text-zinc-500">
+              The daily window runs 01:00 → 01:00 · Africa/Algiers.
+            </p>
           </div>
         )}
 

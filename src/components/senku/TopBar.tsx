@@ -40,9 +40,23 @@ export function TopBar({
   const { temporary, toggleTemporary, limiter } = useSenku();
 
   const unlimited = limiter?.unlimited ?? false;
+  // Run 14: the pill's headline number is the DAILY usage — it resets
+  // itself at 01:00 Africa/Algiers (server-computed window, client
+  // re-pulls the instant the server says the day rolled over).
+  // All-time usage lives in the tooltip and the limiter breakdown.
   const tokenPill = unlimited
-    ? `Tokens: ${formatCompact(limiter?.totalTokens ?? 0)} / ∞`
+    ? `Tokens: ${formatCompact(limiter?.dailyTokens ?? 0)} / ∞`
     : pillLabel(limiter?.poolUsed ?? 0, limiter?.poolLimit ?? 500_000);
+  const pillTitle = unlimited
+    ? `Today's usage — resets daily at 01:00 (Africa/Algiers)${
+        limiter?.dailyResetsAt
+          ? ` · next reset ${new Date(limiter.dailyResetsAt).toLocaleTimeString("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}`
+          : ""
+      } · All time: ${formatCompact(limiter?.allTimeTokens ?? 0)}`
+    : "Token limiter status";
 
   return (
     <header className="relative z-10 flex h-12 shrink-0 items-center justify-between gap-2 px-2 sm:px-4">
@@ -120,11 +134,7 @@ export function TopBar({
               ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
               : "border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
           }`}
-          title={
-            unlimited
-              ? "Ultimate plan — unlimited tokens, ×4 metering, never blocks"
-              : "Token limiter status"
-          }
+          title={pillTitle}
         >
           <span
             className={`h-1.5 w-1.5 rounded-full ${

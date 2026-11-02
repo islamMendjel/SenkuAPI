@@ -1368,6 +1368,88 @@ no replay).
 
 ---
 
+## Run 14 — 2026-11-02: YOUR OWN USAGE DAY — daily tokens reset at 01:00 Africa/Algiers, all-time counter beside it
+
+**User request.** (a) The daily token usage must reset every night
+at 01:00 after midnight, Algeria time; (b) also show a token usage
+that is the all-time usage.
+
+### What shipped
+
+**1. The usage day is 01:00 → 01:00 Africa/Algiers — computed,
+never scheduled.** Instead of a cron that zeroes a number (a cron
+can be missed, crashed, or corrupted), every aggregate asks
+"what did the current usage day start at?":
+- `usageDayStart()` / `nextUsageDayRollover()` in `limiter.ts`
+  resolve the 01:00 boundary through `Intl` timezone math
+  (offset re-derived per instant — survives any future DST rule
+  change). Between 00:00 and 00:59 the usage day still belongs
+  to the previous evening, per the "after midnight" spec.
+- The Daily Pace tier (`keyWindowUsage.daily`) now windows on the
+  usage day instead of server-local midnight — one definition of
+  "day" everywhere (blocking math and display).
+- The pill's headline number is now **Today**: `dailyTokens`
+  (effective ×multiplier) resets itself at 01:00 by construction.
+  It counts EVERYTHING through the active provider — including
+  cloud-failover turns (`keyId: null`) the per-key tier math
+  skips.
+- `dailyResetsAt` (ISO) ships with every snapshot.
+
+**2. All-time usage, always visible.** `allTimeTokens` =
+Σ(per-provider lifetime × that provider's multiplier) across
+every provider — never resets. Surfaced in the limiter dialog
+("All time · never resets") and in the pill's tooltip.
+
+**3. The reset is visible at exactly 01:00.** `refreshUsage`
+arms a single timer from the server's own `dailyResetsAt`
+(+1 s, floored at 30 s to make clock-skew loops impossible) and
+re-pulls when the day flips — no polling loop.
+
+**UI.** Pill (Ultimate): `Tokens: 2.3k / ∞` (today) with tooltip
+"Today's usage — resets daily at 01:00 (Africa/Algiers) · next
+reset HH:MM · All time: 444k". Dialog: Today (big, with live
+"resets in 13h 14m" countdown on the shared `useNow` clock) ·
+This month · All time · ×4 metering note · per-provider lifetime
+footer; limited providers get "The daily window runs 01:00 →
+01:00 · Africa/Algiers." under the tier bars.
+
+### Verification
+
+- **Window math: 20/20 boundary checks** against independent
+  expectations — midday → today 01:00; exactly 01:00:00 → fresh
+  window; 00:00/00:30/00:59:59 → yesterday 01:00; Nov 1 00:30 →
+  Oct 31 01:00 (month rollover); Jan 1 00:30 → Dec 31 01:00
+  (year rollover); window length exactly 24 h; rollover strictly
+  future (probed at 11:44 Algiers).
+- **DB cross-check (5/5)**: served `dailyTokens` 2,308 ==
+  SUM(events, provider, createdAt ≥ usageDayStart) × 4; served
+  `allTimeTokens` 443,660 == Σ(per-provider lifetime × mult);
+  `dailyResetsAt` == helper output == **01:00 Africa/Algiers**
+  formatted; daily ≤ all-time.
+- **Rollover re-pull (real store code path)**: stubbed fetch with
+  `dailyResetsAt` 3 s ahead → `refreshUsage` re-invoked itself at
+  +30 s (the floor) with no caller. First run also caught the
+  floor working as designed (6 s wait → no premature pull).
+- **Browser**: pill reads "Tokens: 2.3k / ∞" (was lifetime
+  443.7k); dialog rows verified by text extraction AND VLM —
+  Today 2,308 + countdown ticking, This month 396,660, All time
+  443,660, window caption present; 0 page errors; dev.log clean.
+- `bun run lint` clean; `tsc --noEmit` 14 errors — all
+  pre-existing, 0 new.
+
+### Deferred / known trade-offs
+
+- The pill for *limited* providers still shows the monthly pool
+  (that is its governing limit); the 01:00 daily window applies
+  to their Daily Pace tier + dialog caption.
+- The daily counter for the active provider is provider-scoped
+  (matches `totalTokens` semantics); the gateway-wide number is
+  the All-time row.
+- Countdown text renders in the client's locale clock, the
+  boundary itself is fixed to Africa/Algiers by the server.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we

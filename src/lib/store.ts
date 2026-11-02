@@ -160,6 +160,25 @@ interface SenkuState {
 
 let streamController: AbortController | null = null;
 
+/** Fires exactly when the usage day rolls over (01:00 Africa/Algiers),
+ *  so the daily token counter visibly resets to 0 at that moment —
+ *  no polling loop, one timer armed from the server's own schedule. */
+let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleDailyRolloverRefresh(dailyResetsAt?: string) {
+  if (rolloverTimer) {
+    clearTimeout(rolloverTimer);
+    rolloverTimer = null;
+  }
+  if (typeof dailyResetsAt !== "string") return;
+  const at = new Date(dailyResetsAt).getTime();
+  if (!Number.isFinite(at)) return;
+  const delay = Math.max(at - Date.now() + 1000, 30_000); // never tighter than 30s
+  rolloverTimer = setTimeout(() => {
+    rolloverTimer = null;
+    void useSenku.getState().refreshUsage();
+  }, delay);
+}
+
 function applyProviderView(
   providers: ProviderView[],
   view: ProviderView
@@ -307,6 +326,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
       const data = await res.json();
       if (!data.error) {
         set({ providers: data.providers ?? [], limiter: data.limiter ?? null });
+        scheduleDailyRolloverRefresh(data.limiter?.dailyResetsAt);
       }
     } catch {
       // non-fatal
