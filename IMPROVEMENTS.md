@@ -2010,6 +2010,90 @@ data), reduced-motion fully honored.
 
 ---
 
+## Run 20 — 2026-11-03: THE ENGINE BAY — the model lineup becomes a first-class hero of the entry moment
+
+**User request (standing directive).** "Look at the site first,
+then innovate. Make ONE bold change that improves conversions or
+the look and feel, not a small tweak. Cook and ship every time."
+
+**Observed first.** Full agent-browser walkthrough (desktop 1440×900
++ mobile 390×844): welcome screen (Run 19 pulse), model picker,
+sidebar, ⌘K palette, limiter panel, a real streamed answer with
+provenance footer, and a starter-card send. Finding: the product's
+actual inventory — five live frontier engines, one gateway, all
+free — was invisible at the highest-traffic surface. The value prop
+was abstract copy ("Pooled key routing…") and the engines hid behind
+a small composer dropdown discovered only after the first click.
+Conversion gap = the strongest reason to stay wasn't shown when it
+matters (the first 10 seconds).
+
+**The bold change (one cohesive piece): the ENGINE BAY.**
+- New section on the welcome screen between the stat strip and the
+  starters: overline "THE LINEUP" + honest counter `5 engines · one
+  gateway · all free` ("all free" prints only when every engine's
+  meta tier really is Free).
+- One engine card per REAL id from the bootstrap payload's
+  `activeProvider.models` (never hardcoded): pretty name from the
+  shared `modelMeta` table, strength note (Balanced / Fastest /
+  Deep reasoning / Long context / Fast), tier badge. The selected
+  engine gets an emerald ring + a `senku-pop` spring check-in
+  (new CSS keyframes, reduced-motion covered).
+- One click switches the engine via the SAME store field the
+  composer picker uses — the composer button mirrors the choice
+  instantly, and the next send (starter card or typed) routes to
+  the picked engine. Choice → ownership → first send.
+- Layout: desktop = even auto-fit grid (`minmax(160px,1fr)`,
+  `max-w-4xl`); mobile = edge-peek snap rail (scrollbar hidden via
+  new `.senku-no-bar`, the cut-off card is the affordance).
+- Honesty: the bay renders NOTHING when `models` hasn't loaded —
+  it never invents an inventory. (Verified safe: the store sets
+  `models` in the same `set()` that flips `booted`, so the bay is
+  present at the welcome's first paint — zero layout shift.)
+- Cascade retimed to follow DOM order: headline 60ms → subtitle
+  90ms → clock 120ms → stats 170–290ms → engines 330–550ms →
+  starters 600–780ms.
+
+**Real defect caught & fixed during verification (not shipped
+broken):** first cut truncated two engine names ("Gemini 3.8 Fl…",
+"DeepSeek 4.…") — card width 136px minus padding couldn't hold
+"DeepSeek 4.1 Flash" and the absolute-positioned check could
+collide with long names. Rebuilt the card: badge row always
+rendered (even heights), check moved INTO the badge row bottom-right
+(name can never collide), cards widened (152px rail / 160px grid,
+bay to max-w-4xl). All five names verified untruncated in
+screenshots.
+
+**Verified (all real):**
+- Selection mirror: clicked the Gemini card →
+  `aria-pressed` moved (`geminiPressed:true, glmPressed:false`) AND
+  the composer picker label flipped to "Gemini 3.8 Flash|Free" —
+  one store field, two surfaces, in sync.
+- End-to-end conversion path: with Gemini selected, the "Write
+  code" starter fired and the message's provenance footer reads
+  "Gemini 3.8 Flash · APInex pool · 3k tokens · cache: miss" — the
+  bay genuinely drives sends, not just decoration.
+- Restored GLM 5.3 via the bay on a fresh chat — composer mirrors
+  back (`GLM 5.3|Free`).
+- Mobile 390×844: `document.scrollWidth == 390` (no page overflow),
+  rail internally scrollable (scrollWidth 800 > clientWidth 358),
+  scrolled to the end → last card "DeepSeek 4.1 Flash" fully
+  visible; composer bottom-anchored (Run 18 intact).
+- Desktop 1440×900: all five names untruncated, selected ring +
+  check, Run 19 pulse strip untouched above the bay.
+- Zero page errors, console clean, dev.log clean, lint 0 errors
+  (2 pre-existing script warnings), tsc 13 errors = baseline
+  (none in touched files).
+
+**Scope discipline:** one file touched on the frontend
+(WelcomeScreen.tsx) + two CSS utilities (`senku-pop`,
+`senku-no-bar`); no backend changes, no new dependencies, no fake
+data anywhere (inventory from the live payload or nothing),
+reduced-motion fully honored (`.senku-pop` added to the kill
+group), Run 18's zero-jump composer and Run 19's living-gateway
+moment both intact.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we

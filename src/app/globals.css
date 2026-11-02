@@ -249,6 +249,34 @@
   animation: senku-input-in 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
+/* Run 20 — engine bay: the check-in badge pops onto the newly
+   selected engine card (spring ease); the rail hides its scrollbar
+   on mobile (edge-peek cards are the affordance). */
+@keyframes senku-pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.senku-pop {
+  animation: senku-pop 240ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.senku-no-bar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.senku-no-bar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Run 19 — THE LIVING GATEWAY: the welcome screen's breathing health
    ring + one-time logo bloom. The ring is a conic sweep masked to a
    hairline circle around the logo; emerald while the limiter is
@@ -654,6 +682,7 @@
      reduced-motion check). */
   .senku-view-in,
   .senku-input-in,
+  .senku-pop,
   .senku-pill-loading,
   .senku-pill-loading *,
   .senku-pulse-ring,
