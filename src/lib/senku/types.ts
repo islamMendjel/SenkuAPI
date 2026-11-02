@@ -96,6 +96,20 @@ export interface TierInfo {
   unlimited: boolean;
 }
 
+/**
+ * Run 23 — one entry of the image Gallery: a forged image plus the
+ * chat it was born in. `key` is unique per image FILE (message id +
+ * file id — re-rolls of one turn produce several entries), so React
+ * keys and lightbox navigation stay stable across refetches.
+ */
+export interface GalleryItem {
+  key: string;
+  chatId: string;
+  chatTitle: string;
+  createdAt: string; // ISO — the message's own timestamp
+  image: ImageRef;
+}
+
 export type PaceStatus =
   | "unlimited"
   | "on-track"

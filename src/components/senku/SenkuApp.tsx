@@ -23,6 +23,7 @@ import { CanvasPanel } from "@/components/senku/CanvasPanel";
 import { TopBar } from "@/components/senku/TopBar";
 import { WelcomeScreen } from "@/components/senku/WelcomeScreen";
 import { ChatTimeline, TemporaryBanner } from "@/components/senku/ChatTimeline";
+import { ImageGallery } from "@/components/senku/ImageGallery";
 import { InputBar } from "@/components/senku/InputBar";
 import { TokenLimiterDialog } from "@/components/senku/TokenLimiterDialog";
 import { ProvidersDialog } from "@/components/senku/ProvidersDialog";
@@ -55,6 +56,11 @@ export function SenkuApp() {
     setSidebarOpen,
     temporary,
     viewEpoch,
+    // Run 23 — the Gallery replaces the conversation view; the
+    // composer hides while browsing (a running stream keeps its Stop
+    // button mounted — an in-flight forge is always abortable).
+    galleryOpen,
+    streaming,
   } = useSenku();
   const [limiterOpen, setLimiterOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
@@ -242,11 +248,21 @@ export function SenkuApp() {
         >
           {booted && temporary && <TemporaryBanner />}
 
+          {/* Run 23 — the Gallery is a destination view, parallel to
+              the conversation: image history with full provenance and
+              jump-to-chat. Every navigation (new chat / enter chat /
+              send / mode switch) closes it — see the store. */}
           {booted &&
-            (messages.length === 0 ? <WelcomeScreen /> : <ChatTimeline />)}
+            (galleryOpen ? (
+              <ImageGallery />
+            ) : messages.length === 0 ? (
+              <WelcomeScreen />
+            ) : (
+              <ChatTimeline />
+            ))}
         </div>
 
-        <InputBar />
+        {(!galleryOpen || streaming) && <InputBar />}
       </div>
 
       {/* Senku Canvas (Run 17) — split view on wide screens, overlay

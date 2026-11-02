@@ -2295,6 +2295,104 @@ pseudo-model guard (both fixes, not regressions).
 
 ---
 
+## Run 23 — 2026-11-03: THE GALLERY — images get a history, like chats
+
+**User request.** "Good job, add an images section for displaying
+all the images that was generated (like chats history, but image
+history). And again, look at the site first, then innovate…
+don't make redundant things — only improvements and upgrades,
+correcting wrong things and adding useful things, cook but not
+break or downgrade."
+
+**Observed first.** Fresh walkthrough (welcome at Run 19 form,
+Run 22 forge verified live in the composer). Gap scan: the forge
+creates real images, but the moment a conversation scrolls away
+those images are UNFINDABLE — buried per-chat, no way to re-view,
+re-download or show them later. Chats have a whole history
+sidebar; images had nothing. That asymmetry was the single most
+requested-shaped gap left, and the user named it directly.
+
+**The change: the Image Gallery — full image history.**
+- **Sidebar "Images" row** (right under New chat, the library
+  position): amber Images icon + an honest live count badge
+  (disk-verified gallery size from bootstrap; +1 the instant a
+  forge persists; re-checked after any chat delete). On phones the
+  overlay sidebar steps aside the moment the gallery opens.
+- **The Gallery view** replaces the conversation area (composer
+  hides — it's a destination, not a chat; an in-flight stream keeps
+  its Stop button mounted). A true CSS masonry (2→5 columns by
+  breakpoint) of EVERY forged image from EVERY saved chat, newest
+  first, staggered settle-in, aurora backdrop in the app's
+  language. Hover overlay: prompt, birth chat, time-ago.
+- **Lightbox with full provenance**: dims · KB · forge seconds ·
+  date · position counter; ←/→ walk the whole collection, Esc
+  closes; one-click Download; and **"Open in chat"** — lands you
+  in the conversation the image was born in (gallery closes,
+  timeline opens).
+- **Honest listing, by construction**: active images AND re-roll
+  variant snapshots are listed (a re-rolled image was still
+  forged); temporary chats never appear (no DB rows, same contract
+  as chats history); deleted chats take their images with them
+  (cascade); a tile only exists while its file exists on disk.
+- **Empty state = conversion hook**: "Nothing forged yet" + one
+  button — arms Image mode on a fresh chat, composer placeholder
+  already asking for the prompt.
+- **Wired everywhere it should be, nowhere it shouldn't**: ⌘K
+  palette gains "Browse the image gallery"; every navigation (new
+  chat / enter chat / mode switch / any send) closes the gallery so
+  it can never strand the user; sending FROM the gallery (possible
+  only mid-stream) returns to the conversation so the reply is
+  visible.
+
+**One real bug caught during verification (fixed before ship):**
+flipping a re-rolled image back and forth mirrors the SAME file
+into both the active slot and a variant slot (Run 22's variant
+mirror) — the first gallery render showed that file twice with
+duplicate React keys (console errors, real). Fix: the gallery
+counts FILES, not slots — per-message dedupe by image id, active
+slot wins. Verified: the forest message's 3 slots → 2 tiles, all
+keys unique, console clean.
+
+**Verified (all real):**
+- API: `/api/images` → 4 unique images (incl. variant snapshots,
+  dedupe proven by DB inspection: same file in active + variant
+  slot); `?count=1` and bootstrap `imageCount` agree.
+- Desktop: sidebar row + badge "4" → gallery masonry (5 columns
+  at 1280, aurora, composer hidden) → lightbox provenance
+  "1024×1024 · 103 KB · 27.8s · Mon, Nov 2, 2026 · 1 / 5" →
+  ArrowRight flips to 2/5 with ITS OWN receipt (different file,
+  KB, seconds) → "Open in chat" lands in the birth chat with the
+  composer back.
+- Palette: "gallery" fuzzy-match → "Browse the image gallery | 5"
+  → opens the gallery.
+- End-to-end forge: fresh chat → Image pill armed (placeholder
+  swaps) → fox prompt → generating card with live counter →
+  settled ~30s → sidebar badge increments 4 → 5 LIVE (no
+  refetch) → gallery reopens with 5 tiles, fox FIRST (newest
+  first proven).
+- Empty state (mock-routed, zero DB touch): "Nothing forged yet"
+  + CTA → gallery closes, composer returns, placeholder "Describe
+  the image to forge…", aria-pressed=true.
+- Mobile 390×844: Images tap closes the overlay sidebar; gallery
+  2-column masonry, no horizontal overflow; lightbox image fits
+  width, buttons stack clean (VLM-checked).
+- Welcome screen: untouched, VLM-verified byte-stable Run 19 form
+  (ring, headline, clock, stat chips, 2×2 starters).
+- Clean-session console: 0 errors / 0 warnings across load →
+  gallery → lightbox → arrows → Esc; lint 0 errors (2 pre-existing
+  script warnings); tsc 8 errors = exact baseline, zero new;
+  dev.log clean (`GET /api/images 200`).
+
+**Scope discipline:** one new server lib (gallery query + disk
+verification) + one new API route (`/api/images`, count mode),
+bootstrap +1 field, store +2 fields +4 lines of navigation
+hygiene (close-on-nav, close-on-send, count bookkeeping), one new
+component (ImageGallery), one sidebar row, one palette action,
+SenkuApp render branch. Zero changes to WelcomeScreen, ChatTimeline
+behavior, the forge pipeline, or any existing receipt.
+
+---
+
 ## COMPETITOR GAP LIST
 
 Standing snapshot of what Claude / ChatGPT / Gemini have that we
@@ -2309,6 +2407,7 @@ they ship).
 | Memory across chats | ChatGPT, Claude | OPEN (deliberately: personal gateway, no profile harvesting) |
 | Code interpreter / sandboxed execution | ChatGPT | OPEN |
 | Image generation in-chat | ChatGPT, Gemini | **MATCHED (Run 22)** — the Image Forge: composer mode + dimensions picker, live elapsed-time generating card, lightbox + download, per-image provenance receipts (dims · KB · seconds · 0 pool tokens) and re-roll variant history with per-image receipts — ChatGPT shows none of that honesty |
+| Image history / gallery across chats | ChatGPT (Library/Photos), Gemini (saved images) | **MATCHED (Run 23)** — the Gallery: sidebar Images row with live count, masonry of every forged image from every chat (variant snapshots included, file-deduped), lightbox with full provenance + collection browsing (←/→) + one-click Download + "Open in chat" jump-to-source, empty-state forge CTA |
 | Projects / folders with per-project instructions | ChatGPT, Claude | OPEN |
 | Voice mode (live duplex conversation) | ChatGPT, Gemini | PARTIAL — we have push-to-talk dictation + read-aloud |
 | Deep research (multi-step agentic search) | Gemini, ChatGPT | **MATCHED (Run 8)** — plan → multi-angle retrieve → cross-check, with per-source date/authority audits the incumbents don't surface; every stage streams live |

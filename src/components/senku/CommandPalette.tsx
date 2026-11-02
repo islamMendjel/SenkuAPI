@@ -18,6 +18,7 @@ import {
   Gauge,
   Globe,
   Image as ImageIcon,
+  Images,
   MessageSquare,
   Pencil,
   RefreshCw,
@@ -84,6 +85,9 @@ export function CommandPalette({
     toggleDuel,
     imageMode,
     toggleImageMode,
+    // Run 23 — browse every forged image from the palette too.
+    imageCount,
+    openGallery,
     effort,
     setEffort,
     temporary,
@@ -206,6 +210,16 @@ export function CommandPalette({
           toast({ description: `Effort set to ${level} — ${desc}.` });
         },
       }))),
+      {
+        id: "act-gallery",
+        group: "Actions",
+        label: "Browse the image gallery",
+        hint: imageCount > 0 ? `${imageCount}` : "Empty",
+        icon: <Images className="h-4 w-4" />,
+        keywords:
+          "gallery images history photos forged pictures collection every all",
+        run: () => openGallery(),
+      },
       {
         id: "act-temp",
         group: "Actions",
@@ -332,6 +346,8 @@ export function CommandPalette({
     onManageProviders,
     imageMode,
     toggleImageMode,
+    imageCount,
+    openGallery,
   ]);
 
   const filtered = useMemo(() => {

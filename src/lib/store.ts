@@ -208,6 +208,18 @@ interface SenkuState {
   closeCanvas: () => void;
   setCanvasOpen: (open: boolean) => void;
 
+  /** Run 23 — the image Gallery view (sidebar → Images). Opening it
+   *  swaps the timeline for a masonry of every forged image, from
+   *  every saved chat. Any conversation navigation (new chat, enter
+   *  chat, mode switch) or any send closes it again — the gallery is
+   *  a destination, never a dead end. */
+  galleryOpen: boolean;
+  /** forged images across all saved chats (the sidebar badge;
+   *  bootstrap-seeded, +1 per persisted forge, refreshed on delete) */
+  imageCount: number;
+  openGallery: () => void;
+  closeGallery: () => void;
+
   /** Upload files for extraction — each becomes a chip showing what
    *      the gateway read (or why it couldn't be read). */
   addAttachments: (files: File[]) => Promise<void>;
@@ -320,6 +332,8 @@ export const useSenku = create<SenkuState>((set, get) => ({
   turnStyle: null,
   canvasOpen: false,
   canvasSource: null,
+  galleryOpen: false,
+  imageCount: 0,
 
   async addAttachments(files) {
     const existing = get().pendingAttachments;
@@ -412,6 +426,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
         limiter: data.limiter ?? null,
         chats: data.chats ?? [],
         models,
+        imageCount: typeof data.imageCount === "number" ? data.imageCount : 0,
         // Every fresh session boots on the default model (glm-5.3).
         model: models.includes(DEFAULT_MODEL)
           ? DEFAULT_MODEL
@@ -470,6 +485,8 @@ export const useSenku = create<SenkuState>((set, get) => ({
       messages: [],
       // staged files belong to the abandoned conversation
       pendingAttachments: [],
+      // Run 23 — a mode switch is a navigation: leave the gallery.
+      galleryOpen: false,
     })),
   setModel: (m) =>
     set((s) => ({
@@ -654,6 +671,12 @@ export const useSenku = create<SenkuState>((set, get) => ({
     set({ canvasOpen: open });
   },
 
+  // Run 23 — the Gallery view. Opening never disturbs the current
+  // conversation (it stays selected behind the gallery until closed);
+  // every conversation navigation closes it (see newChat/selectChat).
+  openGallery: () => set({ galleryOpen: true }),
+  closeGallery: () => set({ galleryOpen: false }),
+
   newChat: () =>
     // Every new chat resets to the default model (glm-5.3) —
     // the user can then switch freely for that conversation.
@@ -661,6 +684,7 @@ export const useSenku = create<SenkuState>((set, get) => ({
       currentChatId: null,
       messages: [],
       pendingAttachments: [],
+      galleryOpen: false,
       viewEpoch: s.viewEpoch + 1,
       model: s.models.includes(DEFAULT_MODEL)
         ? DEFAULT_MODEL
@@ -679,6 +703,8 @@ export const useSenku = create<SenkuState>((set, get) => ({
       set((s) => ({
         currentChatId: id,
         temporary: false,
+        // Run 23 — entering a conversation always leaves the gallery.
+        galleryOpen: false,
         // Run 22 guard: image chats store "image-forge" as their model
         // (honest in exports/search) but the composer may never ADOPT
         // it — a text follow-up would request a model the pool doesn't
@@ -747,6 +773,17 @@ export const useSenku = create<SenkuState>((set, get) => ({
       }));
     }
     await get().refreshChats();
+    // Run 23 — the gallery badge must not count a deleted chat's
+    // images; re-ask the server for the honest number (fire-and-forget).
+    if (!get().streaming) {
+      void fetch("/api/images?count=1")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: unknown) => {
+          const n = (d as { count?: unknown } | null)?.count;
+          if (typeof n === "number") set({ imageCount: n });
+        })
+        .catch(() => {});
+    }
   },
 
   async renameChat(id, title) {
@@ -800,7 +837,9 @@ export const useSenku = create<SenkuState>((set, get) => ({
       (p) => p.status === "extracting"
     );
     if (stillExtracting) return; // InputBar disables send meanwhile
-    set({ pendingAttachments: [] });
+    // Run 23 — sending while browsing the gallery returns to the
+    // conversation so the streaming answer is actually visible.
+    set({ pendingAttachments: [], galleryOpen: false });
     // Resolve the challenger at send time — the model list may have
     // changed since duel was armed.
     let challenger = s2.challenger;
@@ -852,6 +891,9 @@ export const useSenku = create<SenkuState>((set, get) => ({
 
     set({
       streaming: true,
+      // Run 23 — a forge begun from the composer returns the view to
+      // the conversation so the generating card is actually visible.
+      galleryOpen: false,
       messages: [
         ...s2.messages,
         ...(appendUserBubble
@@ -926,6 +968,11 @@ export const useSenku = create<SenkuState>((set, get) => ({
       }
       if (!temporary && typeof data.chatId === "string" && data.chatId) {
         set({ currentChatId: data.chatId });
+      }
+      // Run 23 — the gallery grows by exactly this forge (temp chats
+      // never write DB rows, so they never join the gallery).
+      if (!temporary) {
+        set((s) => ({ imageCount: s.imageCount + 1 }));
       }
       // Re-roll: the fresh image joins the variant history (earlier
       // images first, the new one last + active) — nothing is lost.

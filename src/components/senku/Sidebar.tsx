@@ -22,6 +22,7 @@ import {
   FileJson,
   FileText,
   Folder,
+  Images,
   Languages,
   LogOut,
   MoreHorizontal,
@@ -70,6 +71,12 @@ export function Sidebar({
     selectChat,
     deleteChat,
     renameChat,
+    // Run 23 — the Images row: gallery view + live forged count.
+    galleryOpen,
+    imageCount,
+    openGallery,
+    closeGallery,
+    setSidebarOpen,
   } = useSenku();
   const { toast } = useToast();
 
@@ -175,6 +182,23 @@ export function Sidebar({
     }
   };
 
+  /** Run 23 — open/close the image Gallery. On phones the sidebar
+   *  is a screen-covering overlay, so it steps aside the moment the
+   *  gallery opens (desktop keeps its pinned layout). */
+  const toggleGallery = () => {
+    if (galleryOpen) {
+      closeGallery();
+      return;
+    }
+    openGallery();
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 767px)").matches
+    ) {
+      setSidebarOpen(false);
+    }
+  };
+
   const filteredChats = useMemo(() => {
     const f = searchFilter.trim().toLowerCase();
     return f ? chats.filter((c) => c.title.toLowerCase().includes(f)) : chats;
@@ -229,6 +253,31 @@ export function Sidebar({
       >
         <Pencil className="h-4 w-4 text-zinc-400" />
         New chat
+      </button>
+
+      {/* Run 23 — image history, the way chats have history. The
+          count badge is the honest gallery size (disk-verified). */}
+      <button
+        onClick={toggleGallery}
+        aria-current={galleryOpen ? "page" : undefined}
+        className={`mx-3 mt-1.5 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+          galleryOpen
+            ? "bg-white/10 text-white"
+            : "text-zinc-200 hover:bg-white/5"
+        }`}
+      >
+        <Images
+          className={`h-4 w-4 ${galleryOpen ? "text-amber-300" : "text-zinc-400"}`}
+        />
+        Images
+        {imageCount > 0 && (
+          <span
+            className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-400"
+            title={`${imageCount} forged image${imageCount === 1 ? "" : "s"} across all chats`}
+          >
+            {imageCount}
+          </span>
+        )}
       </button>
 
       {/* Search input (toggled by the brand-row search icon) */}

@@ -1,16 +1,18 @@
-// GET /api/bootstrap — one-shot app state (user, providers, limiter, chats)
+// GET /api/bootstrap — one-shot app state (user, providers, limiter,
+// chats, image gallery count).
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { USER } from "@/lib/senku/constants";
 import { ensureSeed } from "@/lib/senku/seed";
 import { usageSnapshot } from "@/lib/senku/serialize";
+import { listGalleryImages } from "@/lib/senku/gallery";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     await ensureSeed();
-    const [snapshot, chats] = await Promise.all([
+    const [snapshot, chats, galleryImages] = await Promise.all([
       usageSnapshot(),
       db.chat.findMany({
         where: { isTemporary: false },
@@ -25,6 +27,7 @@ export async function GET() {
           updatedAt: true,
         },
       }),
+      listGalleryImages(),
     ]);
     return NextResponse.json({
       user: USER,
@@ -34,6 +37,9 @@ export async function GET() {
         createdAt: c.createdAt.toISOString(),
         updatedAt: c.updatedAt.toISOString(),
       })),
+      // Run 23 — the sidebar's Images row badge: how many forged
+      // images exist across all saved chats (disk-verified).
+      imageCount: galleryImages.length,
     });
   } catch (e) {
     console.error("bootstrap failed", e);
