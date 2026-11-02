@@ -1,0 +1,747 @@
+     1→"use client";
+     2→
+     3→// SenkuAPI — message timeline: markdown rendering, message editing,
+     4→// quiet hover provenance line, cached badges, inline error recovery
+     5→// (retry · switch model) and capped search sources.
+     6→
+     7→import { useEffect, useRef, useState } from "react";
+     8→import Image from "next/image";
+     9→import { Markdown } from "@/components/senku/Markdown";
+    10→import {
+    11→  StreamedMarkdown,
+    12→  useStickyScroll,
+    13→} from "@/components/senku/Typewriter";
+    14→import {
+    15→  ArrowLeftRight,
+    16→  Check,
+    17→  ChevronDown,
+    18→  Copy,
+    19→  Database,
+    20→  Eye,
+    21→  FileImage,
+    22→  FileText,
+    23→  Link2Off,
+    24→  Loader2,
+    25→  Pencil,
+    26→  RefreshCcw,
+    27→  Swords,
+    28→  TriangleAlert,
+    29→  Volume2,
+    30→  X,
+    31→} from "lucide-react";
+    32→import { useSenku, type DuelLane, type UIMessage } from "@/lib/store";
+    33→import { formatCompact } from "@/lib/senku/format";
+    34→import { confidenceOf } from "@/lib/senku/grounding";
+    35→import type { ConfidenceLabel } from "@/lib/senku/grounding";
+    36→import { modelMeta } from "@/lib/senku/models";
+    37→import type { AttachmentRecord } from "@/lib/senku/types";
+    38→import { useToast } from "@/hooks/use-toast";
+    39→import { Button } from "@/components/ui/button";
+    40→import { Textarea } from "@/components/ui/textarea";
+    41→
+    42→interface SpeechActive {
+    43→  id: string;
+    44→  phase: "loading" | "playing";
+    45→}
+    46→type SpeechState = SpeechActive | null;
+    47→
+    48→function CopyButton({ text }: { text: string }) {
+    49→  const [copied, setCopied] = useState(false);
+    50→  return (
+    51→    <button
+    52→      onClick={async () => {
+    53→        try {
+    54→          await navigator.clipboard.writeText(text);
+    55→          setCopied(true);
+    56→          setTimeout(() => setCopied(false), 1600);
+    57→        } catch {
+    58→          // clipboard denied
+    59→        }
+    60→      }}
+    61→      aria-label="Copy raw markdown"
+    62→      title="Copy raw markdown"
+    63→      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200"
+    64→    >
+    65→      {copied ? (
+    66→        <Check className="h-3.5 w-3.5 text-emerald-400" />
+    67→      ) : (
+    68→        <Copy className="h-3.5 w-3.5" />
+    69→      )}
+    70→    </button>
+    71→  );
+    72→}
+    73→
+    74→function SourcesBlock({ sources }: { sources: NonNullable<UIMessage["sources"]> }) {
+    75→  // >3 results can only come from the deep-research pipeline
+    76→  // (medium search is capped at 3) — say so, and scroll.
+    77→  const deep = sources.length > 3;
+    78→  return (
+    79→    <div className="mt-3 rounded-xl border border-zinc-800 bg-[#1d1d20] p-3">
+    80→      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+    81→        <RefreshCcw className="h-3 w-3" />
+    82→        {deep
+    83→          ? `Deep research · ${sources.length} sources`
+    84→          : `Searched the web · ${sources.length} result${
+    85→              sources.length === 1 ? "" : "s"
+    86→            }`}
+    87→      </div>
+    88→      <div
+    89→        className={`space-y-2.5${deep ? " senku-scroll max-h-96 overflow-y-auto pr-1" : ""}`}
+    90→      >
+    91→        {sources.map((s, i) => {
+    92→          let host = s.url;
+    93→          try {
+    94→            host = new URL(s.url).hostname.replace(/^www\./, "");
+    95→          } catch {
+    96→            /* keep raw */
+    97→          }
+    98→          return (
+    99→            <div key={i} className="min-w-0">
+   100→              <a
+   101→                href={s.url}
+   102→                target="_blank"
+   103→                rel="noopener noreferrer"
+   104→                className="block truncate text-[13px] font-medium text-zinc-200 hover:text-violet-300 hover:underline"
+   105→              >
+   106→                {s.title || host}
+   107→              </a>
+   108→              <p className="text-[11px] text-zinc-500">
+   109→                {host}
+   110→                {s.dateHint ? ` · dated: ${s.dateHint}` : ""}
+   111→              </p>
+   112→              {s.snippet && (
+   113→                <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-zinc-400">
+   114→                  {s.snippet}
+   115→                </p>
+   116→              )}
+   117→            </div>
+   118→          );
+   119→        })}
+   120→      </div>
+   121→    </div>
+   122→  );
+   123→}
+   124→
+   125→/** Files that were actually read on a user message — compact
+   126→ *  chips INSIDE the bubble, showing what the model received. */
+   127→function AttachmentChips({ attachments }: { attachments: AttachmentRecord[] }) {
+   128→  return (
+   129→    <div className="mb-2 flex flex-wrap gap-1.5">
+   130→      {attachments.map((a, i) => {
+   131→        const Icon = a.kind === "image" ? FileImage : FileText;
+   132→        const label =
+   133→          a.kind === "image"
+   134→            ? `vision · ${a.chars >= 1000 ? `${(a.chars / 1000).toFixed(1)}k` : a.chars} chars`
+   135→            : `${a.chars >= 1000 ? `${(a.chars / 1000).toFixed(1)}k` : a.chars} chars`;
+   136→        return (
+   137→          <span
+   138→            key={`${a.name}-${i}`}
+   139→            title={
+   140→              a.truncated
+   141→                ? `${a.name} — the model received the first ${a.chars} of ${a.totalChars} characters`
+   142→                : `${a.name} — the model received all ${a.chars} characters${a.kind === "image" ? " (vision pass: OCR + description)" : ""}`
+   143→            }
+   144→            className="flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-600/80 bg-black/25 px-2 py-1 text-[11.5px] text-zinc-300"
+   145→          >
+   146→            {a.kind === "image" ? (
+   147→              <Eye className="h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+   148→            ) : (
+   149→              <Icon className="h-3 w-3 shrink-0 text-zinc-400" aria-hidden />
+   150→            )}
+   151→            <span className="truncate font-medium">{a.name}</span>
+   152→            <span className="shrink-0 text-zinc-500">{label}</span>
+   153→            {a.truncated && (
+   154→              <span className="shrink-0 text-amber-400/70" aria-label="truncated">
+   155→                ✂
+   156→              </span>
+   157→            )}
+   158→          </span>
+   159→        );
+   160→      })}
+   161→    </div>
+   162→  );
+   163→}
+   164→
+   165→function UserMessage({ message }: { message: UIMessage }) {
+   166→  const { editMessage, streaming } = useSenku();
+   167→  const [editing, setEditing] = useState(false);
+   168→  const [draft, setDraft] = useState(message.content);
+   169→
+   170→  if (editing) {
+   171→    return (
+   172→      <div className="flex flex-col items-end gap-2">
+   173→        <Textarea
+   174→          value={draft}
+   175→          onChange={(e) => setDraft(e.target.value)}
+   176→          className="min-h-[80px] w-full max-w-[85%] rounded-2xl border-zinc-600 bg-[#262627] text-[15px] text-zinc-100 focus-visible:ring-zinc-500"
+   177→          autoFocus
+   178→        />
+   179→        <div className="flex gap-2">
+   180→          <Button
+   181→            variant="ghost"
+   182→            size="sm"
+   183→            className="h-7 rounded-full px-3 text-[12px] text-zinc-400 hover:bg-white/5 hover:text-white"
+   184→            onClick={() => {
+   185→              setDraft(message.content);
+   186→              setEditing(false);
+   187→            }}
+   188→          >
+   189→            <X className="mr-1 h-3 w-3" /> Cancel
+   190→          </Button>
+   191→          <Button
+   192→            size="sm"
+   193→            className="h-7 rounded-full bg-white px-3 text-[12px] font-medium text-black hover:bg-zinc-200"
+   194→            disabled={streaming || !draft.trim()}
+   195→            onClick={() => {
+   196→              setEditing(false);
+   197→              void editMessage(message.id, draft.trim());
+   198→            }}
+   199→          >
+   200→            <Check className="mr-1 h-3 w-3" /> Save & submit
+   201→          </Button>
+   202→        </div>
+   203→      </div>
+   204→    );
+   205→  }
+   206→
+   207→  return (
+   208→    <div className="group senku-fade-up flex flex-col items-end">
+   209→      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[#2f2f30] px-4 py-2.5 text-[15px] leading-relaxed text-zinc-100">
+   210→        {message.attachments?.length ? (
+   211→          <AttachmentChips attachments={message.attachments} />
+   212→        ) : null}
+   213→        {message.content}
+   214→      </div>
+   215→      {message.sources && message.sources.length > 0 && (
+   216→        <div className="w-full max-w-[85%]">
+   217→          <SourcesBlock sources={message.sources} />
+   218→        </div>
+   219→      )}
+   220→      <div className="mt-1 flex items-center gap-1 senku-hover-actions">
+   221→        <CopyButton text={message.content} />
+   222→        <button
+   223→          onClick={() => {
+   224→            setDraft(message.content);
+   225→            setEditing(true);
+   226→          }}
+   227→          aria-label="Edit message"
+   228→          title="Edit message"
+   229→          className="flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200"
+   230→        >
+   231→          <Pencil className="h-3.5 w-3.5" />
+   232→        </button>
+   233→      </div>
+   234→    </div>
+   235→  );
+   236→}
+   237→
+   238→/** One quiet provenance line: "GLM 5.3 · APInex pool · 1.9k tokens · cache: hit". */
+   239→function provenanceLine(m: UIMessage): string {
+   240→  const parts: string[] = [];
+   241→  // The effort dial leaves its mark — fast/deep turns say so.
+   242→  if (m.effort === "fast") parts.push("Fast mode");
+   243→  if (m.effort === "deep") parts.push("Deep research");
+   244→  if (m.model) parts.push(modelMeta(m.model).name);
+   245→  if (m.provider) {
+   246→    parts.push(
+   247→      m.servedBy === "zai-cloud"
+   248→        ? `${m.provider} · cloud failover`
+   249→        : `${m.provider} pool`
+   250→    );
+   251→  }
+   252→  if (typeof m.tokens === "number" && m.tokens > 0) {
+   253→    parts.push(`${formatCompact(m.tokens)} tokens`);
+   254→  }
+   255→  parts.push(m.cached ? "cache: hit" : "cache: miss");
+   256→  return parts.join(" · ");
+   257→}
+   258→
+   259→/** Body without the trailing label line (display only). */
+   260→function withoutConfidenceLine(content: string): string {
+   261→  if (!confidenceOf(content)) return content;
+   262→  const lines = content.trimEnd().split("\n");
+   263→  return lines.slice(0, -1).join("\n").trimEnd();
+   264→}
+   265→
+   266→const CONFIDENCE_STYLE: Record<ConfidenceLabel, { dot: string; text: string }> = {
+   267→  confirmed: { dot: "bg-emerald-400", text: "text-emerald-300/90" },
+   268→  partial: { dot: "bg-amber-400", text: "text-amber-300/90" },
+   269→  "stale sources": { dot: "bg-rose-400", text: "text-rose-300/90" },
+   270→};
+   271→
+   272→function ConfidenceBadge({ label }: { label: ConfidenceLabel }) {
+   273→  const s = CONFIDENCE_STYLE[label];
+   274→  return (
+   275→    <div className="mt-1.5 flex items-center gap-1.5" aria-label={`Answer confidence: ${label}`}>
+   276→      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.dot}`} aria-hidden />
+   277→      <span className={`text-[11px] font-medium lowercase tracking-wide ${s.text}`}>
+   278→        {label}
+   279→      </span>
+   280→      <span
+   281→        className="text-[10.5px] text-zinc-600"
+   282→        title="Grounded-answer confidence — dates and sources were audited against your question's time scope"
+   283→      >
+   284→        · source confidence
+   285→      </span>
+   286→    </div>
+   287→  );
+   288→}
+   289→
+   290→/** One racing model inside a duel: header (lane badge · model · Keep
+   291→    button), thinking/streaming/error body, per-lane confidence badge. */
+   292→function DuelLaneCard({
+   293→  lane,
+   294→  canPick,
+   295→  onKeep,
+   296→}: {
+   297→  lane: DuelLane;
+   298→  canPick: boolean;
+   299→  onKeep: () => void;
+   300→}) {
+   301→  const meta = modelMeta(lane.model);
+   302→  // Grounded-answer contract, per lane: the trailing label becomes
+   303→  // a badge once this lane finishes streaming.
+   304→  const confidence = !lane.streaming && !lane.error ? confidenceOf(lane.content) : null;
+   305→  const display = confidence ? withoutConfidenceLine(lane.content) : lane.content;
+   306→  const keepable = canPick && !lane.error && lane.content.trim().length > 0;
+   307→
+   308→  return (
+   309→    <div
+   310→      className={`flex min-w-0 flex-col rounded-xl border p-3 ${
+   311→        lane.error ? "border-red-500/25 bg-red-500/5" : "border-zinc-800 bg-[#1d1d20]"
+   312→      }`}
+   313→      aria-label={`Duel lane ${lane.id.toUpperCase()} — ${meta.name}`}
+   314→    >
+   315→      <div className="mb-2 flex items-center gap-2">
+   316→        <span
+   317→          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-zinc-700 bg-zinc-800/60 text-[10px] font-bold uppercase text-zinc-400"
+   318→          aria-hidden
+   319→        >
+   320→          {lane.id}
+   321→        </span>
+   322→        <span
+   323→          className="min-w-0 truncate text-[12.5px] font-semibold text-zinc-200"
+   324→          title={lane.model}
+   325→        >
+   326→          {meta.name}
+   327→        </span>
+   328→        {lane.cached && !lane.error && (
+   329→          <span
+   330→            className="flex shrink-0 items-center gap-1 text-emerald-400/70"
+   331→            title="Served from the 24h response cache — zero tokens spent"
+   332→          >
+   333→            <Database className="h-3 w-3" />
+   334→          </span>
+   335→        )}
+   336→        <span className="ml-auto shrink-0">
+   337→          <button
+   338→            onClick={onKeep}
+   339→            disabled={!keepable}
+   340→            className={`flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${
+   341→              keepable
+   342→                ? "border-zinc-500/60 bg-white/10 text-zinc-100 hover:bg-white/20"
+   343→                : "cursor-not-allowed border-zinc-800 text-zinc-600"
+   344→            }`}
+   345→            title={
+   346→              keepable
+   347→                ? `Keep the ${meta.name} answer`
+   348→                : lane.error
+   349→                  ? "This lane failed"
+   350→                  : "Waiting for this answer to finish…"
+   351→            }
+   352→          >
+   353→            <Check className="h-3 w-3" />
+   354→            Keep
+   355→          </button>
+   356→        </span>
+   357→      </div>
+   358→
+   359→      <div className="min-w-0">
+   360→        {lane.error ? (
+   361→          <p className="text-[12.5px] leading-relaxed text-red-300/80" role="alert">
+   362→            {lane.error}
+   363→          </p>
+   364→        ) : lane.phase && !lane.content ? (
+   365→          <div className="flex h-6 items-center" aria-live="polite">
+   366→            <span className="senku-thinking-label text-[13px] font-medium">
+   367→              {lane.phase === "searching" ? "Searching the web" : "Thinking"}
+   368→            </span>
+   369→          </div>
+   370→        ) : (
+   371→          <StreamedMarkdown content={display} streaming={lane.streaming} />
+   372→        )}
+   373→      </div>
+   374→
+   375→      {!lane.streaming && confidence && <ConfidenceBadge label={confidence} />}
+   376→    </div>
+   377→  );
+   378→}
+   379→
+   380→/** A duel turn awaiting its pick: two models racing side by side
+   381→    (stacked on mobile), each with its own Keep button. */
+   382→function DuelMessage({ message }: { message: UIMessage }) {
+   383→  const { pickDuelWinner } = useSenku();
+   384→  const { toast } = useToast();
+   385→  const duel = message.duel;
+   386→  if (!duel) return null;
+   387→  // Picks unlock once the turn finishes (or is stopped) — picking
+   388→  // mid-stream would race the lane_done/done reconciliation.
+   389→  const canPick = !message.streaming;
+   390→
+   391→  const keep = (lane: "a" | "b") => {
+   392→    const meta = modelMeta(duel[lane].model);
+   393→    void pickDuelWinner(message.id, lane).then(() => {
+   394→      toast({
+   395→        description: `Kept ${meta.name} — the runner-up stays under the answer.`,
+   396→      });
+   397→    });
+   398→  };
+   399→
+   400→  return (
+   401→    <div>
+   402→      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-amber-300/70">
+   403→        <Swords className="h-3 w-3" aria-hidden />
+   404→        Duel — pick the keeper
+   405→      </div>
+   406→      <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-2">
+   407→        <DuelLaneCard lane={duel.a} canPick={canPick} onKeep={() => keep("a")} />
+   408→        <DuelLaneCard lane={duel.b} canPick={canPick} onKeep={() => keep("b")} />
+   409→      </div>
+   410→      <p className="mt-2 text-[11px] text-zinc-600">
+   411→        Both answers are billed separately ·{" "}
+   412→        {canPick
+   413→          ? "pick one to keep it in the chat"
+   414→          : "generating both answers…"}
+   415→      </p>
+   416→    </div>
+   417→  );
+   418→}
+   419→
+   420→function AssistantMessage({
+   421→  message,
+   422→  speech,
+   423→  onToggleSpeech,
+   424→}: {
+   425→  message: UIMessage;
+   426→  speech: SpeechState;
+   427→  onToggleSpeech: (m: UIMessage) => void;
+   428→}) {
+   429→  const { models, model, setModel, retryLast, streaming } = useSenku();
+   430→  const isThinking = message.streaming && !message.content && !message.error;
+   431→  const isSpeakingThis = speech?.id === message.id;
+   432→  const speechLoading = isSpeakingThis && speech.phase === "loading";
+   433→  const speechPlaying = isSpeakingThis && speech.phase === "playing";
+   434→
+   435→  // Error recovery: the next model in the list (wraps around).
+   436→  const currentIdx = models.indexOf(model);
+   437→  const switchTarget =
+   438→    models.length > 1
+   439→      ? models[((currentIdx === -1 ? 0 : currentIdx) + 1) % models.length]
+   440→      : null;
+   441→
+   442→  // Grounded-answer contract: the trailing confidence label becomes
+   443→  // a badge once streaming completes (while streaming, the final
+   444→  // line may still be half-written — render it raw).
+   445→  const confidence = message.error ? null : confidenceOf(message.content);
+   446→  const displayContent =
+   447→    !message.streaming && confidence
+   448→      ? withoutConfidenceLine(message.content)
+   449→      : message.content;
+   450→
+   451→  return (
+   452→    <div className="group senku-fade-up">
+   453→      <div className="flex gap-3">
+   454→        {/* While thinking, our own WHITE sparkle logo pulses with the
+   455→            exact scale curve measured from the Claude Code reference
+   456→            GIF — same motion, our colors — beside a shimmering label. */}
+   457→        <Image
+   458→          src="/senku-sparkle.png"
+   459→          alt="SenkuAPI"
+   460→          width={28}
+   461→          height={28}
+   462→          className={`mt-0.5 h-7 w-7 shrink-0${
+   463→            isThinking ? " senku-thinking-sparkle" : ""
+   464→          }`}
+   465→        />
+   466→        <div className="min-w-0 flex-1">
+   467→          {message.error ? (
+   468→            <div
+   469→              className="rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-[13px] text-red-300"
+   470→              role="alert"
+   471→            >
+   472→              <p className="leading-relaxed">{message.error}</p>
+   473→              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+   474→                <button
+   475→                  onClick={() => void retryLast()}
+   476→                  disabled={streaming}
+   477→                  className="flex h-7 items-center gap-1.5 rounded-full border border-zinc-500/60 bg-white/10 px-3 text-[12px] font-medium text-zinc-100 transition-colors hover:bg-white/20 disabled:opacity-40"
+   478→                >
+   479→                  <RefreshCcw className="h-3 w-3" />
+   480→                  Retry
+   481→                </button>
+   482→                {switchTarget && (
+   483→                  <button
+   484→                    onClick={() => {
+   485→                      setModel(switchTarget);
+   486→                      void retryLast(switchTarget);
+   487→                    }}
+   488→                    disabled={streaming}
+   489→                    className="flex h-7 items-center gap-1.5 rounded-full border border-zinc-700 px-3 text-[12px] text-zinc-400 transition-colors hover:bg-white/5 hover:text-zinc-200 disabled:opacity-40"
+   490→                    title={`Retry with ${modelMeta(switchTarget).name}`}
+   491→                  >
+   492→                    <ArrowLeftRight className="h-3 w-3" />
+   493→                    Switch model
+   494→                  </button>
+   495→                )}
+   496→              </div>
+   497→            </div>
+   498→          ) : message.duel ? (
+   499→            /* Awaiting-pick duel: two racing lanes instead of one
+   500→               answer — per-lane thinking, streaming, badges, Keep. */
+   501→            <DuelMessage message={message} />
+   502→          ) : isThinking ? (
+   503→            <div className="flex h-7 items-center" aria-live="polite">
+   504→              <span className="senku-thinking-label text-[14px] font-medium">
+   505→                {message.phase === "searching"
+   506→                  ? message.searchDetail ?? "Searching the web"
+   507→                  : message.effort === "deep"
+   508→                    ? "Thinking deeply"
+   509→                    : "Thinking"}
+   510→              </span>
+   511→            </div>
+   512→          ) : (
+   513→            <StreamedMarkdown
+   514→              content={displayContent}
+   515→              streaming={Boolean(message.streaming)}
+   516→            />
+   517→          )}
+   518→
+   519→          {/* grounded-answer confidence badge (search turns) */}
+   520→          {!message.streaming && !message.duel && confidence && (
+   521→            <ConfidenceBadge label={confidence} />
+   522→          )}
+   523→
+   524→          {/* search-failure notice (all engines down) */}
+   525→          {!message.streaming && message.searchFailed && !message.error && (
+   526→            <div className="mt-2 flex items-center gap-1.5 text-[11.5px] text-amber-400/80">
+   527→              <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
+   528→              Web search unavailable — answered from model knowledge.
+   529→            </div>
+   530→          )}
+   531→
+   532→          {/* quiet provenance line + hover actions (desktop reveals on
+   533→              hover; touch devices keep it faintly visible) */}
+   534→          {!message.streaming && !message.error && !message.duel && (
+   535→            <div className="mt-1.5 flex items-center gap-1 senku-meta-row">
+   536→              <CopyButton text={message.content} />
+   537→              {message.content.trim() && (
+   538→                <button
+   539→                  onClick={() => onToggleSpeech(message)}
+   540→                  aria-label={
+   541→                    speechPlaying ? "Stop reading aloud" : "Read this answer aloud"
+   542→                  }
+   543→                  aria-pressed={speechPlaying}
+   544→                  title={speechPlaying ? "Stop reading aloud" : "Read aloud"}
+   545→                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors ${
+   546→                    speechPlaying
+   547→                      ? "text-emerald-300"
+   548→                      : "text-zinc-500 hover:bg-white/10 hover:text-zinc-200"
+   549→                  }`}
+   550→                >
+   551→                  {speechLoading ? (
+   552→                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   553→                  ) : speechPlaying ? (
+   554→                    <span className="senku-eq flex h-3.5 items-end gap-[2px]" aria-hidden>
+   555→                      <span />
+   556→                      <span />
+   557→                      <span />
+   558→                    </span>
+   559→                  ) : (
+   560→                    <Volume2 className="h-3.5 w-3.5" />
+   561→                  )}
+   562→                </button>
+   563→              )}
+   564→              {message.cached && (
+   565→                <span
+   566→                  className="flex shrink-0 items-center gap-1 text-[11px] text-emerald-400/80"
+   567→                  title="Served from the 24h response cache — zero tokens spent"
+   568→                >
+   569→                  <Database className="h-3 w-3" />
+   570→                </span>
+   571→              )}
+   572→              <span
+   573→                className="ml-0.5 truncate text-[11px] text-zinc-600"
+   574→                title={provenanceLine(message)}
+   575→              >
+   576→                {provenanceLine(message)}
+   577→              </span>
+   578→            </div>
+   579→          )}
+   580→
+   581→          {/* duel runner-up: the losing lane stays viewable under the
+   582→              kept answer (collapsed, muted — a reference, not the reply) */}
+   583→          {!message.streaming && !message.error && message.runnerUp?.content && (
+   584→            <details className="mt-2">
+   585→              <summary
+   586→                className="flex w-fit cursor-pointer select-none items-center gap-1.5 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden"
+   587→                title="The other model's answer from this duel"
+   588→              >
+   589→                <ChevronDown
+   590→                  className="h-3 w-3 transition-transform"
+   591→                  aria-hidden
+   592→                />
+   593→                Runner-up · {modelMeta(message.runnerUp.model).name}
+   594→              </summary>
+   595→              <div className="senku-md mt-2 rounded-xl border border-zinc-800/70 bg-[#1d1d20]/60 px-3.5 py-2.5">
+   596→                <Markdown
+   597→                  content={
+   598→                    confidenceOf(message.runnerUp.content)
+   599→                      ? withoutConfidenceLine(message.runnerUp.content)
+   600→                      : message.runnerUp.content
+   601→                  }
+   602→                />
+   603→              </div>
+   604→            </details>
+   605→          )}
+   606→        </div>
+   607→      </div>
+   608→    </div>
+   609→  );
+   610→}
+   611→
+   612→export function TemporaryBanner() {
+   613→  return (
+   614→    <div className="mx-auto w-full max-w-3xl px-4 pt-2">
+   615→      <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-[#1d1d20] px-3.5 py-2.5 text-[13px] text-zinc-400">
+   616→        <Link2Off className="h-4 w-4 shrink-0 text-zinc-500" />
+   617→        <span>
+   618→          <span className="font-medium text-zinc-300">Temporary Chat</span>{" "}
+   619→          • Messages in this chat won&apos;t be saved to chat history.
+   620→        </span>
+   621→      </div>
+   622→    </div>
+   623→  );
+   624→}
+   625→
+   626→export function ChatTimeline() {
+   627→  const { messages } = useSenku();
+   628→  const { toast } = useToast();
+   629→  const bottomRef = useRef<HTMLDivElement>(null);
+   630→  const scrollRef = useRef<HTMLDivElement>(null);
+   631→  // Auto-scroll stickiness: following the newest word pauses the
+   632→  // moment the user scrolls up to read and resumes when they return
+   633→  // to the bottom (every StreamedMarkdown consults the same state).
+   634→  const stickRef = useStickyScroll(scrollRef);
+   635→
+   636→  // ── Read-aloud (TTS) playback state ──
+   637→  // One audio element for the whole timeline; only one message can
+   638→  // speak at a time. A token guards against stale fetches after a stop.
+   639→  const [speech, setSpeech] = useState<SpeechState>(null);
+   640→  const audioRef = useRef<HTMLAudioElement | null>(null);
+   641→  const audioUrlRef = useRef<string | null>(null);
+   642→  const speechTokenRef = useRef(0);
+   643→
+   644→  const stopSpeech = () => {
+   645→    speechTokenRef.current += 1;
+   646→    if (audioRef.current) {
+   647→      audioRef.current.pause();
+   648→      audioRef.current.removeAttribute("src");
+   649→    }
+   650→    if (audioUrlRef.current) {
+   651→      URL.revokeObjectURL(audioUrlRef.current);
+   652→      audioUrlRef.current = null;
+   653→    }
+   654→    setSpeech(null);
+   655→  };
+   656→
+   657→  const toggleSpeech = async (m: UIMessage) => {
+   658→    if (speech?.id === m.id) {
+   659→      stopSpeech();
+   660→      return;
+   661→    }
+   662→    stopSpeech();
+   663→    const token = ++speechTokenRef.current;
+   664→    setSpeech({ id: m.id, phase: "loading" });
+   665→    try {
+   666→      const res = await fetch("/api/voice/speak", {
+   667→        method: "POST",
+   668→        headers: { "Content-Type": "application/json" },
+   669→        body: JSON.stringify({ text: m.content }),
+   670→      });
+   671→      if (!res.ok) {
+   672→        const data = await res.json().catch(() => ({}));
+   673→        throw new Error(data.error || "Read-aloud is unavailable right now.");
+   674→      }
+   675→      if (token !== speechTokenRef.current) return; // user moved on
+   676→      const blob = await res.blob();
+   677→      const url = URL.createObjectURL(blob);
+   678→      audioUrlRef.current = url;
+   679→      const audio = (audioRef.current ??= new Audio());
+   680→      audio.src = url;
+   681→      audio.onended = () => {
+   682→        if (token === speechTokenRef.current) stopSpeech();
+   683→      };
+   684→      audio.onerror = () => {
+   685→        if (token === speechTokenRef.current) stopSpeech();
+   686→      };
+   687→      await audio.play();
+   688→      if (token !== speechTokenRef.current) return;
+   689→      setSpeech({ id: m.id, phase: "playing" });
+   690→    } catch (e) {
+   691→      if (token === speechTokenRef.current) {
+   692→        setSpeech(null);
+   693→        if ((e as Error).name !== "NotAllowedError") {
+   694→          toast({
+   695→            description: (e as Error).message || "Could not play the audio.",
+   696→            variant: "destructive",
+   697→          });
+   698→        }
+   699→      }
+   700→    }
+   701→  };
+   702→
+   703→  // stop playback when the timeline unmounts or the chat changes
+   704→  useEffect(() => {
+   705→    return () => {
+   706→      speechTokenRef.current += 1;
+   707→      audioRef.current?.pause();
+   708→      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+   709→    };
+   710→  }, []);
+   711→
+   712→  // Scroll for NEW messages only — content growth is followed
+   713→  // word-by-word by the typewriter gate — and never yank the view
+   714→  // back down if the user has scrolled up.
+   715→  const count = messages.length;
+   716→  const lastId = messages[count - 1]?.id ?? "";
+   717→  useEffect(() => {
+   718→    if (!stickRef.current) return;
+   719→    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+   720→  }, [count, lastId, stickRef]);
+   721→
+   722→  return (
+   723→    <div ref={scrollRef} className="senku-scroll flex-1 overflow-y-auto">
+   724→      <div className="mx-auto w-full max-w-3xl space-y-6 px-4 pb-6 pt-4">
+   725→        {messages.map((m, i) =>
+   726→          m.role === "user" ? (
+   727→            <UserMessage key={m.id} message={m} />
+   728→          ) : (
+   729→            /* Slot-stable key: the server reconciles the assistant
+   730→               message id at "done" — keying by id would remount the
+   731→               message right then and dump the typewriter's remaining
+   732→               reveal. The slot never shifts mid-turn (messages are
+   733→               append-only while streaming). */
+   734→            <AssistantMessage
+   735→              key={`slot-${i}`}
+   736→              message={m}
+   737→              speech={speech}
+   738→              onToggleSpeech={(msg) => void toggleSpeech(msg)}
+   739→            />
+   740→          )
+   741→        )}
+   742→        <div ref={bottomRef} />
+   743→      </div>
+   744→    </div>
+   745→  );
+   746→}
+   747→

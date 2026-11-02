@@ -1,0 +1,675 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────
+   SenkuAPI — dark app surface, scrollbars, markdown, motion
+   ─────────────────────────────────────────────────────────── */
+.senku-root {
+  background-color: #18181b;
+  color: #f4f4f5;
+}
+
+.senku-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+.senku-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.senku-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.senku-scroll::-webkit-scrollbar-thumb {
+  background-color: #3f3f46;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.senku-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #52525b;
+}
+
+/* ── Sidebar open/close + hover-peek (Run 13) ───────────────
+   The shell is ALWAYS mounted so open/close can animate.
+   Desktop (md+): the shell animates width 0 ↔ 264px — the chat
+   column reflows smoothly like claude.ai — while the inner
+   panel slides, so sidebar content never squishes mid-flight.
+   Mobile: the shell is a fixed overlay sliding in from the left
+   over a fading backdrop.
+   `.senku-anim` is only added after the first paint, so the
+   initial (hydration) state never animates. */
+.senku-sidebar {
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 280ms;
+}
+.senku-sidebar.senku-open {
+  transform: translateX(0);
+  visibility: visible;
+  transition:
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 0s;
+}
+.senku-backdrop {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+.senku-backdrop.senku-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (min-width: 768px) {
+  .senku-sidebar {
+    transform: none;
+    width: 0;
+    overflow: hidden;
+    transition:
+      width 280ms cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 280ms;
+  }
+  .senku-sidebar.senku-open {
+    width: 264px;
+    transition:
+      width 280ms cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0s;
+  }
+  .senku-sidebar-inner {
+    transform: translateX(-100%);
+    transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .senku-sidebar.senku-open .senku-sidebar-inner {
+    transform: translateX(0);
+  }
+}
+/* first-paint gate: no transitions until the app opts in */
+.senku-sidebar:not(.senku-anim),
+.senku-sidebar:not(.senku-anim) .senku-sidebar-inner,
+.senku-backdrop:not(.senku-anim) {
+  transition: none !important;
+}
+
+/* ── Conversation view transition (Run 13) ─────────────────
+   Entering a chat / starting a new one remounts the view
+   wrapper (keyed by the store's viewEpoch, bumped on every
+   navigation) — the whole conversation settles in as one calm
+   block instead of N messages exploding individually. */
+@keyframes senku-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.senku-view-in {
+  animation: senku-view-in 260ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes senku-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+.senku-pulse {
+  animation: senku-pulse-dot 1.8s ease-in-out infinite;
+}
+
+/* ── Claude Code "Thinking" animation ───────────────────────
+   Motion replicated frame-by-frame from the Claude Code thinking
+   GIF (12 frames, 1.00s loop, measured programmatically):
+   the mark swells from a small dot (scale 0.31) up to full size
+   (40% mark), settles onto a plateau (scale 0.81) that holds
+   through 80%, then collapses back to the dot. Pure scale pulse
+   — NO rotation, NO wobble, NO color shifting. The mark stays
+   OUR OWN WHITE sparkle logo — only the motion is borrowed. */
+@keyframes senku-think {
+  0% {
+    transform: scale(0.31);
+    animation-timing-function: cubic-bezier(0.33, 0.66, 0.45, 1);
+  }
+  40% {
+    transform: scale(1);
+    animation-timing-function: ease-in-out;
+  }
+  53% {
+    transform: scale(0.81);
+    animation-timing-function: linear;
+  }
+  80% {
+    transform: scale(0.81);
+    animation-timing-function: cubic-bezier(0.33, 0.66, 0.45, 1);
+  }
+  87% {
+    transform: scale(0.59);
+    animation-timing-function: linear;
+  }
+  93% {
+    transform: scale(0.4);
+    animation-timing-function: linear;
+  }
+  100% {
+    transform: scale(0.31);
+  }
+}
+/* Applied directly to the white sparkle <Image> while thinking —
+   the exact measured curve, zero color change. */
+.senku-thinking-sparkle {
+  transform-origin: center;
+  animation: senku-think 1s infinite;
+}
+
+@keyframes senku-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ── Hover-revealed action rows ──────────────────────────────
+   Tailwind's group-hover variant only applies on devices that can
+   hover (@media (hover: hover)) — but "hidden by default" classes
+   are unconditional. On touch devices that left action rows
+   permanently invisible. These helpers keep the math symmetric:
+   touch devices always see a faint row; hover-capable screens
+   hide it until the parent .group is hovered. */
+.senku-hover-actions {
+  opacity: 0.75;
+  transition: opacity 200ms ease;
+}
+.senku-meta-row {
+  opacity: 0.75;
+  transition: opacity 200ms ease;
+}
+@media (hover: hover) {
+  .senku-hover-actions {
+    opacity: 0;
+  }
+  .group:hover > * .senku-hover-actions,
+  .group:hover .senku-hover-actions {
+    opacity: 1;
+  }
+  /* the provenance line hides only on hover-capable AND wide
+     screens — phones keep it faintly visible */
+  @media (min-width: 768px) {
+    .senku-meta-row {
+      opacity: 0;
+    }
+    .group:hover .senku-meta-row {
+      opacity: 1;
+    }
+  }
+}
+
+.senku-thinking-label {
+  background: linear-gradient(
+    90deg,
+    #8e8e96 0%,
+    #8e8e96 38%,
+    #e4e4e7 50%,
+    #ffffff 54%,
+    #8e8e96 66%,
+    #8e8e96 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: senku-shimmer 2s linear infinite;
+}
+
+@keyframes senku-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.senku-fade-up {
+  animation: senku-fade-up 0.28s ease-out both;
+}
+
+@keyframes senku-caret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+.senku-caret {
+  display: inline-block;
+  width: 0.5em;
+  animation: senku-caret 1s step-end infinite;
+}
+
+/* Skip affordance shown while an answer is still typing out */
+.senku-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid #3f3f46;
+  background: rgba(255, 255, 255, 0.04);
+  color: #a1a1aa;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.senku-skip:hover {
+  color: #f4f4f5;
+  border-color: #52525b;
+  background: rgba(255, 255, 255, 0.08);
+}
+.senku-skip:focus-visible {
+  outline: 2px solid #71717a;
+  outline-offset: 2px;
+}
+.senku-skip svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ── Launch Pad (welcome screen) motion ────────────────────
+   Slow drifting aurora blobs + a gently floating logo. */
+@keyframes senku-aurora-a {
+  0%,
+  100% {
+    transform: translate(-8%, -4%) scale(1);
+  }
+  50% {
+    transform: translate(6%, 5%) scale(1.15);
+  }
+}
+@keyframes senku-aurora-b {
+  0%,
+  100% {
+    transform: translate(10%, 6%) scale(1.05);
+  }
+  50% {
+    transform: translate(-6%, -8%) scale(0.95);
+  }
+}
+.senku-aurora {
+  animation: senku-aurora-a 18s ease-in-out infinite;
+  will-change: transform;
+}
+.senku-aurora-b {
+  animation: senku-aurora-b 22s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes senku-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+.senku-float {
+  animation: senku-float 5s ease-in-out infinite;
+}
+
+/* ── Voice mode ──────────────────────────────────────────────
+   Recording pulse, live waveform bars, playback equalizer. */
+@keyframes senku-rec-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.5;
+  }
+}
+.senku-rec-dot {
+  animation: senku-rec-pulse 1.1s ease-in-out infinite;
+}
+
+.senku-wave-bar {
+  width: 3px;
+  min-height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, #fafafa 0%, #a1a1aa 100%);
+  transition: height 90ms linear;
+  will-change: height;
+}
+
+@keyframes senku-eq-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.senku-eq span {
+  display: inline-block;
+  width: 2.5px;
+  height: 12px;
+  border-radius: 2px;
+  background: currentColor;
+  transform-origin: bottom;
+  animation: senku-eq-bounce 0.9s ease-in-out infinite;
+}
+.senku-eq span:nth-child(2) {
+  animation-delay: 0.22s;
+}
+.senku-eq span:nth-child(3) {
+  animation-delay: 0.44s;
+}
+
+@keyframes senku-rec-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.senku-rec-in {
+  animation: senku-rec-in 0.18s ease-out both;
+}
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .senku-aurora,
+  .senku-aurora-b,
+  .senku-float,
+  .senku-thinking-sparkle,
+  .senku-pulse,
+  .senku-fade-up,
+  .senku-caret {
+    animation: none !important;
+  }
+  .senku-thinking-label {
+    animation: none !important;
+    background: none;
+    color: #a1a1aa;
+  }
+  .senku-rec-dot,
+  .senku-eq span,
+  .senku-rec-in {
+    animation: none !important;
+  }
+  /* Run 13: sidebar + view transitions become instant state
+     changes — hover-peek still works, it just doesn't animate. */
+  .senku-view-in {
+    animation: none !important;
+  }
+  .senku-sidebar,
+  .senku-sidebar .senku-sidebar-inner,
+  .senku-backdrop {
+    transition: none !important;
+  }
+}
+
+/* Markdown timeline rendering */
+.senku-md {
+  font-size: 15px;
+  line-height: 1.7;
+  color: #e4e4e7;
+  word-break: break-word;
+}
+.senku-md > *:first-child {
+  margin-top: 0;
+}
+.senku-md > *:last-child {
+  margin-bottom: 0;
+}
+.senku-md p {
+  margin: 0.65em 0;
+}
+.senku-md h1,
+.senku-md h2,
+.senku-md h3,
+.senku-md h4 {
+  font-weight: 600;
+  color: #fafafa;
+  margin: 1.1em 0 0.5em;
+  line-height: 1.3;
+}
+.senku-md h1 {
+  font-size: 1.35em;
+}
+.senku-md h2 {
+  font-size: 1.2em;
+}
+.senku-md h3 {
+  font-size: 1.08em;
+}
+.senku-md ul,
+.senku-md ol {
+  margin: 0.6em 0;
+  padding-left: 1.4em;
+}
+.senku-md ul {
+  list-style: disc;
+}
+.senku-md ol {
+  list-style: decimal;
+}
+.senku-md li {
+  margin: 0.25em 0;
+}
+.senku-md a {
+  color: #c4b5fd;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.senku-md a:hover {
+  color: #ddd6fe;
+}
+.senku-md blockquote {
+  border-left: 3px solid #3f3f46;
+  padding-left: 0.9em;
+  margin: 0.7em 0;
+  color: #a1a1aa;
+}
+.senku-md .senku-inline-code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.86em;
+  background: #26262a;
+  border: 1px solid #3f3f46;
+  border-radius: 5px;
+  padding: 0.12em 0.35em;
+  color: #e4e4e7;
+}
+/* fenced blocks are rendered by the Markdown component (syntax
+   highlighted) — .senku-code owns the chrome, tokens own the color */
+.senku-md .senku-code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+.senku-md .senku-code pre,
+.senku-md .senku-code code {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.senku-md .senku-code code {
+  display: block;
+  overflow-x: auto;
+}
+.senku-md table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: 100%;
+  font-size: 0.92em;
+}
+.senku-md th,
+.senku-md td {
+  border: 1px solid #2f2f33;
+  padding: 0.45em 0.7em;
+  text-align: left;
+}
+.senku-md th {
+  background: #222224;
+  font-weight: 600;
+}
+.senku-md hr {
+  border: none;
+  border-top: 1px solid #2f2f33;
+  margin: 1em 0;
+}
+
+/* thinking mark = our white sparkle logo, animated by
+   .senku-thinking-sparkle (see the keyframes above) */
+
+/* pro code blocks: .senku-code chrome, tokens own the color */
+
+/* voice-mode rules touch */

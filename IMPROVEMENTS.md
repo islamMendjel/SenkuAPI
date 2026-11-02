@@ -1,0 +1,1392 @@
+# IMPROVEMENTS.md — SenkuAPI continuous improvement log
+
+One meaningful, verified change per run. Highest rung of the priority
+ladder wins: correctness → usability → performance → robustness →
+quality → polish.
+
+---
+
+## Run 1 — 2026-11-01: Health-aware key dispatch (circuit breaker + in-turn retry)
+
+**Rung:** 1 (Correctness) + 2 (Usability) + 3 (Performance)
+
+**Ladder context:** Earlier fixes already shipped: WelcomeScreen
+layout rewrite, de-gilded Thinking animation, professional code
+blocks (Markdown.tsx), live date/time context in the system prompt
+(fixes "June 19, 2023" date hallucination — verified working).
+
+### Diagnosis
+
+Live-testing the gateway revealed the round-robin key router had
+**zero key-health awareness**. APInex's "Pool key #2" returns
+`401 Invalid API key` from the provider, so:
+
+- Every other request (whenever rotation landed on the dead key)
+  silently failed over to the Z.ai cloud runtime — the slow
+  fake-streaming path (48-char chunks @ 6ms) instead of the fast
+  native provider SSE stream.
+- The message metadata row **lied**: it claimed
+  "APInex · Pool key #2 · cloud failover" — crediting a provider
+  endpoint and a pool key that never served a single token.
+- Usage accounting billed the dead key for tokens it never
+  generated (usageEvent.keyId + monthly accumulator + lastUsedAt).
+
+### Change
+
+New architecture: `pick → try → mark health → retry next key →
+cloud failover only when every key failed`.
+
+- **`src/lib/senku/keyhealth.ts` (new)** — in-memory circuit
+  breaker. Auth failure (401/403) = 1 strike → 10-minute quarantine.
+  Transient failure (network cut / empty stream) = 2 strikes within
+  5 min → 60-second cooldown. Any success clears all strikes.
+- **`src/lib/senku/dispatch.ts` (new)** — orchestrator. Round-robins
+  pooled keys via the router, retries the *next* key on typed
+  failure, never duplicates already-streamed output (retries only
+  when zero deltas were emitted), preserves the original coded
+  errors for hard pool conditions (no-keys / limiter exhaustion).
+- **`src/lib/senku/executor.ts`** — `tryProviderStream` now returns
+  a typed `ProviderAttempt` (`auth` | `unreachable` | `empty` +
+  `emitted` flag) instead of an opaque `null`. Removed the
+  single-key `executeCompletion` (superseded by the dispatcher).
+- **`src/lib/senku/router.ts`** — `pickKey(provider, excludeIds?)`:
+  skips keys already attempted this turn, deprioritizes quarantined
+  keys (probes them as last resort so a recovered key re-enters
+  rotation automatically), new `"all-tried"` reason.
+- **`src/lib/senku/gateway.ts`** — uses `dispatchCompletion`; bills
+  `usageEvent.keyId` / monthly accumulator / `lastUsedAt` only to
+  the key that actually served; `keyLabel` is null on cloud
+  failover so persisted messages never claim a key they didn't use.
+- **`src/app/api/v1/chat/completions/route.ts`** — same dispatch
+  resilience; `senku.key` only reported when a pooled key served,
+  `senku.failover: true` otherwise.
+
+### Expected effect
+
+- A dead key costs at most ONE failed round-trip (~0.5s) per turn,
+  then is quarantined for 10 minutes — while healthy keys keep
+  serving with native provider streaming (real SSE, lower latency).
+- Metadata is honest: "1.8k tokens · APInex · Test key" when the
+  pool served; "APInex · cloud failover" (no key claim) only when
+  the endpoint is genuinely unreachable.
+- Rotated keys self-heal: after the quarantine expires, the key is
+  probed once and re-enters rotation if it works again.
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- 3/3 unique gateway requests: `servedBy: provider`,
+  `keyLabel: Test key` (before: every other request silently
+  `zai-cloud` via the dead key).
+- `/api/v1/chat/completions`: 200, `senku.key: "Test key"`, correct
+  usage, 1.7s including compile.
+- Browser golden path: message sent through the UI, reply rendered,
+  metadata row reads "1.8k tokens | APInex · Test key", zero console
+  or page errors, zero runtime errors in dev.log.
+- Test data cleaned (6 test chats + 5 cache rows + 5 orphan usage
+  events removed; the 5 seeded demo chats preserved).
+
+### Known pre-existing flaws (NOT introduced this run, deferred)
+
+- Mid-stream provider death after partial emission still re-emits
+  the full answer from the cloud (client sees partial + full). The
+  dispatcher now refuses to *retry keys* in that case (no
+  duplication across keys), but a client-side restart marker would
+  be needed to fully fix re-emission.
+- Breaker state is in-memory: a server restart re-probes dead keys
+  once. Acceptable for a single-process personal gateway.
+
+---
+
+## Run 2 — 2026-11-01: Thinking animation — faithful Claude Code GIF replication
+
+**Rung:** 2 (Usability/UX — user-directed)
+
+**Request:** "improve the thinking animation like this" + the Claude
+Code thinking GIF (media.tenor.com/WvYJnr85GLoAAAAi). The user has
+now pointed at this exact GIF twice — the earlier interpretation
+(white sparkle, invented stretch/wobble) was not faithful enough.
+
+### Diagnosis (measured, not guessed)
+
+Downloaded the GIF and analyzed all 12 frames programmatically
+(PIL: pixel moments, bounding boxes, per-frame durations):
+
+- Loop period **1.00s** (not the 1.5s we had).
+- **Pure scale pulse — no rotation, no wobble** (principal-axis
+  angles identical across frames; the old animation invented
+  rotate(±6°) and scale spikes to 1.26 that the reference doesn't
+  have).
+- Curve: dot (0.31) → swell to max (1.0) at the 40% mark → settle
+  to plateau (0.81) → hold → collapse back to the dot. Growth
+  segments decelerate (ease-out); shrink frames run 60-70ms.
+- Mark color: **constant flat terracotta rgb(215,118,86)**
+  (#D77656) — no color shifting.
+
+### Change
+
+- `globals.css` — `@keyframes senku-think` rewritten to the
+  measured curve (0.31 → 1 @40% → 0.81 plateau @53-80% → collapse,
+  per-segment easing), duration 1s. `.senku-thinking-sparkle` is
+  now a 28px div filled **flat #D77656 via CSS mask** over
+  `/senku-sparkle.png` — the same flat-fill rendering model as the
+  reference mark (this deliberately supersedes the earlier
+  "sparkle stays white" decision: the user re-pointed at the GIF,
+  and the GIF's defining look IS the terracotta fill; implemented
+  as a clean mask fill, not the muddy animated sepia filters that
+  were removed back then).
+- `ChatTimeline.tsx` — while thinking, the avatar `<Image>` swaps
+  to the masked div (identical 28px box + mt-0.5, so no layout
+  shift); `role="img"` + aria-label keep it accessible. Resting
+  messages keep the original white sparkle PNG untouched.
+- `prefers-reduced-motion` block still applies (static terracotta
+  mark instead of pulse).
+
+### Verification (all passed)
+
+- Served CSS chunk confirmed live (contains #d77656, mask rule,
+  and the new keyframes — minified as `scale(.31)`).
+- Injected the mark in isolation and sampled its rendered width at
+  60fps for 1.25s: plateau 22.7px (0.811), max 27.9px (0.996),
+  collapse/swell/settle phases all match the design curve; 1.0s
+  period confirmed.
+- Real E2E: sent a search-enabled message through the UI;
+  screenshots during the "Searching the web" phase show the
+  terracotta mark pulsing at the avatar slot (23px → 17px → 23px
+  across consecutive shots), avg color rgb(193,107,79) — hue
+  correct, slightly darkened by mid-pulse antialiasing.
+- After the reply finished, the resting avatar returned to the
+  white sparkle (151 white px, 0 terracotta in the avatar region).
+- Zero browser console/page errors; dev.log clean; lint clean.
+- Cleaned up my own test chat; **kept the user's own
+  "what is the latest gemini model" chat** (they used the preview
+  mid-run — real user data stays).
+
+---
+
+## Run 3 — 2026-11-02: Truth pass — 10 user-reported fixes in one batch
+
+**Rung:** 1 (Correctness) + 2 (Usability) — user-directed list
+from live dogfooding.
+
+### Diagnosis (user's list, confirmed in browser)
+
+1. **Knowledge hallucination**: "latest Gemini model?" → invented
+   "Gemini 2.0 Flash-Lite Preview 11.06, released November 6,
+   2025" (fake version + date, stated as fact).
+2. Thinking animation turned terracotta — user wants OUR white
+   logo with the same GIF motion.
+3. "Test key" (key label) shown under every reply.
+4. Raw metadata dump per reply (Copy, Listen, tokens, APInex).
+5. "APInex" superscript stacked on every model row.
+6. Raw auto titles ("who r u?", "what today date month year and").
+7. Clock shown multiple times (greeting + input-bar chip).
+8. `free/glm-5.3` chip reads like a leaked env string.
+9. "Temporary" toggle with no explanation of consequences.
+10. Failed replies had no recovery actions.
+
+### Change
+
+- **`constants.ts`** — new `KNOWLEDGE_HONESTY` directive inside
+  `BASE_SYSTEM_PROMPT`: for latest/newest/most-recent questions
+  with NO search results, the model must not invent version
+  numbers, dates or names; it names only what it is confident
+  about, states the cutoff, and points at the Search toggle.
+  (Search-on turns keep the existing grounding directive.)
+- **`globals.css` + `ChatTimeline.tsx`** — thinking mark is the
+  white sparkle `<Image>` again, animated by the same measured
+  GIF curve (0.31 → 1 @40% → 0.81 plateau → collapse, 1.00s
+  loop). The terracotta mask fill is gone; only the motion is
+  borrowed from the reference.
+- **`ChatTimeline.tsx`** — metadata row replaced by one quiet
+  provenance line `GLM 5.3 · APInex pool · 2.3k tokens · cache:
+  miss` (+ `cloud failover` variant). Copy/Listen are icon-only.
+  `keyLabel` is never rendered in replies — "Test key" gone.
+- **`globals.css`** — `.senku-hover-actions` / `.senku-meta-row`:
+  Tailwind's `group-hover` variant only applies under
+  `(hover: hover)` while `opacity-0` is unconditional — action
+  rows were permanently invisible on touch devices (pre-existing
+  for user-message actions). Touch now always sees a faint row;
+  hover-capable ≥768px hides until group hover.
+- **`lib/senku/models.ts` (new)** — `modelMeta`/`modelHint`:
+  pretty names + tier + strength notes for known ids, tidy
+  prettifier fallback for synced unknowns. InputBar chip now
+  `GLM 5.3 [FREE] ⌄` (raw id on hover); picker shows one APINEX
+  group header + `Gemini 3.8 Flash — Free · Fastest` rows.
+  Command palette uses the same names.
+- **`/api/chat/title` (new) + `store.ts`** — proper titles via a
+  cheap cloud pass (thinking disabled, ≤600-char prompt, 2-5
+  Title Case words). New chats keep the instant derived title,
+  then the refined one patches the sidebar (refresh awaited
+  first — no clobber race). Failure keeps the derived title.
+- **`InputBar.tsx`** — input-bar live-clock chip removed; the
+  greeting timestamp is the only clock.
+- **`TopBar.tsx`** — Temporary toggle: explicit state ("Temporary
+  · On", inverted pill, EyeOff icon) + Radix tooltip spelling out
+  "won't be saved to history" BEFORE the flip; banner after.
+- **`ChatTimeline.tsx` + `store.ts`** — failed replies get inline
+  **Retry** and **Switch model** (next model in list; chip
+  updates, retry uses the override via a new `TurnOptions.model`).
+- **`seed.ts` + one-off DB patch** — the 5 demo chats had garbage
+  titles AND content ("What Day And Your"); replaced with
+  realistic demos ("Who Are You" ← "who r u?", "Current Date
+  Question" ← "what today date month year and time?", …).
+  User's real chats preserved; their raw titles backfilled
+  through the new route.
+
+### Bugs found & fixed during verification
+
+- `retryLast` duplicated the user bubble when the failed turn
+  never reached the server — `appendUserBubble` was conflated
+  with `persistUser`. Decoupled via an explicit
+  `TurnOptions.appendUserBubble` override.
+- (Environment, not code) a `git stash` cycle mid-verification
+  replaced the SQLite file under the running server →
+  "readonly database". Dev-server restart cleared it.
+
+### Verification (all passed)
+
+- `bun run lint` clean (×3).
+- **Knowledge honesty**: same question now answers "I cannot
+  confirm the absolute latest Gemini release with certainty…
+  please turn on web search (the globe button)" — no invented
+  version/date.
+- **Thinking mark**: VLM frame comparison — white color
+  confirmed, size visibly pulsing (dot → full sparkle).
+- **Provenance**: exact line rendered, per-model correct
+  ("GLM 5.3 · … " vs "Gemini 3.8 Flash · …"); touch/`hover:none`
+  shows faint (0.75), desktop hides until hover.
+- **Title refinement live**: "whats the capital of japan? one
+  line" → sidebar shows "Japan Capital City" seconds later;
+  user's "what is the latest gemini model" → "Latest Gemini
+  Model".
+- **Retry · switch model**: network-abort simulation → error card
+  → Retry recovers (single user bubble after the fix) → Switch
+  model recovers on Gemini 3.8 Flash with the chip updated.
+- **Temporary**: "Temporary · On" + explanatory banner.
+- Mobile 390px: no horizontal overflow (scrollWidth == viewport).
+- dev.log clean; browser console shows only the pre-existing
+  Radix/React-19 hydration attribute warning (verified present
+  before this run via a stashed-tree test — NOT introduced).
+- Data hygiene: my 3 test chats deleted; the user's 2 real chats
+  (incl. their mid-run "Latest AI Model Releases" search chat,
+  which shows the search-grounded path working with fresh data)
+  preserved untouched.
+
+### Known pre-existing flaws (NOT introduced this run, deferred)
+
+- Hydration attribute mismatch on Radix popovers (dev-tools "1
+  issue" badge; cosmetic, React 19 + Radix `useId`).
+- Mid-stream provider death after partial emission still
+  re-emits the full answer from the cloud (Run 1 deferred item).
+
+---
+
+## Run 4 — 2026-11-02: Grounded-answer contract for the search pipeline
+
+**Rung:** 1 (Correctness) — user-supplied spec: "Retrieved results
+are inputs, not truth. The user's question is the contract."
+
+### Diagnosis
+
+Run 3 fixed knowledge honesty for NO-search turns. But when search
+was ON, the model received three **undated, unranked** snippets and
+a one-line directive ("ground your answer, cite domains"). That is
+structurally unable to answer time-scoped questions honestly:
+
+- No dates → the model cannot check whether a source is inside the
+  requested scope; it silently converts publication dates into
+  release dates (exactly the failure mode the spec forbids).
+- No authority signal → a Reddit thread and an official changelog
+  arrive with equal weight; forum posts were being cited as
+  factual evidence.
+- No protocol → nothing told the model to extract the question's
+  time scope, classify the retrieval, or admit a PARTIAL/STALE
+  result set instead of pad-and-confident.
+
+Live probe confirmed the raw material was a minefield: for
+"latest Gemini model" the engine returned an aggregator claiming
+"3.8 Flash since September 2026", another saying "5 days ago",
+and a stale Reddit thread about Gemini 2.0 — plus a Reddit post
+claiming "on Gemini 5" with no date.
+
+### Change
+
+- **`src/lib/senku/grounding.ts` (new)** — the audit primitives:
+  `extractDateHint()` (relative "5 days ago" > full date >
+  month-year; yearless dates like "March 12" and ambiguous numeric
+  dates deliberately return null — an unusable date must not be
+  guessed) and `authorityTier()` (official > press/news >
+  reference > blog > forum/social, unknown = "web"; ~45 curated
+  hosts, deterministic).
+- **`search.ts`** — every search path now captures a `dateHint`:
+  the Z.ai cloud engine's own `date` field when present, else the
+  first date stated in title/snippet; DDG paths extract from text.
+  "Read more" noise stripped from snippets. `SearchSource` gained
+  the optional `dateHint` (persisted with message sources,
+  backward compatible).
+- **`constants.ts` — `SEARCH_SYSTEM_DIRECTIVE` rewritten** into the
+  full grounded-answer contract: (1) extract the question's
+  TIME SCOPE / CLAIM TYPE / PRECISION; (2) audit each result for
+  DATE MATCH, AUTHORITY (forum/social can NEVER support a factual
+  claim, especially a negative one), RELEVANCE → classify FULL /
+  PARTIAL / STALE; (3) answer with a date on every claim, never
+  silently broaden or narrow scope, report knowledge boundaries on
+  negative claims, and end with exactly one confidence label —
+  [confirmed] / [partial] / [stale sources]. All six NEVER rules
+  included verbatim.
+- **`searchContextBlock(sources, now)`** — each result line now
+  carries `host (tier) · dated: <hint|none stated>`, and the
+  header carries the retrieval clock plus the rule that a stated
+  date is a publication date, NEVER a release date, and
+  "none stated" must stay none — do not guess.
+- **`ChatTimeline.tsx`** — the sources card chips now show
+  `host · dated: <hint>` so the user sees the same dating the
+  model reasoned from.
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- Unit probe: relative > full > month-year priority correct;
+  "March 12" (no year) → null; bare "2026" → null;
+  21/09/2026 → null (ambiguous order); all six authority tiers
+  classified correctly (reddit→forum/social, blog.google→official,
+  theverge→press/news, wikipedia→reference, medium→blog,
+  unknown→web).
+- **Live pipeline, 3 scenarios via /api/chat/send (search on,
+  temporary):**
+  - Factual "latest Gemini model": dated answer ("released
+    September 2026"), conflicting sources reconciled by date,
+    boundary stated ("newer release cannot be ruled out"),
+    `Confidence: [partial]`.
+  - **Negative claim** "has Google released Gemini 5 yet?": cites
+    the official changelog (dated), and **explicitly refuses the
+    undated Reddit post as evidence** ("a forum post with no date
+    and no official backing, so it cannot confirm a release") —
+    the authority rule enforced verbatim. [partial] label.
+  - Month scope "any big AI model releases this month?": answers
+    within November, names the most recent dated source, dates
+    every release, does NOT invent dates for the two undated
+    trackers. [partial] label.
+- Browser golden path (Temporary + Search on): answer rendered
+  with dates + label; sources card shows all three
+  `· dated:` chips; zero console/page errors; dev.log clean;
+  no horizontal overflow at 390px.
+- All tests ran with `temporary: true` — no test data created,
+  nothing to clean.
+
+### Known pre-existing flaws (NOT introduced this run, deferred)
+
+- The confidence label format drifts slightly by model (one run
+  appended per-source labels before the whole-answer one); the
+  whole-answer label was always present. Acceptable model
+  variance, not a pipeline defect.
+- `extractDateHint` skips numeric dates (21/09/2026) as ambiguous —
+  honest "none stated" beats a wrong day/month order guess.
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+- Mid-stream provider death after partial emission (Run 1
+  deferred item).
+
+---
+
+## Run 5 — 2026-11-02: Restart marker — no more duplicated answers on mid-stream provider death
+
+**Rung:** 1 (TRUST) — the flaw logged as deferred in BOTH Run 1
+and Run 3, now fixed at the protocol level.
+
+*Innovation-cadence note: this is run #5 and the mandate asks for
+a bold addition by now — but a known, twice-logged data-corruption
+bug on the highest rung outranks a feature. Run 6 is committed to
+the bold addition.*
+
+### Diagnosis
+
+When a pooled provider died MID-STREAM after partial text had
+already streamed to the user, the dispatcher correctly refused to
+retry other keys (that would duplicate too) but still failed over
+to the Z.ai cloud — which re-generates and re-emits the FULL
+answer through the same delta channel. The client had already
+rendered the partial, so the user saw:
+
+```
+[partial answer from the dead provider][full answer from the cloud]
+```
+
+…a corrupted, duplicated message that also got persisted verbatim.
+Rare (needs a mid-stream death) but exactly the kind of thing that
+destroys trust in a gateway.
+
+Live reproduction: a mock OpenAI provider (node:http) that streams
+three SSE deltas then `socket.destroy()`s mid-response. Pre-fix
+event stream: `delta × 3 → [cloud re-emits everything] → done`
+with the client text = partial + full.
+
+(Simulation subtlety: Bun's `ReadableStream.error()` from a
+`Bun.serve` handler closes the connection cleanly from the
+client's perspective — the fetch completes "successfully". A real
+death needs an actual TCP reset: node:http + `res.socket.destroy()`.
+Also learned: the first accidental clean-close run cached a
+mock-prefixed answer for 24h — purged.)
+
+### Change
+
+New internal SSE event: **`restart`** — fired by the dispatcher at
+the exact moment the cloud is about to re-generate AFTER partial
+emission. Clients must clear their accumulated text on it.
+
+- **`dispatch.ts`** — `DispatchParams.onRestart?`; tracks
+  `emittedBeforeCloud` (set only on the `attempt.emitted` break —
+  the only path where deltas preceded the cloud) and calls
+  `onRestart()` before `zaiCloudExec`.
+- **`gateway.ts`** — `TurnEvent` union gains `"restart"`;
+  `runChatTurn` wires `onRestart → emit({type: "restart"})`.
+- **`store.ts`** — `restart` handler: `assistantContent = ""` +
+  `phase: "thinking"` so the UI shows the thinking animation
+  during the cloud hand-off gap instead of a blank bubble; the
+  next delta resets the phase. Final `done.content` (cloud full
+  text) then matches the rendered text exactly.
+- The v1 OpenAI-compatible route needed NO change: it is
+  non-streaming (`onDelta` undefined), so failover there already
+  yields one clean JSON — duplication is structurally impossible.
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- **Failure E2E** (mock provider streaming 3 deltas then TCP
+  reset, via /api/chat/send): `delta × 3 → restart → cloud deltas
+  → done servedBy=zai-cloud`; restart-honoring client text =
+  cloud answer ONLY; `done.content === client text`; `key: null`
+  (no key billed for the cloud's work).
+- **Browser golden path** (mock provider active in the UI): sent a
+  message, watched partial → thinking → single clean answer;
+  rendered text contains ZERO "MOCK-PARTIAL" remnants; provenance
+  row honestly reads "… · MockFail · cloud failover · 290 tokens ·
+  cache: miss"; 0 console/page errors.
+- **No regressions**: mock provider deleted (usage events + cache
+  rows purged, key cascade-dropped), APInex re-activated; sanity
+  turn shows `meta, delta, done` — NO restart on the healthy
+  path, servedBy provider, honest key billing.
+- dev.log clean.
+
+### Known pre-existing flaws (NOT introduced this run, deferred)
+
+- If the CLOUD also fails after a mid-stream provider death, the
+  error handler wipes the bubble to an error card (the partial is
+  lost). Rare double-failure; acceptable.
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+- Confidence-label format drift across models (Run 4 note).
+
+---
+
+## Run 6 — 2026-11-02: "keep" honored — the grounded-answer contract made deterministic + visible
+
+**Rung:** 1 (TRUST/contract integrity) + 2 (CLARITY). User's
+directive: "**keep**" the grounded-answer spec — meaning the
+contract is a standing product requirement, not a one-off.
+
+### Diagnosis
+
+Re-audited the shipped contract against the spec line-by-line.
+Directive-level conformance was verified probabilistic, not
+guaranteed: across live samples, the confidence label was (a)
+sometimes attached to INDIVIDUAL sources ("lorka.ai — [confirmed]")
+instead of the whole answer, and (b) in one of three fresh runs
+OMITTED entirely. A contract that holds 2/3 of the time isn't
+kept. And when the label DID appear, it rendered as raw bracket
+text "[partial]" inside the markdown — a spec output treated as
+prose, not as a product element.
+
+### Change
+
+- **`constants.ts`** — directive tightened: "End the message with
+  EXACTLY ONE confidence label on the whole answer — on its own
+  final line with nothing else on that line. Never attach
+  confidence labels to individual sources or inside inline
+  sentences."
+- **`grounding.ts`** — the label parser is now canonical and
+  shared: `labelOfLine()` / `confidenceOf()` (accepts legacy
+  variants like "Confidence: [partial]" for older messages; the
+  pipeline and the UI use ONE definition).
+- **`executor.ts`** — `appendConfidenceLabel()`: when a search
+  answer lacks the label, ONE cheap cloud pass (thinking disabled,
+  last 1500 chars, strict one-line output) classifies the
+  retrieval as [confirmed]/[partial]/[stale sources] and appends
+  it. Never fabricates (unparseable response → unchanged) and is
+  best-effort on cloud failure.
+- **`gateway.ts`** — contract enforcement on BOTH paths: fresh
+  dispatch results AND cache hits (older cache entries predate the
+  rule). Cache fills AFTER enforcement, so corrected answers are
+  reused corrected. Cost: one tiny pass only on the minority of
+  turns where the model omits the label.
+- **`ChatTimeline.tsx`** — the trailing label is extracted and
+  rendered as a **confidence badge** (colored dot + lowercase
+  label + "· source confidence" hint: emerald=confirmed,
+  amber=partial, rose=stale sources); the raw bracket line is
+  removed from the displayed markdown only — Copy and
+  read-aloud keep the faithful raw text. While streaming, the
+  half-written final line still renders raw (no false positives).
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- Extractor unit probes 8/8: plain / "Confidence:" prefix / bold /
+  trailing-period variants match; mid-sentence brackets
+  ("I am [confirmed] right now.") and half-streamed labels do NOT.
+- **Live conformance 3/3** (fresh cache-miss runs, search on):
+  every answer ends with exactly one final-line label; zero
+  per-source labels.
+- Corrective pass unit probe: label-less answer in → classified
+  `[partial]` appended exactly once.
+- Browser golden path: dated answer with cited official sources,
+  sources card chips carry `dated:` hints, rose "stale sources ·
+  source confidence" badge rendered, NO raw bracket line in the
+  body, 0 console/page errors, no horizontal overflow at 390px.
+- User's real chats (visible in sidebar) untouched; test ran in a
+  Temporary chat.
+
+### Known pre-existing flaws (NOT introduced this run, deferred)
+
+- The corrective pass classifies from the answer text alone; if
+  the answer itself misstates its sources, the label inherits
+  that. Acceptable — the directive already governs the answer.
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+
+---
+
+## Run 7 — 2026-11-02: DUEL MODE — two models race one question, you keep the winner
+
+**Rung:** differentiator (the bold addition owed since the Run 5
+note; Run 6 was preempted by the user's "keep" directive).
+
+### Competitor scan (web, 2026-11-02)
+
+- **ChatGPT / Claude / Gemini**: one model per turn in the consumer
+  chat. Switching models = regenerate; no same-turn comparison, no
+  keeping the loser for reference. Users complain about manually
+  pasting prompts into 4 apps (r/PromptEngineering: "Anyone else
+  tired of comparing AI models manually?").
+- **LMArena**: side-by-side battles exist — but anonymous models,
+  throwaway chats, no history, no provenance, no search grounding,
+  not your gateway. A benchmarking toy, not a daily driver.
+- **Nobody** does it inside your own conversation with your own
+  history, shared grounded search, per-lane provenance, and
+  winner-picks-into-the-chat. Only a pooled multi-model gateway
+  architecturally can.
+
+### Change
+
+**One tap sends the question to two models simultaneously. Both
+stream live side by side; you click Keep on the better one; the
+loser stays as a collapsed runner-up reference under the answer.**
+
+- **`gateway.ts` — `runDuelTurn()`**: shared web search (both lanes
+  reason from the SAME retrieval), shared chat + user-message
+  persistence, then two independent lanes racing in parallel —
+  per-lane exact-match cache, health-aware key dispatch, restart
+  events scoped to the lane that died, grounded-contract
+  enforcement, usage accounting and cache fill. Both lanes billed
+  honestly for what they served. One lane failing never kills the
+  other (degrades to a single answer); both failing = the normal
+  error card.
+- **SSE protocol (backward compatible)**: `duel_start {a,b}` ·
+  `delta/restart` gain an optional `lane: "a"|"b"` · `lane_done`
+  per lane with final stats · `done` carries the full `duel`
+  payload (top-level fields mirror lane A for simple consumers).
+- **`POST /api/chat/duel/pick` (new)**: persists the WINNING lane
+  as the assistant message + the loser as `Message.altContent/
+  altModel` (new nullable columns — no data loss). Provenance is
+  preserved exactly as the lane reported it; usage accounting
+  already happened at generation time. The pick only decides what
+  the conversation remembers.
+- **`models.ts`**: `modelFamily()` + `autoChallenger()` — the
+  default opponent prefers a DIFFERENT model family (GLM vs Kimi,
+  not GLM vs GLM).
+- **`store.ts`**: `duelEnabled`/`challenger` state with revalidation
+  on model-list changes; lane-aware `streamTurn`; `pickDuelWinner`
+  (instant local commit, then persist; server id reconciled);
+  auto-pick guards — a surviving lane is auto-kept when the other
+  dies, and an unpicked duel auto-keeps lane A before the next
+  send (history always has one voice).
+- **UI**: amber `Swords` Duel pill beside Search (disabled when the
+  provider has <2 models) + "vs <model>" challenger picker chip;
+  entries in the "+" menu and the ⌘K palette. Duel turn renders as
+  two lane cards (side-by-side ≥md, stacked on mobile) with per-lane
+  thinking shimmer, streaming caret, cache badge, confidence badge
+  and a Keep button (unlocks when the turn completes). After the
+  pick: normal answer + "Runner-up · <model>" disclosure. Input
+  pill row scrolls horizontally on narrow screens (no overflow).
+
+**Also fixed (root cause found BY this feature):**
+`liveContextBlockHourStable()` formatted the time with
+`liveTime(false)` = "HH:MM", embedding the MINUTE into every cache
+key — the 24h response cache could only hit within the same minute,
+despite the docblock promising hour stability. Now formats the hour
+only ("hour 22:00"); same-hour repeats hit the cache again (normal
+AND duel lanes).
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- **API E2E (temporary duel)**: `meta → duel_start → delta
+  (lane-tagged, interleaved) → lane_done ×2 (distinct per-lane
+  tokens: 568 vs 559 raw) → done` with the full `duel` payload.
+- **Per-lane cache**: identical duel re-run 70s later → both lanes
+  `cached=true servedBy=cache tokens=0`; normal send of the same
+  prompt also hits (the hour-stability fix verified across a minute
+  boundary).
+- **Persisted lifecycle**: duel in a saved chat → pick lane B →
+  `GET /api/chats/[id]` shows winner (model, keyLabel, tokens) +
+  `altContent`/`altModel` runner-up; chat model updated to the
+  winner.
+- **Guards**: same-model duel → "Duel needs two different models";
+  unknown challenger → "Both duel models must be available on the
+  active provider". Normal (non-duel) send regression: untouched
+  event shape, cache hit.
+- **Browser golden path**: armed Duel (auto-challenger picked
+  Gemini 3.8 Flash — different family from GLM), sent "why is the
+  sky blue?", watched both lanes stream, kept lane B — winner became
+  the canonical answer with its own provenance ("Gemini 3.8 Flash ·
+  APInex pool · 2.3k tokens"), runner-up disclosure expanded to the
+  full GLM answer. Second duel on mobile 390px: lanes stacked
+  (318px cards), no horizontal overflow, pick worked. Persisted E2E
+  chat re-opened after reload — winner + runner-up render from DB.
+  0 console/page errors throughout; dev.log clean. Test chat
+  deleted; user's 9 real chats untouched; duels tested in
+  Temporary chats.
+
+### Deferred / known trade-offs
+
+- A stopped duel keeps both partial lanes pickable — picking a
+  partial persists a partial (same semantics as stopping a normal
+  turn).
+- `retryLast` on a both-lanes-failed duel re-sends as a NORMAL
+  turn (documented degradation).
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+- The mid-stream restart event is lane-scoped and honored per lane;
+  the rare double-failure (provider AND cloud) still loses the
+  partial (Run 5 note).
+
+---
+
+## Run 8 — 2026-11-02: EFFORT DIAL — fast / medium / deep, with pooled-engine routing + deep research
+
+**Rung:** differentiator-grade UX (the user's direct request: *"what
+about adding deep search, and thinking mode and fast and medium"*).
+One dial, three positions; the middle one changes nothing.
+
+### Competitor scan (web + product knowledge, 2026-11-02)
+
+- **ChatGPT**: the fast/quality toggle switches between two fixed
+  models; thinking levels (instant/standard/extensive) and Deep
+  Research are all locked to one vendor's backend.
+- **Claude**: extended thinking + low/medium/high effort — one
+  model, one backend.
+- **Gemini**: per-model thinking budget; Deep Research plans then
+  iterates — single-vendor retrieval, no per-source date/authority
+  audit surfaced.
+- **None of the three** can make one dial pick a DIFFERENT ENGINE
+  from a pool per effort level, because none of them is a pooled
+  multi-model gateway. That asymmetry is this feature's core.
+
+### Change
+
+**`Fast ⚡ / Medium ✦ / Deep 🧠` — a dial in the input bar. Medium
+is byte-identical to before. Fast and Deep each do three things a
+single-brand chat cannot:**
+
+1. **Route across the pool** (`models.ts → effortModel()`): fast →
+   the fastest engine the active provider offers (Gemini 3.8 Flash
+   on APInex), deep → the strongest (Qwen 3.8 Max), medium → the
+   user's selection, untouched. The popover shows exactly which
+   engine each level maps to (`→ Gemini 3.8 Flash`) BEFORE the
+   user picks — routing is transparent, never surprising, and the
+   provenance row always reports the engine that actually served.
+   Dial routing prefers the `free/*` tier when the provider has one
+   (metered pool-tier ids can 402 at runtime — see root-cause fix
+   below); providers without a free tier (OxionAI) dial over their
+   full list.
+2. **Effort-shaped prompts** (`constants.ts`): FAST_SYSTEM_ADDON
+   (fewest words that fully answer), DEEP_RESEARCH_ADDON (weigh ALL
+   evidence: agreements are evidence, conflicts are named per side,
+   unanswered stays unanswered; structure = answer → evidence →
+   disagreements/gaps; the grounded contract still applies in
+   full), DEEP_THINKING_ADDON (deep without search = think-first
+   mode on the strongest engine). Medium appends NOTHING — the
+   system prompt stays byte-identical, so the 24h cache still hits
+   pre-dial entries; fast/deep additions namespace the cache key
+   per level for free.
+3. **Deep research pipeline** (`search.ts → deepSearchDetailed()`):
+   plan (one cheap cloud pass decomposes the question into 2-3
+   angle queries) → round 1 searches the question verbatim →
+   planned angles in parallel → merged, URL-deduped, capped at 8
+   sources. Every stage label streams live to the client
+   (`search_status {detail}` → "Deep research — planning queries",
+   "Searching — …", "Searching 3 more angles — …"). All queries
+   reuse the layered DDG/cloud failover + the 30-min memo.
+   Deep effort also enables real thinking on the Z.ai cloud
+   failover path (`executor.zaiCloudExec thinking:"enabled"` via
+   `dispatch.thinking`); provider endpoints are unchanged (their
+   rigor comes from the directive + the retrieval).
+
+**Also shipped:** `EffortLevel` shared type; SSE `meta`/`done` carry
+`effort` (backward compatible); `Message.effort` column (persisted,
+shown as "Fast mode"/"Deep research" in the provenance line);
+sources card auto-labels ">3 results" as **DEEP RESEARCH · N
+SOURCES** (medium is structurally capped at 3) with a scrollable
+list; ⌘K palette gains three Effort commands; duel turns honor
+effort for the SHARED retrieval + lane thinking but never override
+the user-chosen racers; `meta.model` now reconciles the client's
+model chip when the dial routes elsewhere.
+
+**Root-cause fixes found BY this feature (both verified live):**
+- `ensureSeed()`'s upsert **update** branch overwrote
+  `provider.models` back to the constants default on every module
+  reload / process restart — a synced model list silently died with
+  the process. The update branch no longer touches `models`
+  (runtime state belongs to Sync).
+- The seeded APInex list contained `free/claude-4.6-opus` — the
+  endpoint 404s that id (the real id is `free/claude-opus-4.6`, and
+  it 402s without a subscription anyway). The default list is now
+  the five endpoint-verified free-tier models (all probed 200);
+  `KNOWN` metadata updated to match.
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- **Medium regression**: SSE event shape unchanged (`meta → delta* →
+  done`), model = user's selection, provider-served, cache hit on
+  repeat within the hour.
+- **Fast**: `meta.model` = `free/gemini-3.8-flash` (routed, not
+  selected); answer brief and direct; browser turn shows
+  "Fast mode · Gemini 3.8 Flash · APInex pool · 5.9k tokens".
+- **Deep + search** (API): stage labels streamed (planning →
+  verbatim → 3 angles), 8 merged sources, `meta.model` =
+  `free/qwen-3.8-max`, **servedBy=provider** (after the free-pool
+  fix — previously every deep turn wasted a 404/402 round-trip and
+  fell to the cloud), answer structured as Evidence /
+  Disagreements, honest `[stale sources]` / `[partial]` /
+  `[confirmed]` labels across runs.
+- **Cache isolation**: same prompt deep×2 → second run
+  `cached=true`; medium on the same prompt → miss (different
+  system prompt + model = different key).
+- **Persistence**: saved chat records `effort` on assistant rows
+  (fast → "fast" + routed model + serving key; deep → "deep").
+- **Browser golden path**: effort popover renders three options with
+  per-level engine previews; 0 page/console errors; no horizontal
+  overflow at 390px. **The user live-tested Deep themselves during
+  the run** — their turn rendered the "DEEP RESEARCH · 8 SOURCES"
+  card, a knowledge-boundary-honest answer ("As of my most recent
+  sources (late October 2026), I cannot confirm November 2026
+  releases…"), a `partial` confidence badge, and the provenance
+  "Deep research · Qwen 3.8 Max · APInex pool · 8.7k tokens".
+- Cleanup: 5 test chats + 67 test cache rows purged; the user's 10
+  real chats untouched; dev.log clean.
+
+### Deferred / known trade-offs
+
+- A 402/404 model-level failure still lands as a "transient" strike
+  on the key (it isn't the key's fault) — a future run could type
+  model-level failures and skip the strike. The dial's free-pool
+  preference already avoids the common case.
+- Deep-search sources arrive as one batch when the pipeline
+  finishes (stage labels carry the live narrative meanwhile);
+  progressive per-round source streaming is a possible polish.
+- Deep on a provider without a reasoning-tier model silently
+  degrades to directive-only rigor (no engine swap) — acceptable,
+  provenance stays honest.
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+
+---
+
+## Run 9 — 2026-11-02: REAL FILE UNDERSTANDING — attachments the model actually reads
+
+**Rung:** 1 (Trust: the old "attachment" feature was a lie) closing
+the worst OPEN competitor gap (all three), with a pooled-gateway
+twist none of them can copy.
+
+### Diagnosis (OBSERVE)
+
+The "+" → "Upload from computer" flow inserted `[Attached:
+filename]` as PLAIN TEXT into the prompt. The model never saw a
+byte of file content — so it either ignored the "attachment" or
+hallucinated content from the filename. For a gateway whose whole
+pitch is honesty (grounded answers, visible provenance, honest
+billing), a feature that pretends to read files was the most
+trust-damaging thing in the product — and the #1 open gap
+(Claude/ChatGPT/Gemini all read files for real).
+
+### Competitor scan (product knowledge; no web-search tool in this
+environment — noted, consistent with prior runs when needed)
+
+- **ChatGPT**: real content understanding for docs/images/code;
+  per-file chips with a "Reading…" state. What was extracted is
+  INVISIBLE — you can't see how much was read or whether it was
+  truncated. One vendor's backend.
+- **Claude**: docs + images extracted into context; chips in the
+  composer; extraction equally opaque. One backend.
+- **Gemini**: file uploads with document understanding (up to 20);
+  same opacity. One backend.
+- **None of them** can show per-file extraction provenance
+  (chars read, truncation, method) — their clients don't know, and
+  none can route extraction across engines. Only a gateway that
+  owns the pipeline can.
+
+### Change
+
+**Files are now READ at pick time. The chip tells you exactly what
+the model will receive; unreadable files are NOT sent.**
+
+1. **`src/lib/senku/attachments.ts` (new)** — three extraction
+   engines, honest records (`kind`, `method`, `chars`,
+   `totalChars`, `truncated`, `extract`):
+   - **text** — UTF-8 decode for plain text/markdown/code/csv/json
+     (≈70 extensions + text/* mimes), binary sanity gate (control-
+     char ratio) so executables never decode as "text".
+   - **pdf** — text-layer extraction via `unpdf` (serverless
+     pdf.js build). Scanned/image-only PDFs fail HONESTLY: "No
+     text layer found" → not sent. **New dependency: `unpdf@2.1.0`
+     — justification: pure-JS, zero-config, serverless-safe PDF
+     text extraction; the only alternative was shipping pdf.js by
+     hand.**
+   - **image** — a pooled VISION pass (z-ai-web-dev-sdk
+     `createVision`, base64 data URI): transcribes ALL visible
+     text verbatim (OCR with layout) + a 1–3 sentence visual
+     description under a `--- VISUAL ---` marker. None of the
+     three incumbents shows you the vision pass it ran.
+   - Caps with in-band honesty notes: 20k chars/file (text/pdf),
+     4k/file (vision), 60k/message, 5 files, 10 MB/file (6 MB
+     images). Truncation cuts on line boundaries and SAYS so.
+   - `sanitizeAttachments()` rebuilds every inbound record
+     field-by-field — the send route never trusts client JSON.
+2. **`POST /api/attachments/extract` (new)** — multipart, up to 5
+   files; returns per-file records + typed errors. Extraction runs
+   the moment a file is picked, so the composer chip shows what was
+   read BEFORE sending.
+3. **Prompt injection (gateway.ts)** — `attachmentContextBlock()`
+   appends a clearly-delimited block to the CURRENT user turn
+   (attachments first, then the search block), carrying its own
+   instructions: user's own material (authoritative, unlike web
+   results), refer by name, respect truncation markers, say when
+   an answer isn't in the files. **The system prompt is untouched —
+   turns without attachments stay byte-identical (cache included);
+   attachment turns naturally namespace their cache key.**
+   `expandHistory()` re-appends blocks for PRIOR user turns, so
+   follow-up questions ("what was the revenue figure?") still see
+   the file — exactly like the incumbents. Duel turns share the
+   same block across both lanes.
+4. **Persistence** — new nullable `Message.attachments` column
+   (JSON records, extracts included) so reloads and follow-ups
+   rebuild context from the DB; `/api/chats/[id]` and
+   `/api/chat/truncate` return it parsed.
+5. **UI** —
+   - Composer: one chip per staged file with live status — spinner
+     "reading…", then `✓ read · 180 chars` / `👁 vision pass · 435
+     chars` (amber "(truncated)" when cut), or a red error line
+     ending "— not sent". Send is disabled while anything is still
+     extracting; error chips are excluded from the send (never
+     pretend). Staged files clear on new chat / chat switch /
+     temporary toggle.
+   - Timeline: sent user messages carry compact in-bubble chips
+     (icon · name · chars, ✂ marker + tooltip for truncation)
+     showing what the model received.
+   - "+" menu item now says what's supported: "Text · code · PDF ·
+     image — read before sending".
+6. **retryLast / editMessage** — the retried or edited turn
+   re-sends the same files (attachments travel with the user
+   message, not the text).
+
+### Verification (all passed)
+
+- `bun run lint` clean.
+- **Extract API**: text file → 180-char record; reportlab PDF →
+  full text-layer record (contract ID, dates, values); PIL
+  whiteboard PNG → VLM record with PERFECT OCR ("WHITEBOARD —
+  Sprint 42 / Blockers: payment API sandbox / Owner: Yasmine /
+  Due: Friday 17:00") + visual description; random `.bin` → honest
+  "Unsupported file type — not sent".
+- **Turn E2E (API, temporary)**: "secret codename + revenue in my
+  attached report" → "OBSIDIAN-9 … $1,284,000" (both only in the
+  file), servedBy=provider. **Follow-up with the file only in
+  HISTORY** → "March 14, 2027" — context persists across turns.
+- **Duel with attachment**: both lanes (GLM 5.3 + Gemini 3.8
+  Flash) answered "OBSIDIAN-9" from the shared file.
+- **Saved-chat persistence**: user row stores the record
+  (`kind: pdf, method: text-layer, chars: 260`), assistant answers
+  "ACX", `GET /api/chats/[id]` returns it parsed. (Found + fixed a
+  stale-Prisma-client issue after the schema push — dev server
+  restart required.)
+- **Regression**: no-attachment turns byte-identical —
+  `meta → delta → done`, model = selection, and the SAME prompt
+  twice → second run `cached=true` (cache unpolluted).
+- **Browser golden path (Temporary chat)**: uploaded report.txt +
+  binary.bin → chips "read · 180 chars" / "Unsupported … — not
+  sent"; send gated on extraction; answer "Secret codename:
+  OBSIDIAN-9; Headcount: 47 engineers."; then whiteboard.png →
+  "vision pass · 435 chars" → "Owner: Yasmine; Due: Friday 17:00
+  (Sprint 42)". Sent bubbles carry compact chips. 0 console/page
+  errors; no horizontal overflow at 390px; mobile + desktop
+  screenshots VLM-inspected (chips render, layout intact).
+- Cleanup: 2 test chats + 7 test cache rows purged; the user's 10
+  real chats untouched; dev.log clean.
+
+### Deferred / known trade-offs
+
+- Scanned/image-only PDFs are rejected honestly rather than
+  page-rendered through vision — a future run could rasterize
+  pages and OCR them via the vision engine.
+- No drag-and-drop onto the composer yet (picker only).
+- Attachment extracts count toward prompt tokens honestly but get
+  no special cache treatment — repeated questions re-send the
+  extract (a future run could cache extraction results by file
+  hash, a pooled-gateway-only trick).
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+
+### Ops note (for future runs)
+
+The sandbox reaps background processes at tool-call boundaries —
+`nohup`/`setsid` alone do NOT survive. The dev server must be
+started with a double-fork orphan so it reparents to init DURING
+the call: `( setsid bun run dev < /dev/null > /dev/null 2>&1 & )`.
+After any `prisma db push`, the dev server must be restarted to
+pick up the regenerated client.
+
+---
+
+## Run 10 — 2026-11-02: LIVE WORD-BY-WORD TYPING ON EVERY PATH — the cloud failover actually streams
+
+**Rung:** 2 (Clarity/UX — the user's direct report: *"dont make the
+response appear single time, make the respons typed live time word
+per word, so it woudlnt be that the model take a lot of time"*).
+
+### Diagnosis (OBSERVE — live-timed, not assumed)
+
+Timestamped a real turn through the pipeline, then audited serving
+history:
+
+- **Provider path streams natively** — 35 fine-grained deltas over
+  215 ms. Not the problem.
+- **The user's own turns tonight (20:38–20:45, model
+  `free/claude-4.6-opus`) were ALL `keyLabel: null`** — every one
+  fell to the Z.ai cloud failover, where `zaiCloudExec` awaited the
+  ENTIRE completion (non-streaming SDK call; worse with deep
+  thinking enabled) and then fake-dumped 48-char chunks at 6 ms
+  (~8k chars/sec = visually one shot). Long silent wait → answer
+  appears single time. Exactly the complaint.
+- **Cache hits emitted the whole answer as ONE delta** — on search
+  turns the retrieval runs first (seconds), then the full cached
+  answer pops at once. Also "single time".
+- Probes confirmed the fix was available: the SDK with
+  `stream: true` returns the runtime's REAL SSE stream (OpenAI
+  chunk shape, word-level deltas; works with thinking enabled —
+  151 progressive chunks measured).
+
+### Competitor scan
+
+ChatGPT / Claude / Gemini stream token-by-token on every answer,
+including thinking turns — a turn that sits silent then dumps is
+read as "the model is slow". Streaming is table stakes; we had it
+on the provider path only. No gap-list change (parity restored on
+our own secondary paths).
+
+### Change
+
+1. **`executor.ts → zaiCloudExec` rewritten to true streaming** —
+   requests `stream: true`, parses the SSE ReadableStream with the
+   same loop shape as `tryProviderStream`, and emits every
+   `delta.content` to the client THE MOMENT the runtime generates
+   it. If a runtime ever ignores `stream` and returns JSON, the
+   full text still types out progressively instead of dumping.
+   Usage is captured from chunks when present, estimated otherwise.
+   Covers normal turns, BOTH duel lanes, and deep+thinking cloud
+   turns; the `/api/v1` passthrough contract is unchanged
+   (`ExecResult` still resolves with full content).
+2. **`executor.ts → revealWords()` (new, exported)** — progressive
+   reveal for content that arrives fully-formed: word-boundary
+   chunks (byte-exact reassembly), ~1 word per 6 ms tick, batching
+   on long answers to cap the reveal at ≈2 s.
+3. **`gateway.ts` cache-hit branches (normal turn + duel lane)** —
+   cached answers now type out live via `revealWords` instead of
+   one mega-delta. Provenance still says "cache · 0 tokens" — the
+   reveal is presentation, never a claim about where it came from.
+
+### Verification (all passed)
+
+- `bun run lint` clean; `tsc --noEmit` error count identical
+  before/after (14 pre-existing, 0 new).
+- **Cloud path (real)**: `free/claude-4.6-opus` → provider 404 →
+  cloud: 71 word-by-word deltas, typing window 453 ms,
+  `servedBy=zai-cloud` — previously a silent full-generation wait
+  followed by a single-shot dump.
+- **Cache path (real)**: same prompt ×2 → second turn `cached=true`
+  with 15 word deltas ("The ", "quick ", "brown "…) instead of 1;
+  test rows purged after.
+- **Provider regression**: untouched — 30 progressive deltas,
+  provider-served, same event shape.
+- **Browser golden path (Temporary chat)**: in-page 100 ms DOM
+  sampler recorded the answer growing 43 → 49 → 248 → 294 → 422 →
+  435 chars with the ▍ caret blinking during, then done;
+  provenance "GLM 5.3 · APInex pool · 3.1k tokens · cache: miss";
+  0 page/console errors; screenshot VLM-inspected — poem complete,
+  layout intact, no glitches.
+- Cleanup: 3 test cache rows purged; 0 temporary chats persisted;
+  the user's 10 real chats untouched; dev.log clean.
+
+### Deferred / known trade-offs
+
+- The confidence-label corrective pass (search turns whose answer
+  lacks the label) still runs AFTER the answer streams — a short
+  trailing pause before `done` (pre-existing; the label appends at
+  the very end).
+- Cloud stream chunks carry no usage in practice → cloud-failover
+  turns bill estimated tokens (~4 chars/token) unless a usage chunk
+  appears.
+- `revealWords` pacing on cache hits is presentation-only and
+  capped (~2 s); it never alters content, provenance, or billing.
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+
+---
+
+## Run 11 — 2026-11-02: SELF-HEALING DATABASE — "attempt to write a readonly database" can never kill a turn again
+
+**Rung:** 1 (Trust — the user's screenshot showed a turn dying
+mid-pipeline with a raw Prisma ConnectorError dump:
+`SqliteError { extended_code: 1032, "attempt to write a readonly
+database" }` on `db.message.create`).
+
+### Diagnosis (OBSERVE — reproduced live, then root-caused by experiment)
+
+- **Reproduced immediately**: the same POST through the running dev
+  server failed with the exact error, while a **fresh process wrote
+  fine** — file `z:z 664`, 7.3G free, rw mount. The DISK was healthy;
+  the SERVER's Prisma pool was poisoned.
+- **Root cause chain**: `db/custom.db` is **tracked by git** (runtime
+  state committed by design so session snapshots carry user data).
+  Session-snapshot automation commits every ~15 min, and Run 10's
+  verification used `git stash`/`git stash pop` (22:45 — file mtime
+  matches) — git rewrites the tracked file, replacing it under the
+  running server.
+- **Controlled experiments (`scripts/exp-readonly.ts`) proved the
+  exact failure mechanics**:
+  - E1: chmod'ing the file 444 under an ALREADY-OPEN read-write
+    connection changes nothing (kernel checks at open).
+  - E2: a connection OPENED while the file is unwritable →
+    `SqliteError 8 "attempt to write a readonly database"` — and it
+    **stays broken forever after the file becomes writable again**
+    (a read-only SQLite connection never upgrades).
+  - E3: replacing the file under a live connection (the git
+    stash/pop scenario) → **`SqliteError 1032` — byte-identical to
+    the user's screenshot** (journal/main-db inode mismatch on
+    write).
+  - Heal for both: `$disconnect()` + reopen by path.
+
+### Change
+
+**`src/lib/db.ts` — the exported client is now a self-healing
+wrapper** (Prisma `$extends` query extension over the raw client):
+
+- Every model operation that fails with "attempt to write a readonly
+  database" (covers extended codes 8 AND 1032) triggers a
+  **single-flight pool heal** (`$disconnect`, serialized so
+  concurrent lanes heal once), then **retries exactly once** — the
+  retry reopens the file by PATH and picks up whatever is on disk.
+- Retry safety is deliberate: a read-only write was REJECTED without
+  side effects, so retrying cannot double-insert. Ambiguous
+  connection-closed errors are NOT retried (the write may have
+  landed) — they surface honestly.
+- One `console.warn` per heal for observability.
+- The DB file stays **tracked** (untracking it would lose all user
+  chats/keys if the sandbox is ever rebuilt from a snapshot commit —
+  data loss is strictly worse than a self-healed hiccup).
+
+### Verification (all passed)
+
+- **The exact failing request** (non-temporary turn) → full success:
+  chat + both messages persisted, provider-served.
+- **Live poisoning of the real server**: swapped the DB file under
+  the running dev server (E3-style, new inode), then sent a turn →
+  heal logged, turn completed **fully transparently**: client
+  received the complete `meta → delta×5 → done` sequence, both
+  messages persisted with correct content, billing event recorded.
+  Second poisoning identical.
+- Post-heal turns, reads, and the browser golden path all clean:
+  saved chat renders from DB with provenance; Temporary UI turn
+  answered with "GLM 5.3 · APInex pool · 2.3k tokens"; 0 page/console
+  errors; dev.log clean apart from the two intentional heal lines.
+- `bun run lint` clean; `tsc --noEmit` error count identical to the
+  pre-run baseline (14 pre-existing, 0 new).
+- Cleanup: 5 test chats + 5 test cache rows purged; the user's real
+  chats untouched and readable.
+
+### Ops discipline (new, for future runs)
+
+- **Never `git stash` / `git reset --hard` / `git checkout` on this
+  repo while the dev server holds the DB open** — use `git diff`
+  into a temp file instead when baselines are needed. The wrapper
+  now makes even a violation self-healing, but the discipline stays.
+- After any prisma schema push, restart the dev server (existing
+  note) — and RESTART also clears any poisoned pool (the global
+  client is cached in `globalThis` across hot reloads).
+
+### Deferred / known trade-offs
+
+- The heal retries only read-only-class failures; a genuinely
+  read-only disk (permissions, full disk) still surfaces the honest
+  error after one retry — by design.
+- During a heal, a concurrently in-flight query on the OLD pool
+  could observe a one-off connection error (not retried — ambiguous).
+  Rare (heals only happen when git swaps the DB under the server)
+  and strictly better than the previous permanent breakage.
+- Hydration attribute mismatch on Radix popovers (pre-existing).
+
+---
+
+## Run 12 — 2026-11-02: CLIENT-SIDE TYPEWRITER GATE — responses type out word-by-word at a readable pace, on every path, with Skip / smart auto-scroll / reduced-motion
+
+**Rung:** 2 (Clarity/UX — the user's spec'd request: *"Stream
+responses word-by-word instead of displaying them instantly…
+roughly 20–40 words per second… requestAnimationFrame, NOT
+setInterval… auto-scroll only if the user has not scrolled up…
+reserve the container height… prefers-reduced-motion… Skip
+affordance… fall back to full text on JS failure… no new
+dependencies"*).
+
+### Diagnosis (OBSERVE — read the render path, then measured live)
+
+Run 10 made every server path stream, but **pacing that the user
+can watch cannot live on the server**: the client renders whatever
+each `reader.read()` chunk contains, so network coalescing + React
+batching + the server's own ~166 wps reveal let bursts land in a
+single frame — the answer still read as "appeared all at once".
+Two more defects surfaced in the same surface:
+
+- `ChatTimeline` scrolled `scrollIntoView({smooth})` on EVERY store
+  update — scroll-spam during typing, and it **yanked the user back
+  down** whenever they scrolled up to read.
+- At `done`, the server reconciles the assistant message id → React
+  key change → **full remount**: any naive per-message typewriter
+  would dump its remaining backlog at exactly that moment.
+
+### Competitor scan
+
+ChatGPT / Claude / Gemini decouple visual pacing from model speed:
+the answer always types at a comfortable, constant rate, follows the
+bottom only while the user is at the bottom, and can be skipped.
+None of them yank the user's scroll. Parity restored with spec-exact
+behavior plus a Skip affordance on the streaming text itself.
+
+### Change (all client-side, vanilla TS, zero new dependencies)
+
+1. **`src/components/senku/Typewriter.tsx` (new)** — the reveal
+   engine. `WORDS_PER_SECOND = 30` (one exported knob), a
+   requestAnimationFrame clock with a word budget (`MAX_FRAME_DT_MS`
+   = 100 so a background tab never fast-forwards), word-boundary
+   advance that never splits surrogate pairs and chunks unbroken
+   runs (CJK/URLs) at ≤10 chars — **slices reassemble
+   byte-for-byte**. History never replays (only growth observed
+   after mount animates); trims/resets/server-truth replacements
+   snap on the next frame via the tick's position clamp; any engine
+   throw falls back to rendering the full text. `StreamedMarkdown`
+   renders `<Markdown>` of the revealed prefix + caret + a
+   `.senku-skip` pill, and treats **any click on the streaming
+   text** (outside links/buttons/selections) as Skip.
+   `useStickyScroll` publishes bottom-stickiness on the scroll
+   container (36 px tolerance) that every instance consults.
+2. **`Markdown.tsx`** — renderer map hoisted to a stable module
+   constant + `CodeBlock` memoized: React now RECONCILES the
+   markdown tree between frames instead of remounting it (previously
+   every render created new component identities → the whole tree,
+   including all code blocks, re-highlighted per delta). Only the
+   growing block re-highlights now.
+3. **`ChatTimeline.tsx`** — assistant messages use **slot-stable
+   keys** (`slot-<index>`; messages are append-only while streaming,
+   so the slot never shifts mid-turn) so the done-time id
+   reconciliation can no longer remount the message and dump the
+   reveal. Auto-scroll now fires only for NEW messages
+   (count/lastId-keyed) and only while sticky; word-following is
+   done by the gate per frame. Both surfaces (normal + duel lanes)
+   render through `StreamedMarkdown`.
+4. **`globals.css`** — `.senku-skip` pill + `.senku-caret` added to
+   the `prefers-reduced-motion` kill list.
+
+### Verification (all passed, live in the browser)
+
+- `bun run lint` clean; `tsc --noEmit` 14 pre-existing errors
+  before and after (0 new). React Compiler rules satisfied — all
+  state transitions live in rAF callbacks / event handlers.
+- **500-word story (provider path)**: steady **30 wps** window
+  after window (29–31 across the whole curve), median frame
+  17 ms / max 67 ms (no freeze), while the SSE stream had already
+  delivered all 2971 chars early — the user watches text the model
+  finished long ago, exactly as specified.
+- **Byte-for-byte**: final DOM text (whitespace-stripped) identical
+  to the raw `done.content` on every prose turn tested (2430/2430,
+  327/327, 433/433 chars — zero mismatches, zero suffix drift);
+  planted nonces present exactly twice; zero length decreases
+  within a turn (no flicker).
+- **Auto-scroll**: scrolled up mid-typing → 44 more words typed
+  with scrollTop pinned at 0 (no yank, stick="0"); scrolled back to
+  bottom → following resumed immediately (scrollTop=scrollMax).
+- **Skip (button)**: one sample step 2280 → 3757 chars (entire
+  backlog landed ≤100 ms), no intermediate partial states.
+  **Skip (click on the text body)**: 7 → 58 chars in one step,
+  re-arming correctly as the stream continued.
+- **prefers-reduced-motion** (matchMedia override): full 433-word
+  text present at t≈5 s (arrival-following, not 30 wps pacing),
+  **Skip affordance never appears**, byte-identical.
+- **Regressions**: code-block answers render with language badge +
+  copy button; provenance rows on every turn; duel lanes both type
+  via the same gate and the **Keep → runner-up** flow survives the
+  slot-key change (kept GLM answer + "Runner-up · Gemini 3.8 Flash"
+  collapsed under it); 0 page errors; dev.log clean apart from the
+  pre-existing Radix hydration attribute mismatch.
+- VLM-inspected mid-typing screenshot: partial answer, Skip pill
+  visible, no layout glitches.
+- Cleanup: 12 test cache rows purged (nonce-matched), 0 temporary
+  chats persisted, user's real chats untouched.
+
+### Deferred / known trade-offs
+
+- The provenance row appears at `done` even if the gate is still
+  typing out the backlog (the model IS done; the typing is
+  presentation). Honest, and the Skip affordance covers impatience.
+- Very long answers take as long as the spec'd constant pace
+  implies (500 words ≈ 17 s) — by design; the Skip pill is always
+  one click away.
+- With slot-stable keys, chat switches no longer replay the
+  fade-up animation for messages that occupy already-mounted slots
+  (incumbents don't animate history either — calmer, intentional).
+- Server-side `revealWords` (Run 10) still paces the SSE for
+  non-browser consumers; the client gate is the single visual
+  authority, and double-pacing is benign (server ticks arrive as
+  bursts the gate smooths).
+
+---
+
+## Run 13 — 2026-11-02: LIVING SIDEBAR — animated open/close, hover-to-peek, and calm chat navigation
+
+**User request.** (a) Animate opening AND closing the sidebar; (b)
+animate entering a chat and going to a new chat; (c) resting the
+cursor on the sidebar button opens it with no click at all — and
+when the cursor moves away, the sidebar returns to closed.
+
+### What shipped
+
+**1. Animated sidebar (was: hard mount/unmount, zero motion).**
+The sidebar is now always mounted inside a shell that animates:
+- **Desktop**: shell width animates 0 ↔ 264 px with
+  `cubic-bezier(0.32, 0.72, 0, 1)` 280 ms — the chat column
+  reflows smoothly, claude.ai-style — while an inner panel
+  (fixed 264 px, clipped by the shell) slides, so sidebar content
+  never squishes mid-flight.
+- **Mobile**: the shell is a fixed overlay sliding in from the
+  left (translateX), with the backdrop fading (opacity 220 ms)
+  instead of popping.
+- **First-paint gate**: transitions stay off until two rAFs after
+  mount — the hydration state never animates (the mobile
+  default-closed sidebar no longer risks a visible slide-shut).
+- **A11y**: shell is `inert` + `visibility: hidden` while closed
+  (focus/AT can't wander in); a panel that closes under the
+  cursor hands focus back (flyout hygiene); toggle carries
+  `aria-expanded` reflecting the *effective* open state.
+
+**2. Hover-to-peek on the toggle.** A transient `peek` state
+sits beside the pinned `sidebarOpen` (effective = either):
+- Cursor rests **140 ms** on the top-bar toggle → sidebar peeks
+  open, no click (`SIDEBAR_PEEK_OPEN_MS`).
+- Cursor leaves the toggle/sidebar → after a **320 ms grace**
+  (`SIDEBAR_PEEK_CLOSE_MS`) it slides away — the grace lets the
+  cursor travel between button and panel without collapse.
+- Cursor *inside* the sidebar cancels any pending close.
+- **Click while peeking pins it open** (converts transient →
+  sticky); click when pinned closes; click when closed opens.
+  One button, no surprise "my click closed the thing hover
+  opened".
+- Guarded by `(hover: hover) and (pointer: fine)` — touch devices
+  keep the plain click toggle (verified: headless + iPhone
+  emulation report `hover: none` and correctly never peek).
+
+**3. Calm chat navigation.** Store gained `viewEpoch`, bumped by
+`newChat` / `selectChat` / delete-of-current; the app shell keys
+the conversation view on it, so every navigation remounts the
+whole view and it settles in with one fade-and-rise
+(`senku-view-in`, 260 ms) — instead of N messages exploding
+individually. Sending a message never bumps the epoch, so the
+typewriter gate is never remounted mid-stream. Bonus: re-clicking
+the chat you're already reading is now a true no-op (no refetch,
+no replay).
+
+### Verification (all browser-proven, 40 ms in-page samplers)
+
+- **Close on click**: width 264→112→28→14→4→2→0 — real
+  intermediate frames, ~280 ms, not an instant jump.
+- **Hover open (no click)**: 0→39→152→236→250→264 after the
+  140 ms intent; `aria-expanded` flips true.
+- **Cursor away**: 264 holds through the 320 ms grace, then
+  264→175→41→20→10→3→1→0.
+- **Cursor into the sidebar**: stays open (264).
+- **Pin cycle**: peek + click → cursor moved far away → still
+  264; second click → 0.
+- **Enter chat** ("Explain Transformers Simply"): view opacity
+  1.00 → 0.00 → 0.49 → 0.79 → 0.92 → 0.97 → 1.00; conversation
+  and message actions render.
+- **New chat**: 1.00 → 0.00 → 0.27 → 0.66 → 0.86 → 1.00;
+  WelcomeScreen visible ("senku returns!").
+- **Same-chat re-click**: opacity constant 1.00 — no replay, and
+  no `/api/chats/:id` refetch.
+- **prefers-reduced-motion** (exact rules injected — the media
+  query itself can't be flipped headlessly): close went 264→0 in
+  a single 20 ms sample step; open/close become instant state
+  changes.
+- **Mobile (iPhone 16 Pro emulation)**: boots closed
+  (left −264, hidden) with no load animation; toggle click slides
+  in −264→−64→−20→−10→−3→−1→0 with backdrop fading to 1; backdrop
+  click slides out 0→−152→−223→−245→−264 with backdrop to 0.
+- **Typewriter regression**: Temporary-mode turn answered "42"
+  through the client gate (0→2 chars, single word) with the keyed
+  view wrapper in place; Temporary banner renders inside it;
+  message actions present; 0 page errors; dev.log clean.
+- **VLM-inspected** hover-peek screenshot: sidebar + chat area
+  correctly laid out, nothing clipped or overlapping.
+- `bun run lint` clean; `tsc --noEmit` 14 errors — all
+  pre-existing (examples/skills/attachments legacy +
+  altContent/altModel + WelcomeScreen useNow), 0 new.
+- Cleanup: 1 test cache row purged (content "42", today), 0
+  temporary chats persisted, 11 real chats untouched.
+
+### Deferred / known trade-offs
+
+- Peek-close is strictly cursor-driven (per the user's spec): a
+  peeked sidebar stays open while the cursor rests inside it,
+  even after clicking a chat — it folds away only when the cursor
+  leaves. Pinned never auto-closes.
+- The desktop width animation animates layout (it has to — the
+  chat column must reflow); the inner slide keeps the panel
+  content itself transform-only, so no text re-wraps mid-flight.
+- `prefers-reduced-motion` verification used injected rules
+  identical to the shipped media-query block (the CLI can't
+  emulate that media feature); the mechanism is the same CSS.
+
+---
+
+## COMPETITOR GAP LIST
+
+Standing snapshot of what Claude / ChatGPT / Gemini have that we
+have not yet matched or beaten (updated per run; items close as
+they ship).
+
+| Gap | Competitor | Status |
+| --- | --- | --- |
+| File uploads with real content understanding (docs, images) | all three | **BEATEN (Run 9)** — we read text/code/PDF (text-layer) and images (pooled VISION pass: OCR + visual description), AND show per-file extraction provenance (chars read, truncation, method) the incumbents hide; unreadable files are honestly not sent |
+| Canvas / artifacts side-panel for long code+docs | ChatGPT, Claude | OPEN |
+| Scheduled prompts / recurring tasks | ChatGPT, Gemini | OPEN |
+| Memory across chats | ChatGPT, Claude | OPEN (deliberately: personal gateway, no profile harvesting) |
+| Code interpreter / sandboxed execution | ChatGPT | OPEN |
+| Image generation in-chat | ChatGPT, Gemini | OPEN |
+| Projects / folders with per-project instructions | ChatGPT, Claude | OPEN |
+| Voice mode (live duplex conversation) | ChatGPT, Gemini | PARTIAL — we have push-to-talk dictation + read-aloud |
+| Deep research (multi-step agentic search) | Gemini, ChatGPT | **MATCHED (Run 8)** — plan → multi-angle retrieve → cross-check, with per-source date/authority audits the incumbents don't surface; every stage streams live |
+| Thinking mode / effort levels (fast–medium–deep) | ChatGPT, Claude, Gemini | **BEATEN (Run 8)** — theirs toggles one backend's switch; ours routes to a different pooled ENGINE per level with transparent previews |
+| **In-chat model duels** | **none of the three** | **SHIPPED (Run 7) — differentiator** |
+| Grounded-answer confidence contract + visible audit | none (Gemini's "double-check" is sentence-level, undated) | SHIPPED (Runs 4+6) — differentiator |
+| Per-message provenance (provider/key/tokens/cache) | none | SHIPPED (Runs 1+3) — differentiator |
+| Health-aware pooled routing with visible billing | none (single-backend) | SHIPPED (Run 1) — differentiator |

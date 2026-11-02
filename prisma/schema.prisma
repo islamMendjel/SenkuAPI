@@ -1,0 +1,138 @@
+// SenkuAPI — Personal AI Gateway
+// Prisma schema (SQLite): providers, pooled keys, chats, messages,
+// usage events (3-tier pacing limiter source of truth) and response cache.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Providers — exactly ONE is active at any time.
+//   OxionAI : token-limited (500k tokens/key/month, 3-tier pacing)
+//   APInex  : unlimited tier (hasTokenLimit = false, multiplier 4.0)
+// ─────────────────────────────────────────────────────────────
+model Provider {
+  id              String  @id @default(cuid())
+  name            String  @unique // "OxionAI" | "APInex"
+  slug            String  @unique // "oxionai" | "apinex"
+  baseUrl         String? // OpenAI-compatible base URL (e.g. https://api.apinex.bond/v1)
+  hasTokenLimit   Boolean @default(true)
+  tokenLimitPerKey Int    @default(500000) // monthly pool per key (OxionAI)
+  tokenMultiplier Float   @default(1.0) // usage accounting multiplier (APInex = 4.0)
+  isActive        Boolean @default(false)
+  models          String  @default("[]") // JSON array of model ids
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  keys        ApiKey[]
+  usageEvents UsageEvent[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pooled API keys — round-robin rotation runs over the ACTIVE
+// provider's keys only.
+// ─────────────────────────────────────────────────────────────
+model ApiKey {
+  id                  String    @id @default(cuid())
+  providerId          String
+  provider            Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  label               String // "Pool key #1", "Test key", ...
+  keyValue            String // secret; never returned unmasked
+  isActive            Boolean   @default(true)
+  tokensUsedThisMonth Int       @default(0) // rolling monthly accumulator
+  monthKey            String    @default("") // "YYYY-MM"; reset when month flips
+  lastUsedAt          DateTime?
+  createdAt           DateTime  @default(now())
+
+  usageEvents UsageEvent[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chats — temporary chats are kept out of the "Recent" history.
+// ─────────────────────────────────────────────────────────────
+model Chat {
+  id          String   @id @default(cuid())
+  title       String   @default("New chat")
+  model       String   @default("free/glm-5.3")
+  provider    String   @default("APInex")
+  isTemporary Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages Message[]
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  chatId    String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  role      String // "user" | "assistant"
+  content   String
+  model     String? // model used for assistant replies
+  provider  String? // provider that served the reply
+  keyLabel  String? // pooled key that served the reply (for timeline debug)
+  tokens    Int      @default(0) // tokens billed for this message (0 when cached)
+  cached    Boolean  @default(false) // served from exact-match cache
+  sources   String? // JSON array [{title,url,snippet}] when web search ran
+  // Effort dial: "fast" | "medium" | "deep" on assistant replies
+  // (null = pre-dial messages, treated as medium).
+  effort    String?
+  // Attachments the gateway ACTUALLY read on user messages — JSON
+  // array of AttachmentRecord (name, kind, method, chars, extract…).
+  // Only successfully-extracted files land here; the model never
+  // receives a file it wasn't given the content of.
+  attachments String?
+  // Duel turns: the winning lane is the message itself; the losing
+  // lane is kept as a viewable runner-up reference.
+  altContent String? // runner-up answer text (duel turns only)
+  altModel   String? // runner-up model id
+  createdAt DateTime @default(now())
+
+  @@index([chatId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Usage events — every completion is logged here. The 3-tier
+// pacing limiter (monthly pool / daily pace / 5h burst) reads
+// these events with time-window aggregation.
+// ─────────────────────────────────────────────────────────────
+model UsageEvent {
+  id               String   @id @default(cuid())
+  keyId            String?
+  key              ApiKey?  @relation(fields: [keyId], references: [id], onDelete: SetNull)
+  providerId       String
+  provider         Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  chatId           String?
+  model            String   @default("")
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0) // raw tokens (before multiplier)
+  multiplier       Float    @default(1.0)
+  cached           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  @@index([keyId, createdAt])
+  @@index([providerId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Response cache — exact-match (sha256(prompt|model|system)),
+// 24h TTL, cache hits are served with 0 tokens spent.
+// ─────────────────────────────────────────────────────────────
+model ResponseCache {
+  id        String   @id @default(cuid())
+  cacheKey  String   @unique
+  model     String
+  provider  String
+  content   String
+  tokens    Int      @default(0) // tokens the original call spent
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

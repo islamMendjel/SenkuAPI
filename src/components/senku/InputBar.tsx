@@ -1,0 +1,853 @@
+"use client";
+
+// SenkuAPI — floating bottom input bar:
+// "+" attachments menu (REAL file reading — extraction runs the
+// moment a file is picked, chips show what the gateway read),
+// Search toggle pill, effort dial, model selector chip (pretty name
+// + tier badge + caret, grouped provider dropdown), server-backed
+// voice dictation with a live waveform, send/stop.
+
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowUp,
+  Brain,
+  ChevronDown,
+  Check,
+  Eye,
+  FileImage,
+  FileText,
+  Globe,
+  Loader2,
+  Mic,
+  Paperclip,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Square,
+  Swords,
+  Trash2,
+  TriangleAlert,
+  X,
+  Zap,
+} from "lucide-react";
+import { useSenku, type PendingAttachment } from "@/lib/store";
+import { useToast } from "@/hooks/use-toast";
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
+import { effortModel, modelHint, modelMeta } from "@/lib/senku/models";
+import type { EffortLevel } from "@/lib/senku/types";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
+const WAVE_BARS = 26;
+const ATTACHMENT_CAP = 5;
+
+function formatChars(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k chars`;
+  return `${n} chars`;
+}
+
+function kindIcon(p: PendingAttachment) {
+  return p.kindGuess === "image";
+}
+
+/** One staged file: icon + name + live extraction status. The chip
+ *  tells the user exactly what the model will receive — chars read,
+ *  vision pass, truncation — or why the file can't be sent. */
+function AttachmentChip({
+  p,
+  onRemove,
+  disabled,
+}: {
+  p: PendingAttachment;
+  onRemove: () => void;
+  disabled: boolean;
+}) {
+  const isImage = kindIcon(p);
+  return (
+    <div
+      className={`flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left ${
+        p.status === "error"
+          ? "border-red-500/30 bg-red-500/5"
+          : "border-zinc-700/70 bg-[#1d1d20]"
+      }`}
+      aria-label={
+        p.status === "ready"
+          ? `Attachment ${p.name}, read by the gateway`
+          : `Attachment ${p.name}`
+      }
+    >
+      {isImage ? (
+        <FileImage
+          className={`h-4 w-4 shrink-0 ${
+            p.status === "error" ? "text-red-400/80" : "text-zinc-400"
+          }`}
+          aria-hidden
+        />
+      ) : (
+        <FileText
+          className={`h-4 w-4 shrink-0 ${
+            p.status === "error" ? "text-red-400/80" : "text-zinc-400"
+          }`}
+          aria-hidden
+        />
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12.5px] font-medium text-zinc-200">
+          {p.name}
+        </span>
+        {p.status === "extracting" && (
+          <span className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+            reading…
+          </span>
+        )}
+        {p.status === "ready" && p.record && (
+          <span
+            className="flex items-center gap-1 text-[11px] text-emerald-300/80"
+            title={
+              p.record.truncated
+                ? `Sent to the model: first ${formatChars(p.record.chars)} of ${p.record.totalChars} — the rest was cut to fit`
+                : `Sent to the model: ${p.record.chars} characters${p.record.kind === "image" ? " from a vision pass (OCR + description)" : " read from the file"}`
+            }
+          >
+            {p.record.kind === "image" ? (
+              <Eye className="h-3 w-3 shrink-0" aria-hidden />
+            ) : (
+              <Check className="h-3 w-3 shrink-0" aria-hidden />
+            )}
+            {p.record.kind === "image" ? "vision pass · " : "read · "}
+            {formatChars(p.record.chars)}
+            {p.record.truncated ? " (truncated)" : ""}
+          </span>
+        )}
+        {p.status === "error" && (
+          <span className="flex items-start gap-1 text-[11px] leading-snug text-red-300/80">
+            <TriangleAlert className="mt-px h-3 w-3 shrink-0" aria-hidden />
+            {p.error} — not sent
+          </span>
+        )}
+      </span>
+      <button
+        onClick={onRemove}
+        disabled={disabled}
+        aria-label={`Remove ${p.name}`}
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-40"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// ── Effort dial ──────────────────────────────────────────────
+// How hard the gateway works on one turn. On single-brand chats a
+// fast/quality toggle flips one backend's switch; here each level
+// can route to a different ENGINE from the pool.
+const EFFORTS: {
+  level: EffortLevel;
+  label: string;
+  desc: string;
+  icon: typeof Zap;
+  pill: string;
+}[] = [
+  {
+    level: "fast",
+    label: "Fast",
+    desc: "Fastest engine in the pool · brief, direct answers",
+    icon: Zap,
+    pill: "border-yellow-300/60 bg-yellow-300/10 text-yellow-200",
+  },
+  {
+    level: "medium",
+    label: "Medium",
+    desc: "Your selected model · balanced (default)",
+    icon: Sparkles,
+    pill: "",
+  },
+  {
+    level: "deep",
+    label: "Deep",
+    desc: "Strongest engine · thinking · deep research with Search",
+    icon: Brain,
+    pill: "border-emerald-300/60 bg-emerald-300/10 text-emerald-200",
+  },
+];
+
+function formatElapsed(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+export function InputBar() {
+  const {
+    searchEnabled,
+    toggleSearch,
+    temporary,
+    model,
+    models,
+    setModel,
+    syncModels,
+    streaming,
+    sendMessage,
+    stopStreaming,
+    limiter,
+    duelEnabled,
+    toggleDuel,
+    challenger,
+    setChallenger,
+    effort,
+    setEffort,
+    pendingAttachments,
+    addAttachments,
+    removePendingAttachment,
+  } = useSenku();
+  const { toast } = useToast();
+
+  const [value, setValue] = useState("");
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [challengerOpen, setChallengerOpen] = useState(false);
+  const [effortOpen, setEffortOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const recorder = useVoiceRecorder();
+  const waveBarsRef = useRef<(HTMLDivElement | null)[]>([]);
+  const waveLevelsRef = useRef<number[]>(new Array(WAVE_BARS).fill(4));
+
+  const providerName = limiter?.providerName ?? "";
+  const extractingAttachments = pendingAttachments.some(
+    (p) => p.status === "extracting"
+  );
+  const canSend =
+    value.trim().length > 0 && !streaming && !extractingAttachments;
+  const isRecording = recorder.state === "recording";
+  const isProcessing = recorder.state === "processing" || transcribing;
+  // A duel needs a second model to race against.
+  const duelAvailable = models.filter((m) => m !== model).length > 0;
+
+  // auto-grow textarea
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = Math.min(el.scrollHeight, 208) + "px";
+  }, [value]);
+
+  // surface recorder permission/device errors
+  useEffect(() => {
+    if (recorder.error) {
+      toast({ description: recorder.error, variant: "destructive" });
+    }
+  }, [recorder.error, toast]);
+
+  // live waveform: push the smoothed mic level through a rolling window
+  // and paint bar heights directly on the DOM (no re-render per frame)
+  useEffect(() => {
+    if (recorder.state !== "recording") return;
+    let raf = 0;
+    const loop = () => {
+      const level = recorder.levelRef.current;
+      const next = waveLevelsRef.current
+        .slice(1)
+        .concat(4 + level * level * 42 + Math.random() * 2);
+      waveLevelsRef.current = next;
+      for (let i = 0; i < WAVE_BARS; i++) {
+        const el = waveBarsRef.current[i];
+        if (el) el.style.height = `${Math.max(4, next[i]).toFixed(1)}px`;
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [recorder.state, recorder.levelRef]);
+
+  const submit = () => {
+    if (!canSend) return;
+    const content = value.trim();
+    setValue("");
+    void sendMessage(content);
+  };
+
+  // stop → transcribe (server ASR) → land the text in the input
+  const finishDictation = async () => {
+    recorder.stop();
+    setTranscribing(true);
+    try {
+      const wav = await recorder.takeResult();
+      if (!wav) {
+        toast({ description: "Didn't catch that — try speaking a bit louder." });
+        return;
+      }
+      const res = await fetch("/api/voice/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: wav }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Transcription failed");
+      const text = String(data.text ?? "").trim();
+      if (!text) {
+        toast({ description: "Didn't catch that — try speaking a bit louder." });
+        return;
+      }
+      setValue((v) => (v ? `${v} ${text}` : text));
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(el.value.length, el.value.length);
+        }
+      });
+    } catch (e) {
+      toast({
+        description: (e as Error).message || "Transcription failed.",
+        variant: "destructive",
+      });
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const onMicClick = () => {
+    if (recorder.state === "recording") {
+      void finishDictation();
+    } else if (recorder.state === "idle") {
+      void recorder.start();
+    }
+  };
+
+  const onUpload = () => {
+    setAttachOpen(false);
+    fileRef.current?.click();
+  };
+
+  const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    const room = ATTACHMENT_CAP - pendingAttachments.length;
+    if (room <= 0) {
+      toast({
+        description: `Up to ${ATTACHMENT_CAP} files per message.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    const accepted = files.slice(0, room);
+    if (files.length > accepted.length) {
+      toast({
+        description: `Only ${accepted.length} of ${files.length} files added — up to ${ATTACHMENT_CAP} per message.`,
+      });
+    }
+    void addAttachments(accepted).then(() => {
+      /* per-file results are shown on the chips */
+    });
+  };
+
+  const activeMeta = modelMeta(model);
+
+  return (
+    <div className="relative mx-auto w-full max-w-3xl shrink-0 px-4">
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        hidden
+        onChange={onFilePicked}
+        aria-hidden
+      />
+
+      <div className="rounded-[26px] border border-zinc-700/70 bg-[#262627] shadow-[0_8px_32px_rgba(0,0,0,0.45)] transition-colors focus-within:border-zinc-500">
+        {isRecording ? (
+          /* live waveform strip replaces the textarea while dictating */
+          <div className="senku-rec-in flex h-[52px] items-center gap-3 px-4" aria-live="polite">
+            <span className="flex shrink-0 items-center gap-2 tabular-nums text-[13px] text-red-400">
+              <span className="senku-rec-dot inline-block h-2 w-2 rounded-full bg-red-400" />
+              {formatElapsed(recorder.elapsedMs)}
+            </span>
+            <div className="flex h-10 min-w-0 flex-1 items-center justify-center gap-[3px]" aria-hidden>
+              {Array.from({ length: WAVE_BARS }).map((_, i) => (
+                <div
+                  key={i}
+                  ref={(el) => {
+                    waveBarsRef.current[i] = el;
+                  }}
+                  className="senku-wave-bar"
+                  style={{ height: 4 }}
+                />
+              ))}
+            </div>
+            <span className="hidden shrink-0 text-[11px] text-zinc-500 sm:block">
+              tap ◼ to stop
+            </span>
+          </div>
+        ) : isProcessing ? (
+          <div className="flex h-[52px] items-center px-4" aria-live="polite">
+            <span className="senku-thinking-label text-[14px] font-medium">
+              Transcribing…
+            </span>
+          </div>
+        ) : (
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            rows={1}
+            placeholder="Message SenkuAPI..."
+            aria-label="Message SenkuAPI"
+            className="senku-scroll max-h-52 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-500"
+          />
+        )}
+
+        {/* staged attachments — one chip per file, live extraction
+            status: what the gateway read is what the model gets */}
+        {pendingAttachments.length > 0 && (
+          <div className="senku-scroll max-h-44 space-y-1.5 overflow-y-auto px-3 pt-2">
+            {pendingAttachments.map((p) => (
+              <AttachmentChip
+                key={p.id}
+                p={p}
+                disabled={streaming}
+                onRemove={() => removePendingAttachment(p.id)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5 pt-0.5">
+          {/* left controls — horizontally scrollable on narrow screens
+              so Search + Duel + challenger never wrap or overflow */}
+          <div className="senku-scroll flex min-w-0 items-center gap-1.5 overflow-x-auto">
+            <Popover open={attachOpen} onOpenChange={setAttachOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  aria-label="Add attachments"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+                >
+                  <Plus className="h-[18px] w-[18px]" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="top"
+                align="start"
+                className="w-64 rounded-xl border-zinc-800 bg-[#262627] p-1.5 text-zinc-200 shadow-2xl"
+              >
+                <button
+                  onClick={onUpload}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+                >
+                  <Paperclip className="h-4 w-4 text-zinc-400" />
+                  <span className="flex min-w-0 flex-col">
+                    <span>Upload from computer</span>
+                    <span className="truncate text-[10.5px] text-zinc-500">
+                      Text · code · PDF · image — read before sending
+                    </span>
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    toggleSearch();
+                    setAttachOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+                >
+                  <Globe className="h-4 w-4 text-zinc-400" />
+                  Search the web
+                  <span
+                    className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                      searchEnabled
+                        ? "bg-emerald-400/15 text-emerald-300"
+                        : "bg-zinc-700/60 text-zinc-400"
+                    }`}
+                  >
+                    {searchEnabled ? "On" : "Off"}
+                  </span>
+                </button>
+                {duelAvailable && (
+                  <button
+                    onClick={() => {
+                      if (!duelEnabled) {
+                        toast({
+                          description:
+                            "Duel armed — next message races two models; you pick the keeper.",
+                        });
+                      }
+                      toggleDuel();
+                      setAttachOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] hover:bg-white/5"
+                  >
+                    <Swords className="h-4 w-4 text-zinc-400" />
+                    Duel two models
+                    <span
+                      className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                        duelEnabled
+                          ? "bg-emerald-400/15 text-emerald-300"
+                          : "bg-zinc-700/60 text-zinc-400"
+                      }`}
+                    >
+                      {duelEnabled ? "On" : "Off"}
+                    </span>
+                  </button>
+                )}
+              </PopoverContent>
+            </Popover>
+
+            <button
+              onClick={toggleSearch}
+              aria-pressed={searchEnabled}
+              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+                searchEnabled
+                  ? "border-zinc-400 bg-white/10 text-white"
+                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+              }`}
+              title="Toggle web search — grounded answers with cited sources (max 3 snippets, 300 chars each)"
+            >
+              <Globe className="h-3.5 w-3.5" />
+              Search
+            </button>
+
+            {/* Effort dial — fast / medium / deep. Each level can
+                route to a different pooled engine; the popover shows
+                exactly which engine serves each level. */}
+            <Popover open={effortOpen} onOpenChange={setEffortOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  aria-label={`Effort level: ${effort}. Change how hard the gateway works`}
+                  aria-expanded={effortOpen}
+                  className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors ${
+                    effort === "medium"
+                      ? "border-zinc-600 text-zinc-300 hover:bg-white/5"
+                      : EFFORTS.find((e) => e.level === effort)?.pill ?? ""
+                  }`}
+                  title="Effort — Fast: fastest engine, brief · Medium: your model · Deep: strongest engine, thinking + deep research"
+                >
+                  {(() => {
+                    const E = EFFORTS.find((e) => e.level === effort) ?? EFFORTS[1];
+                    return <E.icon className="h-3.5 w-3.5" />;
+                  })()}
+                  {EFFORTS.find((e) => e.level === effort)?.label ?? "Medium"}
+                  <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="top"
+                align="start"
+                className="w-80 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+              >
+                <div className="border-b border-zinc-800 px-3.5 py-2.5">
+                  <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+                    EFFORT — HOW HARD THIS TURN WORKS
+                  </span>
+                </div>
+                <div className="py-1">
+                  {EFFORTS.map(({ level, label, desc, icon: Icon }) => {
+                    const routed = effortModel(models, model, level);
+                    const routedMeta = modelMeta(routed);
+                    return (
+                      <button
+                        key={level}
+                        onClick={() => {
+                          setEffort(level);
+                          setEffortOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-white/5 ${
+                          level === effort ? "text-white" : "text-zinc-300"
+                        }`}
+                      >
+                        <Icon
+                          className={`h-4 w-4 shrink-0 ${
+                            level === effort
+                              ? level === "fast"
+                                ? "text-yellow-300"
+                                : level === "deep"
+                                  ? "text-emerald-300"
+                                  : "text-zinc-200"
+                              : "text-zinc-500"
+                          }`}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] font-medium">{label}</span>
+                          <span className="block truncate text-[11px] text-zinc-500">
+                            {desc}
+                          </span>
+                        </span>
+                        <span
+                          className="max-w-[96px] shrink-0 truncate text-[11px] text-zinc-400"
+                          title={routed}
+                        >
+                          {routed === model ? routedMeta.name : `→ ${routedMeta.name}`}
+                        </span>
+                        {level === effort && (
+                          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="border-t border-zinc-800 px-3.5 py-2 text-[10.5px] leading-relaxed text-zinc-600">
+                  Deep turns run multi-round audited search when Search is on —
+                  plan → retrieve → cross-check — and always show their sources.
+                </p>
+              </PopoverContent>
+            </Popover>
+
+            {/* Duel — race two models on one question, keep the winner.
+                Only a pooled gateway can offer this in-chat. */}
+            <button
+              onClick={() => {
+                if (!duelEnabled && duelAvailable) {
+                  toast({
+                    description:
+                      "Duel armed — next message races two models; you pick the keeper.",
+                  });
+                }
+                toggleDuel();
+              }}
+              disabled={!duelAvailable}
+              aria-pressed={duelEnabled}
+              className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                duelEnabled
+                  ? "border-amber-300/70 bg-amber-300/10 text-amber-200"
+                  : "border-zinc-600 text-zinc-300 hover:bg-white/5"
+              }`}
+              title={duelAvailable ? "Duel — send to two models at once, keep the better answer (bills both)" : "Add a second model to the active provider to duel"}
+            >
+              <Swords className="h-3.5 w-3.5" />
+              Duel
+            </button>
+
+            {/* Challenger picker — shown while duel is armed */}
+            {duelEnabled && challenger && (
+              <Popover open={challengerOpen} onOpenChange={setChallengerOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    aria-label="Pick the dueling challenger model"
+                    title={`Challenger — currently ${modelMeta(challenger).name}`}
+                    className="flex h-8 max-w-[92px] shrink-0 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800/40 px-2.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/5 sm:max-w-[170px]"
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
+                      vs
+                    </span>
+                    <span className="truncate font-medium">
+                      {modelMeta(challenger).name}
+                    </span>
+                    <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  side="top"
+                  align="start"
+                  className="w-60 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+                >
+                  <div className="border-b border-zinc-800 px-3.5 py-2.5">
+                    <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+                      CHALLENGER MODEL
+                    </span>
+                  </div>
+                  <div className="senku-scroll max-h-72 overflow-y-auto py-1">
+                    {models
+                      .filter((m) => m !== model)
+                      .map((m) => {
+                        const meta = modelMeta(m);
+                        return (
+                          <button
+                            key={m}
+                            onClick={() => {
+                              setChallenger(m);
+                              setChallengerOpen(false);
+                            }}
+                            title={m}
+                            className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+                              m === challenger ? "text-white" : "text-zinc-300"
+                            }`}
+                          >
+                            <span className="min-w-0 truncate font-medium">
+                              {meta.name}
+                            </span>
+                            {m === challenger ? (
+                              <Check className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                            ) : (
+                              modelHint(meta) && (
+                                <span className="shrink-0 text-[11px] text-zinc-500">
+                                  {modelHint(meta)}
+                                </span>
+                              )
+                            )}
+                          </button>
+                        );
+                      })}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
+
+          {/* right controls */}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {/* model selector — pretty name + tier badge + caret */}
+            <Popover open={modelOpen} onOpenChange={setModelOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  aria-label="Select model"
+                  title={model}
+                  className="flex h-8 max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-600 px-2.5 text-[13px] text-zinc-200 transition-colors hover:bg-white/5"
+                >
+                  <span className="truncate font-medium">{activeMeta.name}</span>
+                  {activeMeta.tier && (
+                    <span className="shrink-0 rounded-full border border-zinc-600 bg-zinc-800/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-zinc-400">
+                      {activeMeta.tier}
+                    </span>
+                  )}
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="top"
+                align="end"
+                className="w-72 rounded-xl border-zinc-800 bg-[#212121] p-0 shadow-2xl"
+              >
+                <div className="flex items-center justify-between border-b border-zinc-800 px-3.5 py-2.5">
+                  <span className="text-[11px] font-semibold tracking-[0.12em] text-zinc-400">
+                    SELECT MODEL
+                  </span>
+                  <button
+                    onClick={async () => {
+                      setSyncing(true);
+                      const synced = await syncModels();
+                      setSyncing(false);
+                      toast({
+                        description: synced
+                          ? "Model list synced from provider."
+                          : "Provider sync unavailable — using cached list.",
+                      });
+                    }}
+                    className="flex items-center gap-1 text-[12px] text-zinc-300 hover:text-white"
+                  >
+                    <RefreshCw
+                      className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`}
+                    />
+                    Sync
+                  </button>
+                </div>
+                <div className="senku-scroll max-h-80 overflow-y-auto py-1">
+                  {models.length === 0 && (
+                    <p className="px-3.5 py-2 text-[13px] text-zinc-500">
+                      No models configured
+                    </p>
+                  )}
+                  {/* provider group header — shown ONCE, not stacked
+                      on every model */}
+                  {models.length > 0 && providerName && (
+                    <p className="px-3.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                      {providerName}
+                    </p>
+                  )}
+                  {models.map((m) => {
+                    const meta = modelMeta(m);
+                    const hint = modelHint(meta);
+                    return (
+                      <button
+                        key={m}
+                        onClick={() => {
+                          setModel(m);
+                          setModelOpen(false);
+                        }}
+                        title={m}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/5 ${
+                          m === model ? "text-white" : "text-zinc-300"
+                        }`}
+                      >
+                        <span className="min-w-0 truncate font-medium">
+                          {meta.name}
+                        </span>
+                        {m === model ? (
+                          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        ) : (
+                          hint && (
+                            <span className="shrink-0 text-[11px] text-zinc-500">
+                              {hint}
+                            </span>
+                          )
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            {/* voice — record → server ASR → text in the input */}
+            {isRecording ? (
+              <>
+                <button
+                  onClick={recorder.cancel}
+                  aria-label="Cancel recording"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-red-400"
+                  title="Discard recording"
+                >
+                  <Trash2 className="h-[17px] w-[17px]" />
+                </button>
+                <button
+                  onClick={() => void finishDictation()}
+                  aria-label="Stop and transcribe"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow-[0_0_0_4px_rgba(239,68,68,0.18)] transition-transform hover:scale-105"
+                  title="Stop & transcribe"
+                >
+                  <Square className="h-3 w-3 fill-white" />
+                </button>
+              </>
+            ) : isProcessing ? (
+              <span
+                className="flex h-8 w-8 items-center justify-center text-zinc-400"
+                aria-label="Transcribing"
+              >
+                <Loader2 className="h-[18px] w-[18px] animate-spin" />
+              </span>
+            ) : (
+              <>
+                <button
+                  onClick={onMicClick}
+                  aria-label="Start voice dictation"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
+                  title="Voice dictation — recorded audio is transcribed in the cloud"
+                >
+                  <Mic className="h-[18px] w-[18px]" />
+                </button>
+                {streaming ? (
+                  <button
+                    onClick={stopStreaming}
+                    aria-label="Stop generating"
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+                  >
+                    <Square className="h-3.5 w-3.5 fill-black" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={submit}
+                    disabled={!canSend}
+                    aria-label="Send message"
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100"
+                  >
+                    <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.4} />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <p className="pb-3 pt-2 text-center text-[11px] text-zinc-600">
+        SenkuAPI can make mistakes. Verify important information.
+      </p>
+    </div>
+  );
+}
