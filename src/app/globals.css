@@ -596,6 +596,83 @@
   animation: senku-float 5s ease-in-out infinite;
 }
 
+/* ── Run 29 — welcome screen height-adaptive compact mode ─────
+   The signature lockup is sized for real laptop heights; short
+   viewports (split screens, small windows, short laptop panels)
+   switch to a compact variant so the starter cards are NEVER
+   clipped behind the composer — the exact flaw the design audit
+   flagged twice. Unlayered CSS beats Tailwind's layered
+   utilities — the same mechanism .senku-fade-up relies on. */
+@media (max-height: 799px) {
+  /* the ⌘K hint is a nicety; power users already know it */
+  .senku-welcome .senku-w-hint {
+    display: none;
+  }
+}
+@media (max-height: 759px) {
+  .senku-welcome .senku-w-pt {
+    padding-top: 1rem;
+  }
+  .senku-welcome .senku-w-pb {
+    padding-bottom: 2.5rem;
+  }
+  .senku-welcome .senku-w-fade {
+    height: 3rem;
+  }
+  .senku-welcome .senku-w-logo-wrap {
+    margin-bottom: 0.75rem;
+  }
+  .senku-welcome .senku-w-logo {
+    height: 2.75rem;
+    width: 2.75rem;
+  }
+  .senku-welcome .senku-w-hello {
+    font-size: 1rem;
+    line-height: 1.3;
+  }
+  .senku-welcome .senku-w-name-wrap {
+    margin-top: 0.25rem;
+  }
+  .senku-welcome .senku-w-name {
+    font-size: 1.875rem;
+  }
+  .senku-welcome .senku-w-sub {
+    margin-top: 0.5rem;
+    font-size: 12.5px;
+  }
+  .senku-welcome .senku-w-pulse {
+    margin-top: 0.5rem;
+  }
+  .senku-welcome .senku-w-mem {
+    margin-top: 0.5rem;
+  }
+  .senku-welcome .senku-w-cards {
+    margin-top: 1rem;
+    gap: 0.5rem;
+  }
+  .senku-welcome .senku-w-card {
+    padding: 0.55rem 0.7rem;
+  }
+  .senku-welcome .senku-w-card-ic {
+    height: 1.75rem;
+    width: 1.75rem;
+  }
+}
+@media (max-height: 599px) {
+  /* very short windows: the value line yields — the lockup and the
+     cards are the load-bearing walls */
+  .senku-welcome .senku-w-sub {
+    display: none;
+  }
+  .senku-welcome .senku-w-logo {
+    height: 2.5rem;
+    width: 2.5rem;
+  }
+  .senku-welcome .senku-w-name {
+    font-size: 1.625rem;
+  }
+}
+
 /* ── Voice mode ──────────────────────────────────────────────
    Recording pulse, live waveform bars, playback equalizer. */
 @keyframes senku-rec-pulse {

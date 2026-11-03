@@ -2842,3 +2842,88 @@ conversation starts from zero. The boldest non-redundant change: **memory**.
   healthy. Temporary test chats are in-memory only — nothing persisted, nothing to
   clean. One real memory seeded as the feature's first entry: "I'm a TypeScript
   developer — always answer in TypeScript." (true for this gateway's owner).
+
+## Run 29 — 2026-11-03: THE SIGNATURE FIRST SCREEN — a welcome screen that answers your presence
+
+**Directive (verbatim):** "very good job, again look at the site first, then innovate. Think
+about the user experience and think outside the box. Make one bold change that improves
+conversions or the look and feel, not a small tweak. Use any tool you have. You must cook and
+ship a change every time." + standing guardrails (no redundancy, no downgrades).
+
+**Observe first — with an outside eye.** Instead of walking the DOM, this run pointed a vision
+model (VLM, glm-5.3-flash) at the live welcome screen and asked for a brutal design audit. The
+verdict on the old first screen: **5.5/10 — "competent, clean, ship-ready — and completely
+interchangeable with a dozen other AI chat UIs."** The named defects: a headline that read as a
+status message ("senku returns!"), four consecutive rows of same-weight pills (clock + memory +
+three stat chips — "chip soup"), starter cards clipped behind the composer "like a rendering
+bug", default-tier typography, and background blobs "so timid they read as compression
+artifacts". The welcome screen is the only conversion surface this product has — every
+visitor's first pixel. That became the target.
+
+**The change — one coherent redesign of the first screen:**
+
+- **SPARKLE FIELD (`SparkleField.tsx`, new).** A full-bleed canvas of golden eureka-dust
+  behind the content: ambient sparks drift upward, sway, and twinkle; the pointer stirs them
+  (gentle repulsion + brightening within 130px — the field *remembers* the stir by moving the
+  sway anchor); every press anywhere in the welcome area bursts a 12-spark shower from that
+  exact point. Engineering: two pre-rendered radial-glow sprites (drawImage, never per-frame
+  shadowBlur — 60fps with ~70 particles), density by area (capped 18–85), DPR-aware backing
+  store (capped 2×), window-level passive listeners (canvas itself is pointer-events-none),
+  full teardown on unmount, and prefers-reduced-motion renders nothing at all. The field
+  unmounts with the welcome screen — it never leaks into a conversation.
+- **A REAL HEADLINE.** Time-aware two-line lockup: a quiet greeting ("Good morning," /
+  "afternoon" / "evening") over the owner's name at display scale (clamp 33–50px) in an amber
+  gradient with a soft glow. Late night (23:00–05:00) gets the brand easter egg: "10 billion
+  percent still up, Senku?" — Senku's own catchphrase, reserved for the crowd that earns it.
+  Hydration-safe by construction: `booted` gates the whole component to client-only mounts.
+- **ONE PULSE LINE (kills the chip soup).** The live clock and the gateway's real numbers
+  merged into a single typographic line — `Tue 3 Nov · 12:57:01 (Algiers) · 15.1k today ·
+  591k all-time · 3 keys live · APInex` — no pill borders, per-segment tooltips with exact
+  figures, count-up intact, and the stats portion is now a BUTTON that opens the token ledger
+  (`onOpenLimiter` threaded from SenkuApp). Unknown limiter data still renders nothing.
+- **NO CLIPPING, EVER.** The audit's loudest complaint (twice): starter cards cut behind the
+  composer on short viewports. Fixed with a **height-adaptive compact mode** in globals.css —
+  three media tiers (`max-height` 799px hides the ⌘K hint; 759px shrinks lockup/logo/cards/
+  paddings; 599px also yields the value line) so at every tested height (577/720/900/844)
+  all four cards sit fully above the composer with zero scroll. Unlayered CSS beats Tailwind
+  utilities — the same mechanism `.senku-fade-up` already relies on. Plus a bottom fade
+  overlay for genuinely overflowing cases, which **only mounts when content actually
+  overflows** (ResizeObserver on scroller + content wrapper; fits ⇒ no permanent vignette).
+- **Micro-polish from the follow-up audit:** starter-card icons idle in amber-200/60 (the
+  "visual energy drop-off after the gold headline" nit) and the value line tightened to one
+  line: "Pooled routing, prompt caching, web search — one gateway, every model."
+
+**Verified (all real, through the live UI):**
+- **Iterated with the same VLM critic:** v1 audit 5.5/10 → post-redesign 6.5/10 ("greeting,
+  stats line, typography fixes are real... but shipping with the starter cards still clipped
+  is fixing the paint job and leaving the flat tire") → post-compact-mode **8/10: "the flat
+  tire is finally changed... All four starter cards sit fully above the input... The team did
+  the boring structural work instead of repainting — that's the right instinct."**
+- **Geometry, measured (not eyeballed):** 1280×577 → cards fully visible (last-card bottom
+  401 < fold 446), scrollable 0px, compact mode active (logo 40px); 1280×720 → visible, 0px
+  scroll; 1280×900 → full mode (logo 56px, hint shown), 0px scroll; 390×844 → no horizontal
+  overflow, single-column cards fully visible, 27px graceful scroll with fade present;
+  390×700 → fade appears exactly when overflowing (56px), absent when fitting (900px).
+- **Golden path regression:** clicked "Explain like I'm five" starter → exact prompt sent →
+  real SSE stream from glm-5.3 (token-by-token, tokens counter 8.5k → 15.1k) → welcome +
+  sparkle canvas unmounted cleanly mid-stream; "New chat" → welcome returns with the field,
+  the lockup, and the merged pulse line showing live data.
+- **New interactions:** pulse-line stats click opens TOKEN LIMITER dialog; memory chip opens
+  the Memory dialog (1/50 entries intact); sparkle canvas responds to synthetic pointer
+  move/press with zero console output.
+- **The "N avatar overlapping the disclaimer" mobile report** was root-caused via shadow-DOM
+  inspection to the Next.js Dev Tools badge (`nextjs-portal`, dev-only, x22/y790) — a
+  development overlay that does not exist in production; the disclaimer itself is clean.
+- **Environmental incident, resolved:** the dev server began serving a stale CSS chunk after
+  the globals.css edit (the known phantom-stale-Fast-Refresh issue; disk had 18
+  `senku-welcome` rules, served chunk had 0 — touch + reload did not clear it). Killed the
+  three dev processes and restarted via `bun run dev > dev.log`; fresh compile served the
+  compact mode immediately. Worth remembering: `next` is not on PATH for `bash -c` — the
+  package script must run through `bun run dev`.
+- **Hygiene:** lint 0 errors (2 pre-existing warnings); tsc 8 errors — all pre-existing
+  (examples/ ×2, skills/ ×1, attachments.ts ×3, gateway.ts ×2), zero new; console clean
+  (0 errors/warnings/mismatches) through cold start and every interaction; dev.log healthy.
+  Two test chats created during verification ("How Language Models Work",
+  "TypeScript Debounce Function" — both timestamped inside this run's window) were deleted
+  via the API; the identically-titled older chats in the list predate this run and were left
+  untouched.

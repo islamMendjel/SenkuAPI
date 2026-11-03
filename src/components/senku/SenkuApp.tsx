@@ -261,7 +261,10 @@ export function SenkuApp() {
             (galleryOpen ? (
               <ImageGallery />
             ) : messages.length === 0 ? (
-              <WelcomeScreen onOpenMemory={() => setMemoryOpen(true)} />
+              <WelcomeScreen
+                onOpenMemory={() => setMemoryOpen(true)}
+                onOpenLimiter={() => setLimiterOpen(true)}
+              />
             ) : (
               <ChatTimeline />
             ))}
