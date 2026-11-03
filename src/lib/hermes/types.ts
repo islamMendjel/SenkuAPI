@@ -150,6 +150,13 @@ export interface KeyView {
   isActive: boolean;
   tokensUsedThisMonth: number;
   lastUsedAt: string | null;
+  /** Run 35 — THE ORRERY (ACTIVE provider only): the key's seat on
+   *  the round-robin ring — its index in canonical ring order. */
+  seat?: number;
+  /** ISO instant the circuit-breaker cooldown ends (null = healthy). */
+  coolingUntil?: string | null;
+  /** Which pacing tier currently blocks this key (null = allowed). */
+  blockedTier?: "monthly" | "daily" | "burst5h" | null;
 }
 
 export interface ProviderView {
@@ -164,6 +171,10 @@ export interface ProviderView {
   models: string[];
   keys: KeyView[];
   totalTokens: number;
+  /** Run 35 — the persistent round-robin cursor: the ACTIVE
+   *  provider's ring seat that serves NEXT (absent on inactive
+   *  providers, whose rotation is dormant by design). */
+  rotationCursor?: number;
 }
 
 export interface UsageSnapshot {

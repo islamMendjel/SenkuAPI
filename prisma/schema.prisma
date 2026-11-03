@@ -26,6 +26,12 @@ model Provider {
   tokenMultiplier Float   @default(1.0) // usage accounting multiplier (APInex = 4.0)
   isActive        Boolean @default(false)
   models          String  @default("[]") // JSON array of model ids
+  // Run 35 — THE ORRERY: persistent round-robin cursor. Index into
+  // the provider's ACTIVE keys (createdAt asc, the canonical ring
+  // order) pointing at the seat that serves NEXT. Advances by
+  // exactly one seat per successfully served request, survives
+  // restarts (SQLite), and resets to 0 when the provider is switched.
+  rotationCursor  Int     @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

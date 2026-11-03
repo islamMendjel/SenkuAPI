@@ -1,8 +1,14 @@
 // Hermes — safe serializers for API responses (keys never leave unmasked).
 
 import { db } from "@/lib/db";
-import { limiterStatus } from "./limiter";
-import type { ProviderView, UsageSnapshot } from "./types";
+import { keyHealthSnapshot } from "./keyhealth";
+import { limiterStatus, keyWindowUsage } from "./limiter";
+import {
+  BURST_5H_LIMIT,
+  DAILY_PACE_TARGET,
+  MONTHLY_POOL_PER_KEY,
+} from "./constants";
+import type { KeyView, ProviderView, UsageSnapshot } from "./types";
 
 export function maskKey(key: string): string {
   if (key.length <= 10) return "•".repeat(Math.max(key.length - 2, 4));
@@ -19,6 +25,7 @@ export async function providerView(provider: {
   tokenMultiplier: number;
   isActive: boolean;
   models: string;
+  rotationCursor?: number;
 }): Promise<ProviderView> {
   const keys = await db.apiKey.findMany({
     where: { providerId: provider.id },
@@ -28,6 +35,49 @@ export async function providerView(provider: {
     _sum: { totalTokens: true },
     where: { providerId: provider.id },
   });
+
+  const keyViews: KeyView[] = keys.map((k, i) => ({
+    id: k.id,
+    label: k.label,
+    masked: maskKey(k.keyValue),
+    isActive: k.isActive,
+    tokensUsedThisMonth: k.tokensUsedThisMonth,
+    lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+  }));
+
+  // Run 35 — THE ORRERY: the ACTIVE provider's ring is live. Each
+  // key gets its seat, its breaker cooldown (if quarantined) and
+  // the pacing tier currently blocking it — derived from the same
+  // window aggregates the limiter itself uses, so the ring can
+  // never disagree with the gateway's actual dispatch decisions.
+  // Inactive providers keep a dormant, cheap view.
+  let rotationCursor: number | undefined;
+  if (provider.isActive) {
+    rotationCursor = provider.rotationCursor ?? 0;
+    const health = keyHealthSnapshot();
+    const monthlyLimit =
+      provider.tokenLimitPerKey || MONTHLY_POOL_PER_KEY;
+    await Promise.all(
+      keys.map(async (k, i) => {
+        keyViews[i].seat = i;
+        keyViews[i].coolingUntil = health[k.id]?.coolingUntil ?? null;
+        if (!provider.hasTokenLimit || !k.isActive) {
+          keyViews[i].blockedTier = null;
+          return;
+        }
+        const usage = await keyWindowUsage(k.id);
+        keyViews[i].blockedTier =
+          usage.monthly >= monthlyLimit
+            ? "monthly"
+            : usage.daily >= DAILY_PACE_TARGET
+              ? "daily"
+              : usage.burst5h >= BURST_5H_LIMIT
+                ? "burst5h"
+                : null;
+      })
+    );
+  }
+
   return {
     id: provider.id,
     name: provider.name,
@@ -38,17 +88,11 @@ export async function providerView(provider: {
     tokenMultiplier: provider.tokenMultiplier,
     isActive: provider.isActive,
     models: JSON.parse(provider.models || "[]"),
-    keys: keys.map((k) => ({
-      id: k.id,
-      label: k.label,
-      masked: maskKey(k.keyValue),
-      isActive: k.isActive,
-      tokensUsedThisMonth: k.tokensUsedThisMonth,
-      lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
-    })),
+    keys: keyViews,
     totalTokens: Math.round(
       (lifetime._sum.totalTokens ?? 0) * provider.tokenMultiplier
     ),
+    ...(rotationCursor !== undefined ? { rotationCursor } : {}),
   };
 }
 

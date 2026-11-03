@@ -286,10 +286,14 @@ function provenanceLine(m: UIMessage): string {
   if (m.effort === "deep") parts.push("Deep research");
   if (m.model) parts.push(modelMeta(m.model).name);
   if (m.provider) {
+    // Run 35 — the rotation made visible per turn: pool-served
+    // answers name the exact key that carried them.
     parts.push(
       m.servedBy === "zai-cloud"
         ? `${m.provider} · cloud failover`
-        : `${m.provider} pool`
+        : m.keyLabel
+          ? `${m.provider} pool · ${m.keyLabel}`
+          : `${m.provider} pool`
     );
   }
   if (typeof m.tokens === "number" && m.tokens > 0) {

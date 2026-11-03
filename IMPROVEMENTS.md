@@ -2413,6 +2413,7 @@ they ship).
 | Deep research (multi-step agentic search) | Gemini, ChatGPT | **MATCHED (Run 8)** — plan → multi-angle retrieve → cross-check, with per-source date/authority audits the incumbents don't surface; every stage streams live |
 | Thinking mode / effort levels (fast–medium–deep) | ChatGPT, Claude, Gemini | **BEATEN (Run 8)** — theirs toggles one backend's switch; ours routes to a different pooled ENGINE per level with transparent previews |
 | **In-chat model duels** | **none of the three** | **SHIPPED (Run 7) — differentiator** |
+| **Live key-pool rotation cockpit** | **none (OpenRouter-style gateways hide their rotation entirely)** | **SHIPPED (Run 35) — differentiator: the Orrery — persistent, restart-proof, one-seat-per-serve round-robin rendered as a live radial ring (NEXT seat, breaker cooldowns, tier caps, fairness readout), plus per-message serving-key provenance in the reading surface** |
 | Grounded-answer confidence contract + visible audit | none (Gemini's "double-check" is sentence-level, undated) | SHIPPED (Runs 4+6) — differentiator |
 | Per-message provenance (provider/key/tokens/cache) | none | SHIPPED (Runs 1+3) — differentiator |
 | Health-aware pooled routing with visible billing | none (single-backend) | SHIPPED (Run 1) — differentiator |
@@ -3292,3 +3293,100 @@ pipeline):**
   pre-existing (the 2 gateway errors are the same pre-existing pair,
   line-shifted by the 7-line fix comment), zero new. All test rituals
   and their chats deleted — zero residue. Zero TODOs shipped.
+
+## Run 35 — 2026-11-03: THE ORRERY — the round-robin, perfected and made visible
+
+**The directive:** "look at the site first, then innovate… Make one bold
+change that improves conversions or the look and feel, not a small
+tweak… make the round robin perfect, make some out of the box
+improvements, cook."
+
+**Observe (before choosing):** live walkthrough of welcome, composer,
+TopBar, palette, reading surface and the Providers dialog; engine audit
+of `router.ts` found the round-robin was BOTH imperfect AND invisible:
+
+1. **Restart amnesia.** The rotation counter was an in-memory `Map` —
+   every server restart/reset re-seated it at 0, so the first key
+   absorbed the first burst of every boot. The usage history proved it:
+   one key carried ~everything ("drift ±100%" was not a display bug,
+   it was the fingerprint of the amnesia).
+2. **Modulo skew.** A global counter modulo the CURRENT pool size
+   warped distribution whenever the pool shrank mid-flight (in-turn
+   retries, quarantine filters, toggled keys) — some keys got
+   consecutive picks, others starved.
+3. **Invisible rotation.** `keyLabel` was persisted per message since
+   the pool existed — and never rendered anywhere. The Providers
+   dialog was a flat list: no rotation position, no cooldowns, no
+   "who serves next", no fairness.
+
+**Implement — one bold change with two halves:**
+
+1. **The engine (`src/lib/hermes/router.ts`, rewritten).** The
+   rotation is now a PERSISTENT POSITIONAL CURSOR: `Provider
+   .rotationCursor` (SQLite, `db:push`) indexes the canonical ring
+   (active keys, createdAt asc) at the seat that serves NEXT.
+   Read-through in-memory cache, write-behind DB persist; the scan
+   walks the ring forward from the cursor (wrap-aware distance sort),
+   skipping quarantined keys (last-resort probe preserved) and
+   limiter-blocked keys; the cursor advances EXACTLY ONE seat past
+   each key it hands out and never moves when nothing is served.
+   `switchProvider` resets the cursor to 0 in the same transaction —
+   a fresh cycle on a freshly activated pool. Dispatch passes the
+   provider row through, so the cursor primes for free.
+2. **The Orrery (`ProvidersDialog.tsx`, rebuilt).** The ACTIVE
+   provider leads the dialog, and its pool renders as a live radial
+   cockpit: the golden caduceus at center, every key a numbered seat
+   ON the orbit, a rotating golden sweep, the NEXT seat glowing gold
+   with its badge and its label under the medallion ("next · Test
+   key"), circuit-breaker cooldowns counting down in real time
+   (mm:ss, rose), limiter-capped keys dimmed with their tier
+   ("5h cap"), off keys ghosted. A fairness line reads the rotation's
+   evenness from month-to-date spend ("4 keys in rotation · rotation
+   even / drift ±N%") with an honest tooltip. While the dialog is
+   open it polls the store's own /api/usage every 4 s — the ring
+   visibly advances turn by turn. The breaker's state is exported
+   read-only (`keyHealthSnapshot`) and per-key tier blocking is
+   derived from the SAME window aggregates the limiter uses, so the
+   ring can never disagree with the gateway's real dispatch
+   decisions. The chat reading surface joins in: the provenance line
+   now names the serving key — "APInex pool · Test key · 2.4k tokens
+   · cache: miss" — the data finally surfaced after 30+ runs.
+3. **Repairs found on the way (cook but not break):** the dialog's
+   unconditional `max-w-lg` overrode the base dialog's mobile cap
+   (512 px on a 390 px screen, latent overflow previously masked) —
+   now `sm:max-w-lg` only, plus `min-w-0` on the grid items so the
+   URL line truncates instead of forcing the track wide, and the
+   add-key row shrinks properly (label `w-28 sm:w-32`, key input
+   `min-w-0`).
+
+**Verify (provable, not plausible):**
+
+- **Rotation correctness, end to end.** Sent 4 real turns through the
+  browser. Turn 1 served seat 1 (Test key) → the ring read "seat 2 of
+  4 serves next". Turn 2 walked the ring onto seats 2–3 — DEAD keys —
+  and the dispatcher retried past both to serve seat 4, exactly as
+  designed (the DB's usage events + message keyLabels reconstruct the
+  full walk; failed attempts bill nothing). Turn 3 served seat 1
+  again after the wrap.
+- **Restart persistence — the headline proof.** Cursor read 1 from
+  SQLite → server killed and restarted → cursor still 1 → turn 4
+  served by seat 4's key (walking the dead pair again), NOT seat 1.
+  The old code would have re-served seat 1 forever; the fingerprint
+  of the amnesia is gone.
+- **VLM design audits, iterated until ship:** 3/10 (ring below the
+  fold — active provider now leads) → 7/10 (nodes off-arc — orbit
+  radius aligned to the track; NEXT badge clearance) → 6.5 (top arc
+  invisible — track brightened; emblem washed out — gold on dark, no
+  amber halo) → **8.5/10 desktop** ("layout, orbit geometry and
+  spacing are ship-ready"). Mobile 390 px: ring a true 232×232
+  circle inside a 358 px dialog, no clipping.
+- **Console + page errors** clean; dev.log healthy.
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc 8
+  pre-existing, zero new. Both test chats deleted — zero residue.
+  Zero TODOs shipped.
+
+**Sibling notes:** the dead pool keys the orrery exposed (seats 2–3
+fail at the stream, one transient strike each — the breaker needs two
+to trip) are real data, not bugs: the ring now makes them visible,
+and the breaker will quarantine them on the second strike. The user
+can delete or replace them from the same dialog.

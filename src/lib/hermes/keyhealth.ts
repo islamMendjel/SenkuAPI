@@ -63,3 +63,22 @@ export function isKeyCooling(keyId: string, now = Date.now()): boolean {
   const s = states.get(keyId);
   return s !== undefined && s.cooldownUntil > now;
 }
+
+/** Run 35 — THE ORRERY: live breaker state for the UI. Returns the
+ *  keys currently quarantined with the instant their cooldown ends
+ *  (null once healthy). In-memory by design: it IS the breaker's
+ *  own state, exported read-only. */
+export function keyHealthSnapshot(
+  now = Date.now()
+): Record<string, { coolingUntil: string; strikes: number }> {
+  const out: Record<string, { coolingUntil: string; strikes: number }> = {};
+  for (const [keyId, s] of states) {
+    if (s.cooldownUntil > now) {
+      out[keyId] = {
+        coolingUntil: new Date(s.cooldownUntil).toISOString(),
+        strikes: s.strikes,
+      };
+    }
+  }
+  return out;
+}

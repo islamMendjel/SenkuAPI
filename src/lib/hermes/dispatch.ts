@@ -44,6 +44,9 @@ export interface DispatchParams {
     baseUrl: string | null;
     hasTokenLimit: boolean;
     tokenLimitPerKey: number;
+    /** Run 35 — flows from the full provider row (getActiveProvider)
+     *  so pickKey can prime its persistent-cursor cache for free. */
+    rotationCursor?: number;
   };
   model: string;
   messages: ChatMessageData[];
