@@ -318,32 +318,30 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
         cached: true,
       },
     });
-    const done = {
-      type: "done",
+    // Run 36 correctness fix: this object is now typed as TurnResult
+    // and carries `title`, mirroring the non-cached path below — the
+    // missing title made every cached turn's result read undefined
+    // where the contract (and the main path) promised the value.
+    const done: TurnResult = {
       chatId,
-      // Run 34 correctness fix: the cache-hit path persisted the
-      // user message (step 3) but never returned its id — callers
-      // reading TurnResult.userMessageId (the Ritual scheduler
-      // stamps its origin on that row) got undefined on every
-      // cached turn. The field was always in the contract; it is
-      // now actually carried.
       userMessageId,
       assistantMessageId,
+      title,
+      sources,
       content: cached.content,
       cached: true,
       tokens: 0,
       rawTokens: 0,
       // Cache hits bill zero tokens — nothing was estimated.
       tokensEstimated: false,
-      servedBy: "cache" as const,
+      servedBy: "cache",
       keyLabel: "cache",
       providerName: provider.name,
       model,
       effort,
-      sources,
       searchFailed: params.search && sources.length === 0,
     };
-    emit(done);
+    emit({ type: "done", ...done });
     return done;
   }
 

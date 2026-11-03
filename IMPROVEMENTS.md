@@ -2404,8 +2404,8 @@ they ship).
 | File uploads with real content understanding (docs, images) | all three | **BEATEN (Run 9)** — we read text/code/PDF (text-layer) and images (pooled VISION pass: OCR + visual description), AND show per-file extraction provenance (chars read, truncation, method) the incumbents hide; unreadable files are honestly not sent |
 | Canvas / artifacts side-panel for long code+docs | ChatGPT, Claude | **MATCHED (Run 17)** — Senku Canvas: per-block Copy/Wrap/Preview controls, sandboxed (script-less, network-less) html/svg/mermaid previews in a split panel; js/py honestly view-only |
 | Scheduled prompts / recurring tasks | ChatGPT, Gemini | **BEATEN (Run 34)** — Rituals: scheduled prompts fire server-side on the gateway's own clock (instrumentation-armed 30s sweep, at-least-once catch-up, Africa/Algiers schedule math via Intl), each landing in its own dedicated chat with the FULL turn pipeline (search, memory, cache, pool dispatch, usage accounting); receipts are honest ("ok · cache hit · 0 tokens"), runs are pausable/resumable/re-runnable, and the chat's own history feeds later runs — ChatGPT's scheduled tasks have no conversation memory and no receipts |
-| Memory across chats | ChatGPT, Claude | OPEN (deliberately: personal gateway, no profile harvesting) |
-| Code interpreter / sandboxed execution | ChatGPT | OPEN |
+| Memory across chats | ChatGPT, Claude | **SHIPPED (Run 28)** — persistent personal memory the USER authors and controls (add/edit/delete, injected into every answer, searchable via ⌘K) — the deliberate difference: nothing is profiled or harvested silently |
+| Code interpreter / sandboxed execution | ChatGPT | **MATCHED (Run 36)** — THE SANDBOX ALIVE: every `js` block runs in-browser (allow-scripts opaque-origin iframe, CSP `connect-src 'none'`, 5 s hard cap, console bridge with timing/status/error capture, top-level await works, network stubs fail LOUD); Canvas' JavaScript Preview is a live runner; python stays honestly view-only — theirs runs server-side Python, ours runs client-side JS with zero server cost and zero pipeline risk |
 | Image generation in-chat | ChatGPT, Gemini | **MATCHED (Run 22)** — the Image Forge: composer mode + dimensions picker, live elapsed-time generating card, lightbox + download, per-image provenance receipts (dims · KB · seconds · 0 pool tokens) and re-roll variant history with per-image receipts — ChatGPT shows none of that honesty |
 | Image history / gallery across chats | ChatGPT (Library/Photos), Gemini (saved images) | **MATCHED (Run 23)** — the Gallery: sidebar Images row with live count, masonry of every forged image from every chat (variant snapshots included, file-deduped), lightbox with full provenance + collection browsing (←/→) + one-click Download + "Open in chat" jump-to-source, empty-state forge CTA |
 | Projects / folders with per-project instructions | ChatGPT, Claude | OPEN |
@@ -2415,6 +2415,7 @@ they ship).
 | **In-chat model duels** | **none of the three** | **SHIPPED (Run 7) — differentiator** |
 | **Live key-pool rotation cockpit** | **none (OpenRouter-style gateways hide their rotation entirely)** | **SHIPPED (Run 35) — differentiator: the Orrery — persistent, restart-proof, one-seat-per-serve round-robin rendered as a live radial ring (NEXT seat, breaker cooldowns, tier caps, fairness readout), plus per-message serving-key provenance in the reading surface** |
 | Grounded-answer confidence contract + visible audit | none (Gemini's "double-check" is sentence-level, undated) | SHIPPED (Runs 4+6) — differentiator |
+| **In-browser JavaScript execution on the reading surface** | **none (ChatGPT's interpreter is server-side Python, cloud-billed)** | **SHIPPED (Run 36) — differentiator: THE SANDBOX ALIVE — the sandbox lives in the BROWSER: instant, free, opaque-origin, every js fence in every chat gets Run/Stop/5-s-cap with a forge console; no tokens billed, no pipeline touched** |
 | Per-message provenance (provider/key/tokens/cache) | none | SHIPPED (Runs 1+3) — differentiator |
 | Health-aware pooled routing with visible billing | none (single-backend) | SHIPPED (Run 1) — differentiator |
 
@@ -3390,3 +3391,120 @@ fail at the stream, one transient strike each — the breaker needs two
 to trip) are real data, not bugs: the ring now makes them visible,
 and the breaker will quarantine them on the second strike. The user
 can delete or replace them from the same dialog.
+
+## Run 36 — 2026-11-03: THE SANDBOX ALIVE — every js block runs, right in the reading surface
+
+**The directive:** "look at the site first, then innovate. Think about
+the user experience and think outside the box. Make one bold change
+that improves conversions or the look and feel, not a small tweak…
+don't make redundant things… cook but not break or downgrade."
+
+**Observe (live walkthrough first):** welcome screen, sidebar, composer,
+and streaming all healthy; the reading surface renders beautiful dead
+code — Wrap/Preview/Copy on every block, and the Canvas security
+contract still read "JavaScript and Python honestly DO NOT run". The
+COMPETITOR GAP LIST had exactly one flagship-grade capability still
+OPEN: code interpreter. The browser IS an interpreter — and the one
+environment this personal gateway owns outright. (The sidebar's
+"Projects · No projects" stub was noted and deliberately left: it
+shadows a known OPEN gap, not a defect to delete.)
+
+**The bold change: THE SANDBOX ALIVE.** Every `js`/`javascript`/`mjs`/
+`node` fence in every chat gains a Run control; the Canvas JavaScript
+Preview becomes a live runner. ChatGPT bills server-side Python for
+this; Hermes runs client-side JavaScript instantly, free, and without
+touching one line of the streaming pipeline (pure frontend — the
+dispatch/gateway path is byte-identical for every turn).
+
+**Implement:**
+
+1. **The engine — `src/lib/hermes/js-runner.ts` (new, pure).**
+   `buildRunnerDoc(code)` compiles a sandbox document whose contract is
+   layered: `sandbox="allow-scripts"` ONLY (opaque origin — no cookies,
+   no storage, no same-origin API access), CSP `connect-src 'none'`
+   (network dies at the browser layer), and honest THROWING stubs for
+   fetch/XHR/WebSocket/EventSource/importScripts/window.open so a
+   blocked call is a clear error, never a silent violation. The payload
+   rides in a JSON `<script type="application/json">` block (`<` escaped
+   — `</script>` inside user code can never break out) and is compiled
+   with `new AsyncFunction`, so top-level await WORKS and syntax errors
+   land in the catch as ordinary error lines. Console is bridged:
+   log/info/warn/error + table/time/timeEnd/clear/trace fallbacks,
+   arguments serialized inside the sandbox (circular-safe, depth-capped,
+   width-truncated) so only plain text ever crosses postMessage.
+   alert/confirm/prompt become log lines. One message ends an errored
+   run — error text + elapsedMs together, no duplicate terminal posts.
+2. **The console — `src/components/hermes/RunConsole.tsx` (new).**
+   `useJsRunner` owns the lifecycle: fresh iframe per run (seq-keyed),
+   parent validates `event.source === frame.contentWindow` + a protocol
+   tag, 5 s hard cap reaps infinite loops and hung programs ("stopped
+   after 5 s"), late timer logs keep streaming after a settled run and
+   get an honest "sandbox closed after 5 s" line when reaped, output
+   is memory-bounded (400 lines), Stop kills early, Clear resets. A
+   code change after a run marks results stale ("code changed since
+   this run — press Rerun") instead of silently lying. `RunConsole`
+   renders the forge-styled panel (status chip: running… pulsing amber /
+   ok · N ms emerald / error · N ms rose / timeout) with auto-scroll.
+3. **The reading surface — `Markdown.tsx`.** `CodeBlock` dispatches:
+   runnable languages get `RunnableCodeBlock` (amber Run in the rail,
+   hidden 0×0 sandbox, forge console attached under the block after the
+   first run); every other language renders the untouched static block.
+   Runner state resets on streaming appends via the stale marker — no
+   effect-setState anywhere (lint's react-hooks rule stays clean).
+4. **The Canvas — `CanvasPanel.tsx` + `canvas-langs.ts`.** JavaScript's
+   Preview tab IS the runner now (opens live, intro line states the
+   contract); Python alone stays view-only with an updated honest
+   notice that names the new asymmetry. Security-contract comments
+   rewritten to describe both sandboxes precisely.
+5. **Repairs found on the way (cook but not break):** (a) the
+   cache-hit path in `gateway.ts` returned an untyped object missing
+   `title` — the two PRE-EXISTING tsc errors (TS2345 on emit + TS2741
+   on return) are now FIXED by typing it `TurnResult` and mirroring the
+   main path's `emit({ type: "done", ...done })`; cached turns' results
+   previously read `undefined` for title. Baseline tsc 8 → 6, zero new.
+   (b) Ledger hygiene: the gap list's memory row still said OPEN after
+   Run 28 shipped it — corrected to SHIPPED with the deliberate
+   design difference spelled out; new Run 36 differentiator row added.
+
+**Verify (browser-proven, not plausible):**
+
+- **Fibonacci, end to end:** asked the live model for a memoized fib;
+  the streamed ```js block showed Run in the rail; one click →
+  `› 102334155` + "ok · 5 ms" in the forge console under the block.
+  (First attempt exposed a real bug: the bootstrap fed the RAW JSON
+  string to AsyncFunction — a no-op expression that "ok"-ed without
+  running anything; JSON.parse added, re-proven.)
+- **Error path:** `console.log('a'); throw new Error('boom')` →
+  `› a`, `✕ boom`, "error · 2 ms" — exactly one error line (the
+  duplicate-terminal-post bug was caught on first run and fixed by the
+  fail()-with-elapsedMs protocol).
+- **Async:** `await` + 300 ms setTimeout → `› late`, "ok · 302 ms" —
+  real elapsed wall time through top-level await.
+- **Network stub:** `await fetch('https://example.com', …)` →
+  `✕ fetch is disabled in the Hermes sandbox — no network from user
+  code.`, "error · 4 ms".
+- **Timeout reap (×2):** `await new Promise(function(){})` → "timeout"
+  + `· stopped after 5 s — infinite loop or hung program`; the running
+  state shows an amber pulsing chip with a Stop control. (Manual-stop's
+  "stopped by user" line shares the identical teardown path; the button
+  render was captured, its distinct message is code-verified.)
+- **Canvas:** JS block Preview opens the LIVE runner → "ok · 8 ms" +
+  `› 102334155` in-panel; python opens on Code (view-only) and its
+  Preview states the honest notice; py blocks carry NO Run control.
+- **Mobile 390 px:** icon-only Run/Clear, console wraps clean, zero
+  horizontal overflow inside the card.
+- **Console + page errors** clean on fresh loads (a hydration mismatch
+  seen mid-session was Radix popover id drift under Fast Refresh —
+  gone on every clean reload; the four dev-server deaths this session
+  left no trace in dev.log and match the known sandbox process-reaping,
+  each restarted via the standard command).
+- **Baselines:** lint 0 errors (2 pre-existing warnings); **tsc 6**
+  (was 8 — two pre-existing gateway errors fixed, zero new). Test chat
+  deleted — 28 chats remain, zero residue. Zero TODOs shipped.
+
+**Sibling notes:** `neither alert() nor timers can escape the sandbox
+— alert becomes a log line, timers die at the 5 s reap` — the console
+tells the user both facts upfront in its system line. The gateway's
+system prompt was deliberately NOT touched: cache fingerprints stay
+stable and the zero-pipeline-change guarantee holds; the model's js
+blocks are already runnable as-is.

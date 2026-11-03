@@ -35,8 +35,9 @@ export function canonicalPreviewLang(lang: string): PreviewLang | null {
 }
 
 /** True for languages that can only be VIEWED in the canvas (no
- *  browser renderer exists): JavaScript and Python get an honest
- *  "execution is unsupported" notice, never a pretend run. */
+ *  browser interpreter exists): Python gets an honest "execution is
+ *  unsupported" notice, never a pretend run. JavaScript graduated
+ *  in Run 36 — its Preview tab is the live sandbox runner. */
 export function isViewOnlyLang(lang: PreviewLang): boolean {
-  return lang === "javascript" || lang === "python";
+  return lang === "python";
 }

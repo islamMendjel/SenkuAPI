@@ -22,8 +22,13 @@
 //     dynamic import — never a CDN), then the resulting SVG is
 //     sanitized (scripts, foreignObject, event handlers and
 //     external/script URLs stripped) before it enters the iframe.
-//   • JavaScript and Python honestly DO NOT run: the Preview tab
-//     explains that execution is unsupported and shows the source.
+//   • JavaScript RUNS (Run 36 — THE SANDBOX ALIVE) — but never in
+//     a preview iframe and never with our origin: the runner is a
+//     SEPARATE allow-scripts (opaque-origin) sandbox whose CSP
+//     denies all network, built by lib/hermes/js-runner.ts with a
+//     5 s hard cap and a text-only console bridge. Python honestly
+//     does not run — no browser interpreter exists and none is
+//     simulated.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -41,6 +46,7 @@ import {
   isViewOnlyLang,
   type PreviewLang,
 } from "@/lib/hermes/canvas-langs";
+import { RunConsole, useJsRunner } from "./RunConsole";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { HERMES_FORGE } from "@/lib/hermes/forge-theme";
 
@@ -127,8 +133,14 @@ export function CanvasPanel() {
     ? canonicalPreviewLang(source.language)
     : null;
 
-  // JavaScript/Python open straight on the Code tab — the Preview
-  // tab explains why nothing runs. Everything else previews first.
+  // Run 36 — the JavaScript runner lives at the panel level: one
+  // sandbox instance, reset whenever the source (or its code)
+  // changes by the hook's own contract.
+  const runner = useJsRunner(source?.code ?? "");
+
+  // Python opens straight on the Code tab — the Preview tab
+  // explains why nothing runs. JavaScript opens on its LIVE
+  // runner; everything else previews first.
   const initialTab =
     canonical && isViewOnlyLang(canonical) ? ("code" as const) : ("preview" as const);
   const [tab, setTab] = useState<"preview" | "code">(initialTab);
@@ -289,14 +301,21 @@ export function CanvasPanel() {
               implemented for html, svg, mermaid, javascript and python only.
               The Code tab shows the exact source.
             </Notice>
+          ) : canonical === "javascript" ? (
+            // Run 36 — THE SANDBOX ALIVE: the Preview tab IS the
+            // runner. One sandbox, honest intro, forge console.
+            <div className="flex min-h-0 flex-1 flex-col p-2.5">
+              {runner.sandbox}
+              <RunConsole runner={runner} variant="panel" showIntro />
+            </div>
           ) : isViewOnlyLang(canonical) ? (
             <Notice
               icon={<FileWarning className="h-4 w-4" aria-hidden />}
-              title={`${canonical === "javascript" ? "JavaScript" : "Python"} doesn’t run in the preview`}
+              title="Python doesn’t run in the browser"
             >
-              The Canvas sandbox has no script execution — running{" "}
-              {canonical} in the browser is unsupported and is not simulated.
-              Switch to the Code tab for the full source.
+              No browser interpreter exists for Python, so none is
+              simulated — the Code tab shows the full source. JavaScript,
+              by contrast, now RUNS: its Preview tab is a live sandbox.
             </Notice>
           ) : canonical === "mermaid" ? (
             mmd.phase === "loading" ? (

@@ -9,17 +9,24 @@
 // plugin a table rendered as raw pipe-text soup; now it renders as
 // a real, styled, scrollable table on both the streamed and the
 // settled path (StreamedMarkdown delegates to this component).
+// Run 36 — THE SANDBOX ALIVE: js/javascript/mjs/node blocks gain a
+// Run control — the code executes in a sandboxed iframe (opaque
+// origin, no network, 5 s cap) and its console streams into a
+// forge-styled panel under the block. Every other language is
+// unchanged; nothing here touches the streaming pipeline.
 
 import { memo, useCallback, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, PanelRight, WrapText } from "lucide-react";
+import { Check, Copy, PanelRight, Play, WrapText } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { HERMES_FORGE } from "@/lib/hermes/forge-theme";
 import { useHermes } from "@/lib/store";
 import { canonicalPreviewLang } from "@/lib/hermes/canvas-langs";
+import { isRunnableJs } from "@/lib/hermes/js-runner";
+import { RunConsole, useJsRunner } from "./RunConsole";
 
 /** Markdown fence tag → Prism language id. */
 const PRISM_LANG: Record<string, string> = {
@@ -54,12 +61,31 @@ function resolvePrismLang(lang: string): string {
   return PRISM_LANG[l] ?? l;
 }
 
-const CodeBlock = memo(function CodeBlock({
+/** Run 36 — dispatcher: runnable languages get the live variant
+ *  (Run control + sandbox console); everything else stays the
+ *  static block. Split so runner hooks only exist on runnable
+ *  blocks. */
+const CodeBlock = memo(function CodeBlock(props: {
+  language: string;
+  code: string;
+}) {
+  if (isRunnableJs(props.language)) return <RunnableCodeBlock {...props} />;
+  return <StaticCodeBlock {...props} />;
+});
+
+/** The static block — the Run 31 forge card. `railExtra` and
+ *  `footer` are the live variant's injection points; both default
+ *  to nothing, so plain blocks render exactly as before. */
+const StaticCodeBlock = memo(function StaticCodeBlock({
   language,
   code,
+  railExtra,
+  footer,
 }: {
   language: string;
   code: string;
+  railExtra?: ReactNode;
+  footer?: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   // Run 17 — line wrapping toggle + Tools-panel preview. The store
@@ -91,6 +117,7 @@ const CodeBlock = memo(function CodeBlock({
           {label}
         </span>
         <div className="flex items-center gap-0.5">
+          {railExtra}
           <button
             onClick={() => setWrapped((w) => !w)}
             aria-pressed={wrapped}
@@ -155,9 +182,47 @@ const CodeBlock = memo(function CodeBlock({
       >
         {code}
       </SyntaxHighlighter>
+      {footer}
     </div>
   );
 });
+
+/** The live variant (Run 36): a Run control in the rail, the
+ *  hidden sandbox iframe, and — after the first run — the forge
+ *  console attached under the block. State resets automatically
+ *  when the code itself changes (streaming appends). */
+function RunnableCodeBlock({
+  language,
+  code,
+}: {
+  language: string;
+  code: string;
+}) {
+  const runner = useJsRunner(code);
+  return (
+    <>
+      {runner.sandbox}
+      <StaticCodeBlock
+        language={language}
+        code={code}
+        railExtra={
+          runner.status === "running" ? null : (
+            <button
+              onClick={runner.run}
+              aria-label="Run this JavaScript in the sandbox"
+              title="Run — executes in a sandboxed iframe (no network, 5 s cap)"
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-amber-300 transition-colors hover:bg-amber-400/10 hover:text-amber-200"
+            >
+              <Play className="h-3.5 w-3.5" aria-hidden />
+              <span className="hidden sm:inline">Run</span>
+            </button>
+          )
+        }
+        footer={runner.hasRun ? <RunConsole runner={runner} /> : null}
+      />
+    </>
+  );
+}
 
 /** Extract fenced-code info from the <code> element inside <pre>. */
 function extractCode(children: ReactNode): {
