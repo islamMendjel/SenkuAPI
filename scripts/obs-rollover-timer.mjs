@@ -12,11 +12,11 @@ globalThis.fetch = async (url) => {
 };
 
 // Import the real client store (zustand runs fine outside the browser)
-const { useSenku } = await import("../src/lib/store.ts");
+const { useHermes } = await import("../src/lib/store.ts");
 console.log("t=0.0s  initial refreshUsage() …");
 const t0 = Date.now();
-await useSenku.getState().refreshUsage();
-console.log(`  limiter.dailyResetsAt armed → ${useSenku.getState().limiter?.dailyResetsAt}`);
+await useHermes.getState().refreshUsage();
+console.log(`  limiter.dailyResetsAt armed → ${useHermes.getState().limiter?.dailyResetsAt}`);
 
 await new Promise((r) => setTimeout(r, 36000));
 console.log(`t=36.0s  fetch calls: ${calls.length}`);

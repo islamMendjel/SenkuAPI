@@ -1,4 +1,4 @@
-# IMPROVEMENTS.md — SenkuAPI continuous improvement log
+# IMPROVEMENTS.md — Hermes continuous improvement log (formerly SenkuAPI — rebranded in Run 32)
 
 One meaningful, verified change per run. Highest rung of the priority
 ladder wins: correctness → usability → performance → robustness →
@@ -3066,3 +3066,79 @@ possible. That became the target.
   through cold start, streaming, canvas, and every interaction; dev.log healthy (one mid-run
   dev-server death — the known sandbox issue — restarted cleanly). The run's test chat
   ("TypeScript LocalStorage Hook") was deleted via the API — zero orphans.
+
+## Run 32 — 2026-11-03: THE HERMES REBRAND — SenkuAPI is officially Hermes, wearing the golden caduceus
+
+**The directive:** the owner renamed the product — SenkuAPI is now officially
+**Hermes**, and the official logo is the owner-supplied artwork (the golden
+caduceus on the dark studio tile, `upload/HermesLogo.jpeg`). Every occurrence
+of the old name and the old logo must change, and the result must work
+perfectly. History stays honest: entries below Run 32 keep their original
+wording on purpose — they are the record of when the product was named
+SenkuAPI; this entry marks the cutover.
+
+**Observe (repo-wide census, before touching anything):** 542 occurrences of
+`senku` across 70 src files + `public/manifest.json` + `public/sw.js` +
+`package.json` + `prisma/schema.prisma` + `scripts/` + `tests/`, plus the
+runtime surfaces: `USER.name` ("senku") feeding the welcome headline, the
+v1-compatible endpoint's `senku` metadata field, `chatcmpl-senku-*` ids, the
+`senku-pwa-v1` SW cache, seeded demo copy ("I'm **SenkuAPI** — …"), and 16
+persisted DB messages + 1 chat title carrying the old name. The old logo,
+`/senku-sparkle.png`, appeared in 6 surfaces (sidebar, welcome hero, thinking
+avatar, splash, favicon, SW precache) — none of them the official mark.
+
+**Implement (four phases, zero TODOs):**
+
+1. **Brand assets from the official artwork** — `scripts/gen-pwa-icons.mjs`
+   rewritten as the single-source generator: extracts the caduceus from the
+   JPEG (border-median background sample → Chebyshev-distance alpha ramp,
+   smoothstep 24→64, safely above JPEG noise and the corner vignette), trims
+   to the gold's bounding box (+5% breathing room) → `public/hermes-mark.png`
+   (875×1124, transparent) for every inline surface; composites it on
+   #0d0d0d tiles for `icon-192/512`, `icon-maskable-512` (62% — every gold
+   pixel inside Android's circular safe zone), `apple-icon.png`, and the
+   favicon `src/app/icon.png`. Legacy `senku-sparkle.png`, `senku-logo.png`,
+   `logo.svg` deleted (zero references remained).
+2. **The name, everywhere** — folders `src/lib/senku → src/lib/hermes`,
+   `src/components/senku → src/components/hermes`; files `SenkuApp →
+   HermesApp`, `SenkuSplash → HermesSplash`, `tests/test_senku.py →
+   test_hermes.py`; an ordered sed sweep (SenkuAPI→Hermes, SENKU→HERMES,
+   Senku→Hermes, asset path first, then `senku-` classes → `hermes-`, then
+   the bare token) over src, public, scripts, prisma, tests, package.json
+   (now `"name": "hermes"`, `test:hermes` script). The v1 endpoint now
+   answers `hermes: {provider, cached, …}` and `chatcmpl-hermes-*`; the SW
+   cache is `hermes-pwa-v1` (old cache purged by the existing activate
+   purge); system prompt identity "You are Hermes…"; `USER.name: "hermes"`.
+3. **The mark, placed with respect for geometry** — the caduceus is taller
+   than wide, so every slot keeps its square box and gains `object-contain`
+   (sidebar 26px, welcome hero 56px, thinking avatar 28px, splash 80px):
+   zero layout shifts, no distortion, and the breathing health ring / blur
+   halo / pulse animations built around those boxes stay exact.
+4. **Copy that fits the god** — the late-night easter egg is now
+   "Swift as thought, still awake, Hermes?" (Hermes' own epithet, replacing
+   the Senku anime catchphrase); metadata title "Hermes — Personal AI
+   Gateway"; manifest name/short_name "Hermes"; memory dialog, install
+   toast, seeded demo answer, and the ledger header all carry the new name.
+   **Data preserved:** the 16 persisted messages + 1 chat title containing
+   the old name were string-replaced in place (all case variants, longest
+   first) — history intact, zero data loss; state lives server-side, so no
+   localStorage migration was needed.
+
+**Verify (all live, all passing):**
+- `rg -i senku` across src/public/scripts/prisma/tests/package.json → **0**;
+  served HTML, manifest, sw.js all Hermes; `/senku-sparkle.png` → 404.
+- Assets: mark corners alpha=0 (true transparency), 12.8% opaque linework;
+  favicon head links `icon → /hermes-mark.png`, `apple-touch-icon →
+  /apple-icon.png`; all icon endpoints 200.
+- Browser walkthrough (agent-browser): cold-load splash shows the caduceus +
+  tracked "HERMES" wordmark fading into the app; welcome screen "Good
+  afternoon, Hermes." with the breathing ring; sidebar brand row caduceus +
+  "Hermes" with renamed history ("What Is Hermes"); a real message streamed
+  end-to-end with the caduceus thinking avatar, meta row, and auto-title;
+  ⌘K palette, memory dialog ("What Hermes always remembers about you"),
+  mobile 390px (drawer + welcome) all correct; console clean (HMR logs
+  only), zero page errors.
+- Baselines: lint 0 errors (2 pre-existing warnings); tsc 8 errors — all
+  pre-existing (examples/ ×2, skills/ ×1, attachments.ts ×3, gateway.ts ×2,
+  paths now `lib/hermes/`), zero new; dev.log healthy. The run's test chat
+  ("Identity Inquiry") was deleted via the API — zero orphans.

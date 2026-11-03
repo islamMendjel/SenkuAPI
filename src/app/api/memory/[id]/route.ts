@@ -2,7 +2,7 @@
 // DELETE /api/memory/[id] — remove one entry
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { MEMORY_MAX_CHARS, sanitizeMemory } from "@/lib/senku/constants";
+import { MEMORY_MAX_CHARS, sanitizeMemory } from "@/lib/hermes/constants";
 
 export const dynamic = "force-dynamic";
 

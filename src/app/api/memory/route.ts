@@ -6,7 +6,7 @@ import {
   MEMORY_MAX_CHARS,
   MEMORY_MAX_ENTRIES,
   sanitizeMemory,
-} from "@/lib/senku/constants";
+} from "@/lib/hermes/constants";
 
 export const dynamic = "force-dynamic";
 

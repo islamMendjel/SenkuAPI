@@ -4,7 +4,7 @@
 // immutable-cached. `?download=1` switches to an attachment.
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
-import { imageFilePath, isValidImageId, mimeOfImageId } from "@/lib/senku/imagegen";
+import { imageFilePath, isValidImageId, mimeOfImageId } from "@/lib/hermes/imagegen";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +29,7 @@ export async function GET(
       "Content-Length": String(buffer.length),
       "Cache-Control": "public, max-age=31536000, immutable",
       ...(download
-        ? { "Content-Disposition": `attachment; filename="senku-${id}"` }
+        ? { "Content-Disposition": `attachment; filename="hermes-${id}"` }
         : {}),
     },
   });

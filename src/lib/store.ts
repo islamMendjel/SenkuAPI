@@ -1,14 +1,14 @@
 "use client";
 
-// SenkuAPI — client store (Zustand). Owns bootstrap data, chat state
+// Hermes — client store (Zustand). Owns bootstrap data, chat state
 // and the SSE streaming turn pipeline.
 
 import { create } from "zustand";
-import { DEFAULT_MODEL } from "@/lib/senku/constants";
-import { sizeFromDims } from "@/lib/senku/image-forge";
-import { countLines } from "@/lib/senku/format";
-import { autoChallenger } from "@/lib/senku/models";
-import { StreamFlushScheduler } from "@/lib/senku/raf-throttle";
+import { DEFAULT_MODEL } from "@/lib/hermes/constants";
+import { sizeFromDims } from "@/lib/hermes/image-forge";
+import { countLines } from "@/lib/hermes/format";
+import { autoChallenger } from "@/lib/hermes/models";
+import { StreamFlushScheduler } from "@/lib/hermes/raf-throttle";
 import type {
   AttachmentRecord,
   ChatMessageData,
@@ -19,7 +19,7 @@ import type {
   ProviderView,
   SearchSource,
   TurnStyle,
-} from "@/lib/senku/types";
+} from "@/lib/hermes/types";
 
 /** One file being attached to the next message — extraction runs
  *  server-side the moment the file is picked, so the chip can show
@@ -33,7 +33,7 @@ export interface PendingAttachment {
   record?: AttachmentRecord;
 }
 
-/** A code block staged into the Senku Canvas (the Tools aside).
+/** A code block staged into the Hermes Canvas (the Tools aside).
  *  Kept in the store so the preview survives close/reopen and chat
  *  navigation — closing the canvas never touches the conversation. */
 export interface CanvasSource {
@@ -157,7 +157,7 @@ interface UserInfo {
   plan: string;
 }
 
-interface SenkuState {
+interface HermesState {
   user: UserInfo;
   providers: ProviderView[];
   limiter: LimiterStatus | null;
@@ -219,7 +219,7 @@ interface SenkuState {
    *  no upload, no persistence at paste time. */
   stagePastedSnippet: (text: string) => { ok: boolean; error?: string };
 
-  /** Run 17 — Senku Canvas state (the Tools aside). The source is
+  /** Run 17 — Hermes Canvas state (the Tools aside). The source is
    *  kept across close/reopen so the user never loses a preview. */
   canvasOpen: boolean;
   canvasSource: CanvasSource | null;
@@ -260,7 +260,7 @@ interface SenkuState {
 
   /** Run 28 — persistent personal memory: durable facts/preferences
    *  the user asked the gateway to remember. Injected into every
-   *  system prompt by the gateway (see lib/senku/memory.ts); the
+   *  system prompt by the gateway (see lib/hermes/memory.ts); the
    *  bootstrap seeds the list, the MemoryDialog owns the CRUD, and
    *  the welcome screen surfaces "remembers N things" when N > 0. */
   memories: MemoryItem[];
@@ -334,7 +334,7 @@ function scheduleDailyRolloverRefresh(dailyResetsAt?: string) {
   const delay = Math.max(at - Date.now() + 1000, 30_000); // never tighter than 30s
   rolloverTimer = setTimeout(() => {
     rolloverTimer = null;
-    void useSenku.getState().refreshUsage();
+    void useHermes.getState().refreshUsage();
   }, delay);
 }
 
@@ -345,9 +345,9 @@ function applyProviderView(
   return providers.map((p) => (p.id === view.id ? view : p));
 }
 
-export const useSenku = create<SenkuState>((set, get) => ({
+export const useHermes = create<HermesState>((set, get) => ({
   user: {
-    name: "senku",
+    name: "hermes",
     email: "gamerislam21@gmail.com",
     plan: "Ultimate plan (unlimited)",
   },
@@ -1594,9 +1594,9 @@ export const useSenku = create<SenkuState>((set, get) => ({
 
 // ── SSE turn pipeline ─────────────────────────────────────────
 type SetState = (
-  partial: Partial<SenkuState> | ((s: SenkuState) => Partial<SenkuState>)
+  partial: Partial<HermesState> | ((s: HermesState) => Partial<HermesState>)
 ) => void;
-type GetState = () => SenkuState;
+type GetState = () => HermesState;
 
 interface TurnOptions {
   chatId: string | null;

@@ -3,7 +3,7 @@
 //   /api/images?count=1 → { count } — cheap refresh for the sidebar
 //                        badge after a chat delete / a forge.
 import { NextRequest, NextResponse } from "next/server";
-import { listGalleryImages } from "@/lib/senku/gallery";
+import { listGalleryImages } from "@/lib/hermes/gallery";
 
 export const dynamic = "force-dynamic";
 

@@ -1,4 +1,4 @@
-// SenkuAPI — server-side voice helpers for the Read-Aloud (TTS) pipeline.
+// Hermes — server-side voice helpers for the Read-Aloud (TTS) pipeline.
 // Markdown → speakable text → ≤900-char sentence chunks → one WAV per
 // chunk → concatenated into a single streamable WAV. Results are cached
 // in memory (LRU, 24 entries) so replaying a message is instant and free.

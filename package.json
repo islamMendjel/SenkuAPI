@@ -1,5 +1,5 @@
 {
-  "name": "nextjs_tailwind_shadcn_ts",
+  "name": "hermes",
   "version": "0.2.1",
   "private": true,
   "scripts": {
@@ -11,7 +11,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "test:senku": "python3 tests/test_senku.py"
+    "test:hermes": "python3 tests/test_hermes.py"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

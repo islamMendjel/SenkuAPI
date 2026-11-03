@@ -1,8 +1,8 @@
 // GET /api/usage — limiter snapshot for the ACTIVE provider
 // (3-tier breakdown: Monthly Pool, Daily Pace, 5H Burst)
 import { NextResponse } from "next/server";
-import { ensureSeed } from "@/lib/senku/seed";
-import { usageSnapshot } from "@/lib/senku/serialize";
+import { ensureSeed } from "@/lib/hermes/seed";
+import { usageSnapshot } from "@/lib/hermes/serialize";
 
 export const dynamic = "force-dynamic";
 

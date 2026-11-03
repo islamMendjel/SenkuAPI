@@ -1,6 +1,6 @@
 "use client";
 
-// SenkuAPI — useVoiceRecorder: microphone capture with live level
+// Hermes — useVoiceRecorder: microphone capture with live level
 // analysis for the waveform UI. Records via MediaRecorder, then hands
 // back a 16 kHz mono WAV base64 (see lib/voice/audio.ts) ready for the
 // /api/voice/transcribe endpoint. Works in every modern browser —

@@ -5,7 +5,7 @@
 // `variants` holds the earlier ones as JSON.
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import type { ImageRef } from "@/lib/senku/types";
+import type { ImageRef } from "@/lib/hermes/types";
 
 export const dynamic = "force-dynamic";
 

@@ -8,7 +8,7 @@ import {
   ATTACHMENT_MAX_FILES,
   ATTACHMENT_MAX_UPLOAD_BYTES,
   extractAttachment,
-} from "@/lib/senku/attachments";
+} from "@/lib/hermes/attachments";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;

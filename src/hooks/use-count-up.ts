@@ -1,6 +1,6 @@
 "use client";
 
-// SenkuAPI — Run 19: one rAF ease-out count-up. Used by the welcome
+// Hermes — Run 19: one rAF ease-out count-up. Used by the welcome
 // screen's live stat strip so the gateway's real numbers arrive with
 // a heartbeat instead of a dead static string.
 //

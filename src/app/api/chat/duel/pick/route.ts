@@ -9,8 +9,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getActiveProvider } from "@/lib/senku/router";
-import { ensureSeed } from "@/lib/senku/seed";
+import { getActiveProvider } from "@/lib/hermes/router";
+import { ensureSeed } from "@/lib/hermes/seed";
 
 export const dynamic = "force-dynamic";
 

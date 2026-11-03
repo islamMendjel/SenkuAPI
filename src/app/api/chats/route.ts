@@ -2,8 +2,8 @@
 // POST /api/chats        — create a chat
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { ensureSeed } from "@/lib/senku/seed";
-import { getActiveProvider } from "@/lib/senku/router";
+import { ensureSeed } from "@/lib/hermes/seed";
+import { getActiveProvider } from "@/lib/hermes/router";
 
 export const dynamic = "force-dynamic";
 

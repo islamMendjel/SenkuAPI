@@ -1,4 +1,4 @@
-// SenkuAPI — Run 26: full-text message search ("THE MEMORY, SEARCHABLE").
+// Hermes — Run 26: full-text message search ("THE MEMORY, SEARCHABLE").
 //
 // GET /api/messages/search?q=…
 // Searches the CONTENT of every message in every SAVED conversation

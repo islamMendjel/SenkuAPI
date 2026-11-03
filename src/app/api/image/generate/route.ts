@@ -14,11 +14,11 @@
 // are written in the same single insert — no second round-trip.
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { deriveTitle } from "@/lib/senku/gateway";
-import { discardImageFile, forgeImage } from "@/lib/senku/imagegen";
-import { IMAGE_SIZE_KEYS } from "@/lib/senku/image-forge";
-import { ensureSeed } from "@/lib/senku/seed";
-import type { ImageRef, ImageSize } from "@/lib/senku/types";
+import { deriveTitle } from "@/lib/hermes/gateway";
+import { discardImageFile, forgeImage } from "@/lib/hermes/imagegen";
+import { IMAGE_SIZE_KEYS } from "@/lib/hermes/image-forge";
+import { ensureSeed } from "@/lib/hermes/seed";
+import type { ImageRef, ImageSize } from "@/lib/hermes/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;

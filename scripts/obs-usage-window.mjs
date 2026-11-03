@@ -1,7 +1,7 @@
 // Run 14 observation — prove the usage-day math against known
 // Algiers wall-clock cases (UTC+1, no DST), including the
 // 00:xx belong-to-yesterday rule and month/year rollovers.
-import { usageDayStart, nextUsageDayRollover } from "../src/lib/senku/limiter.ts";
+import { usageDayStart, nextUsageDayRollover } from "../src/lib/hermes/limiter.ts";
 
 const fmt = (d) => d.toISOString();
 let pass = 0, fail = 0;

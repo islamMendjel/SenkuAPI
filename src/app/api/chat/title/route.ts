@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { zaiCloudExec } from "@/lib/senku/executor";
+import { zaiCloudExec } from "@/lib/hermes/executor";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;

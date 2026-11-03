@@ -1,15 +1,15 @@
 // POST /api/v1/chat/completions — OpenAI-compatible passthrough.
-// External tools can point their `base_url` at SenkuAPI and get
+// External tools can point their `base_url` at Hermes and get
 // pooled key routing, the pacing limiter and prompt caching for free.
 
 import { NextRequest, NextResponse } from "next/server";
-import { computeCacheKey, getCached, putCached } from "@/lib/senku/cache";
-import { BASE_SYSTEM_PROMPT } from "@/lib/senku/constants";
-import { dispatchCompletion } from "@/lib/senku/dispatch";
-import { getActiveProvider } from "@/lib/senku/router";
-import { ensureSeed } from "@/lib/senku/seed";
+import { computeCacheKey, getCached, putCached } from "@/lib/hermes/cache";
+import { BASE_SYSTEM_PROMPT } from "@/lib/hermes/constants";
+import { dispatchCompletion } from "@/lib/hermes/dispatch";
+import { getActiveProvider } from "@/lib/hermes/router";
+import { ensureSeed } from "@/lib/hermes/seed";
 import { db } from "@/lib/db";
-import type { ChatMessageData } from "@/lib/senku/types";
+import type { ChatMessageData } from "@/lib/hermes/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
   // Exact-match cache (24h TTL) — cached hits cost 0 tokens.
   const cacheKey = computeCacheKey(prompt, model, systemPrompt);
   const cached = await getCached(cacheKey);
-  const id = `chatcmpl-senku-${Date.now().toString(36)}`;
+  const id = `chatcmpl-hermes-${Date.now().toString(36)}`;
   const created = Math.floor(Date.now() / 1000);
 
   if (cached) {
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
       object: "chat.completion",
       created,
       model,
-      senku: { provider: provider.name, cached: true, tokens: 0 },
+      hermes: { provider: provider.name, cached: true, tokens: 0 },
       choices: [
         {
           index: 0,
@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
     object: "chat.completion",
     created,
     model,
-    senku: {
+    hermes: {
       provider: provider.name,
       cached: false,
       tokens: Math.round(rawTotal * provider.tokenMultiplier),

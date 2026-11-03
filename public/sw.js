@@ -1,4 +1,4 @@
-/* SenkuAPI — service worker (Run 27, installability + offline shell).
+/* Hermes — service worker (Run 27, installability + offline shell).
  *
  * Install criteria: Chrome (desktop + Android) requires an active
  * worker with a fetch handler before it will offer "Install App".
@@ -22,11 +22,11 @@
  *   • /_next/webpack-hmr — dev hot-reload passthrough.
  */
 
-const CACHE = "senku-pwa-v1";
+const CACHE = "hermes-pwa-v1";
 
 const PRECACHE = [
   "/manifest.json",
-  "/senku-sparkle.png",
+  "/hermes-mark.png",
   "/icon-192.png",
   "/icon-512.png",
   "/icon-maskable-512.png",

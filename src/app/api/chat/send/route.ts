@@ -2,10 +2,10 @@
 // Events: meta → sources? → delta* → done | error
 // Duel turns: meta → duel_start → delta*(lane-tagged) → lane_done×2 → done(duel)
 import { NextRequest } from "next/server";
-import { sanitizeAttachments } from "@/lib/senku/attachments";
-import { runChatTurn, runDuelTurn } from "@/lib/senku/gateway";
-import { ensureSeed } from "@/lib/senku/seed";
-import type { ChatMessageData, EffortLevel, TurnStyle } from "@/lib/senku/types";
+import { sanitizeAttachments } from "@/lib/hermes/attachments";
+import { runChatTurn, runDuelTurn } from "@/lib/hermes/gateway";
+import { ensureSeed } from "@/lib/hermes/seed";
+import type { ChatMessageData, EffortLevel, TurnStyle } from "@/lib/hermes/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;

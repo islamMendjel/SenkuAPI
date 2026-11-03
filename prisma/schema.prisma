@@ -1,4 +1,4 @@
-// SenkuAPI — Personal AI Gateway
+// Hermes — Personal AI Gateway
 // Prisma schema (SQLite): providers, pooled keys, chats, messages,
 // usage events (3-tier pacing limiter source of truth) and response cache.
 
@@ -156,7 +156,7 @@ model ResponseCache {
 
 // ─────────────────────────────────────────────────────────────
 // Memory (Run 28) — durable facts and preferences the user asked
-// SenkuAPI to remember. Injected into every system prompt (and
+// Hermes to remember. Injected into every system prompt (and
 // therefore into the response-cache key: editing memory naturally
 // invalidates stale cached answers). Ordered by creation.
 // ─────────────────────────────────────────────────────────────

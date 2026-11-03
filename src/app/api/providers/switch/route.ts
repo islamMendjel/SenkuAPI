@@ -2,9 +2,9 @@
 // exactly ONE provider active; the selected becomes active and all
 // others are set to false. Round-robin then runs on its keys only.
 import { NextRequest, NextResponse } from "next/server";
-import { switchProvider } from "@/lib/senku/router";
-import { ensureSeed } from "@/lib/senku/seed";
-import { usageSnapshot } from "@/lib/senku/serialize";
+import { switchProvider } from "@/lib/hermes/router";
+import { ensureSeed } from "@/lib/hermes/seed";
+import { usageSnapshot } from "@/lib/hermes/serialize";
 
 export const dynamic = "force-dynamic";
 

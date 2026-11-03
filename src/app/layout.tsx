@@ -14,22 +14,24 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SenkuAPI — Personal AI Gateway",
+  title: "Hermes — Personal AI Gateway",
   description:
     "Personal AI gateway with pooled key routing, 3-tier token pacing, prompt caching and OpenAI compatibility.",
-  applicationName: "SenkuAPI",
+  applicationName: "Hermes",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "SenkuAPI",
+    title: "Hermes",
   },
   icons: {
-    // The chatbot logo itself (welcome / sidebar / timeline all use
-    // /senku-sparkle.png), plus apple-icon.png — the same mark on the
-    // opaque #0d0d0d tile, because iOS home screens black-matte
-    // transparent icons and would swallow the white sparkle.
-    icon: "/senku-sparkle.png",
+    // The brand mark itself (welcome / sidebar / timeline / splash all
+    // use /hermes-mark.png — the official gold caduceus with its dark
+    // studio background knocked out to transparency), plus
+    // apple-icon.png — the same mark on the opaque #0d0d0d tile,
+    // because iOS home screens black-matte transparent icons and
+    // would swallow the gold linework.
+    icon: "/hermes-mark.png",
     apple: "/apple-icon.png",
   },
 };

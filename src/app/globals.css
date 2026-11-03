@@ -122,31 +122,31 @@
 }
 
 /* ───────────────────────────────────────────────────────────
-   SenkuAPI — dark app surface, scrollbars, markdown, motion
+   Hermes — dark app surface, scrollbars, markdown, motion
    ─────────────────────────────────────────────────────────── */
-.senku-root {
+.hermes-root {
   background-color: #18181b;
   color: #f4f4f5;
 }
 
-.senku-scroll {
+.hermes-scroll {
   scrollbar-width: thin;
   scrollbar-color: #3f3f46 transparent;
 }
-.senku-scroll::-webkit-scrollbar {
+.hermes-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.senku-scroll::-webkit-scrollbar-track {
+.hermes-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.senku-scroll::-webkit-scrollbar-thumb {
+.hermes-scroll::-webkit-scrollbar-thumb {
   background-color: #3f3f46;
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-.senku-scroll::-webkit-scrollbar-thumb:hover {
+.hermes-scroll::-webkit-scrollbar-thumb:hover {
   background-color: #52525b;
 }
 
@@ -157,33 +157,33 @@
    panel slides, so sidebar content never squishes mid-flight.
    Mobile: the shell is a fixed overlay sliding in from the left
    over a fading backdrop.
-   `.senku-anim` is only added after the first paint, so the
+   `.hermes-anim` is only added after the first paint, so the
    initial (hydration) state never animates. */
-.senku-sidebar {
+.hermes-sidebar {
   transform: translateX(-100%);
   visibility: hidden;
   transition:
     transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
     visibility 0s linear 280ms;
 }
-.senku-sidebar.senku-open {
+.hermes-sidebar.hermes-open {
   transform: translateX(0);
   visibility: visible;
   transition:
     transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
     visibility 0s linear 0s;
 }
-.senku-backdrop {
+.hermes-backdrop {
   opacity: 0;
   pointer-events: none;
   transition: opacity 220ms ease;
 }
-.senku-backdrop.senku-open {
+.hermes-backdrop.hermes-open {
   opacity: 1;
   pointer-events: auto;
 }
 @media (min-width: 768px) {
-  .senku-sidebar {
+  .hermes-sidebar {
     transform: none;
     width: 0;
     overflow: hidden;
@@ -191,24 +191,24 @@
       width 280ms cubic-bezier(0.32, 0.72, 0, 1),
       visibility 0s linear 280ms;
   }
-  .senku-sidebar.senku-open {
+  .hermes-sidebar.hermes-open {
     width: 264px;
     transition:
       width 280ms cubic-bezier(0.32, 0.72, 0, 1),
       visibility 0s linear 0s;
   }
-  .senku-sidebar-inner {
+  .hermes-sidebar-inner {
     transform: translateX(-100%);
     transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
   }
-  .senku-sidebar.senku-open .senku-sidebar-inner {
+  .hermes-sidebar.hermes-open .hermes-sidebar-inner {
     transform: translateX(0);
   }
 }
 /* first-paint gate: no transitions until the app opts in */
-.senku-sidebar:not(.senku-anim),
-.senku-sidebar:not(.senku-anim) .senku-sidebar-inner,
-.senku-backdrop:not(.senku-anim) {
+.hermes-sidebar:not(.hermes-anim),
+.hermes-sidebar:not(.hermes-anim) .hermes-sidebar-inner,
+.hermes-backdrop:not(.hermes-anim) {
   transition: none !important;
 }
 
@@ -217,7 +217,7 @@
    wrapper (keyed by the store's viewEpoch, bumped on every
    navigation) — the whole conversation settles in as one calm
    block instead of N messages exploding individually. */
-@keyframes senku-view-in {
+@keyframes hermes-view-in {
   from {
     opacity: 0;
     transform: translateY(10px);
@@ -227,15 +227,15 @@
     transform: none;
   }
 }
-.senku-view-in {
-  animation: senku-view-in 260ms cubic-bezier(0.23, 1, 0.32, 1) both;
+.hermes-view-in {
+  animation: hermes-view-in 260ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
 /* Run 18 — the composer's one-time settle on load. Position is
    already correct at first paint (the view slot above the bar is
    always rendered), so this only eases it in: 8px rise + fade.
    Plays once per app load; never re-runs on chat navigation. */
-@keyframes senku-input-in {
+@keyframes hermes-input-in {
   from {
     opacity: 0;
     transform: translateY(8px);
@@ -245,21 +245,21 @@
     transform: none;
   }
 }
-.senku-input-in {
-  animation: senku-input-in 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
+.hermes-input-in {
+  animation: hermes-input-in 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
 /* Run 19 — THE LIVING GATEWAY: the welcome screen's breathing health
    ring + one-time logo bloom. The ring is a conic sweep masked to a
    hairline circle around the logo; emerald while the limiter is
-   quiet, amber (.senku-pulse-warn) when the gateway raised a
+   quiet, amber (.hermes-pulse-warn) when the gateway raised a
    warning. Rotation is slow and calm — telemetry, not a toy. */
-@keyframes senku-spin-slow {
+@keyframes hermes-spin-slow {
   to {
     transform: rotate(360deg);
   }
 }
-.senku-pulse-ring {
+.hermes-pulse-ring {
   background: conic-gradient(
     from 0deg,
     rgba(52, 211, 153, 0) 0%,
@@ -277,9 +277,9 @@
     transparent calc(100% - 2.5px),
     #000 calc(100% - 2px)
   );
-  animation: senku-spin-slow 9s linear infinite;
+  animation: hermes-spin-slow 9s linear infinite;
 }
-.senku-pulse-ring.senku-pulse-warn {
+.hermes-pulse-ring.hermes-pulse-warn {
   background: conic-gradient(
     from 0deg,
     rgba(251, 191, 36, 0) 0%,
@@ -288,7 +288,7 @@
     rgba(251, 191, 36, 0) 58%
   );
 }
-@keyframes senku-bloom {
+@keyframes hermes-bloom {
   from {
     opacity: 0;
     transform: scale(0.55) rotate(-28deg);
@@ -302,13 +302,13 @@
     transform: none;
   }
 }
-.senku-bloom {
-  animation: senku-bloom 640ms cubic-bezier(0.23, 1, 0.32, 1) both;
+.hermes-bloom {
+  animation: hermes-bloom 640ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
-/* Run 17 — the Senku Canvas panel settling in (overlay on small
+/* Run 17 — the Hermes Canvas panel settling in (overlay on small
    screens, split column on wide ones). */
-@keyframes senku-canvas-in {
+@keyframes hermes-canvas-in {
   from {
     opacity: 0;
     transform: translateX(18px);
@@ -318,16 +318,16 @@
     transform: none;
   }
 }
-.senku-canvas-in {
-  animation: senku-canvas-in 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+.hermes-canvas-in {
+  animation: hermes-canvas-in 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .senku-canvas-in {
+  .hermes-canvas-in {
     animation: none;
   }
 }
 
-@keyframes senku-pulse-dot {
+@keyframes hermes-pulse-dot {
   0%,
   100% {
     opacity: 1;
@@ -338,8 +338,8 @@
     transform: scale(0.8);
   }
 }
-.senku-pulse {
-  animation: senku-pulse-dot 1.8s ease-in-out infinite;
+.hermes-pulse {
+  animation: hermes-pulse-dot 1.8s ease-in-out infinite;
 }
 
 /* Run 26 — jump-to-message flash. A bright emerald ring + tint that
@@ -347,7 +347,7 @@
    over the rest (the store clears the class at 2.4s). For tall blocks
    whose ring edges sit off-screen, the tint itself carries the
    "this is the one" signal. */
-@keyframes senku-msg-flash {
+@keyframes hermes-msg-flash {
   0% {
     box-shadow:
       inset 0 0 0 2.5px rgb(52 211 153 / 0.9),
@@ -367,11 +367,11 @@
     background-color: transparent;
   }
 }
-.senku-msg-flash {
-  animation: senku-msg-flash 2.2s ease-out both;
+.hermes-msg-flash {
+  animation: hermes-msg-flash 2.2s ease-out both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .senku-msg-flash {
+  .hermes-msg-flash {
     animation: none;
     box-shadow: inset 0 0 0 2px rgb(52 211 153 / 0.45);
   }
@@ -385,7 +385,7 @@
    through 80%, then collapses back to the dot. Pure scale pulse
    — NO rotation, NO wobble, NO color shifting. The mark stays
    OUR OWN WHITE sparkle logo — only the motion is borrowed. */
-@keyframes senku-think {
+@keyframes hermes-think {
   0% {
     transform: scale(0.31);
     animation-timing-function: cubic-bezier(0.33, 0.66, 0.45, 1);
@@ -416,12 +416,12 @@
 }
 /* Applied directly to the white sparkle <Image> while thinking —
    the exact measured curve, zero color change. */
-.senku-thinking-sparkle {
+.hermes-thinking-sparkle {
   transform-origin: center;
-  animation: senku-think 1s infinite;
+  animation: hermes-think 1s infinite;
 }
 
-@keyframes senku-shimmer {
+@keyframes hermes-shimmer {
   0% {
     background-position: 200% 0;
   }
@@ -437,35 +437,35 @@
    permanently invisible. These helpers keep the math symmetric:
    touch devices always see a faint row; hover-capable screens
    hide it until the parent .group is hovered. */
-.senku-hover-actions {
+.hermes-hover-actions {
   opacity: 0.75;
   transition: opacity 200ms ease;
 }
-.senku-meta-row {
+.hermes-meta-row {
   opacity: 0.75;
   transition: opacity 200ms ease;
 }
 @media (hover: hover) {
-  .senku-hover-actions {
+  .hermes-hover-actions {
     opacity: 0;
   }
-  .group:hover > * .senku-hover-actions,
-  .group:hover .senku-hover-actions {
+  .group:hover > * .hermes-hover-actions,
+  .group:hover .hermes-hover-actions {
     opacity: 1;
   }
   /* the provenance line hides only on hover-capable AND wide
      screens — phones keep it faintly visible */
   @media (min-width: 768px) {
-    .senku-meta-row {
+    .hermes-meta-row {
       opacity: 0;
     }
-    .group:hover .senku-meta-row {
+    .group:hover .hermes-meta-row {
       opacity: 1;
     }
   }
 }
 
-.senku-thinking-label {
+.hermes-thinking-label {
   background: linear-gradient(
     90deg,
     #8e8e96 0%,
@@ -479,10 +479,10 @@
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: senku-shimmer 2s linear infinite;
+  animation: hermes-shimmer 2s linear infinite;
 }
 
-@keyframes senku-fade-up {
+@keyframes hermes-fade-up {
   from {
     opacity: 0;
     transform: translateY(6px);
@@ -492,18 +492,18 @@
     transform: translateY(0);
   }
 }
-.senku-fade-up {
+.hermes-fade-up {
   /* Longhand ON PURPOSE (Run 19): the `animation:` shorthand resets
      animation-delay to 0 and, as unlayered CSS, would also beat
      Tailwind's [animation-delay:…] utility — silently killing every
      stagger. Longhands leave the delay free for the utility. */
-  animation-name: senku-fade-up;
+  animation-name: hermes-fade-up;
   animation-duration: 0.28s;
   animation-timing-function: ease-out;
   animation-fill-mode: both;
 }
 
-@keyframes senku-caret {
+@keyframes hermes-caret {
   0%,
   100% {
     opacity: 1;
@@ -512,14 +512,14 @@
     opacity: 0;
   }
 }
-.senku-caret {
+.hermes-caret {
   display: inline-block;
   width: 0.5em;
-  animation: senku-caret 1s step-end infinite;
+  animation: hermes-caret 1s step-end infinite;
 }
 
 /* Skip affordance shown while an answer is still typing out */
-.senku-skip {
+.hermes-skip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -540,23 +540,23 @@
     border-color 0.15s ease,
     background 0.15s ease;
 }
-.senku-skip:hover {
+.hermes-skip:hover {
   color: #f4f4f5;
   border-color: #52525b;
   background: rgba(255, 255, 255, 0.08);
 }
-.senku-skip:focus-visible {
+.hermes-skip:focus-visible {
   outline: 2px solid #71717a;
   outline-offset: 2px;
 }
-.senku-skip svg {
+.hermes-skip svg {
   width: 12px;
   height: 12px;
 }
 
 /* ── Launch Pad (welcome screen) motion ────────────────────
    Slow drifting aurora blobs + a gently floating logo. */
-@keyframes senku-aurora-a {
+@keyframes hermes-aurora-a {
   0%,
   100% {
     transform: translate(-8%, -4%) scale(1);
@@ -565,7 +565,7 @@
     transform: translate(6%, 5%) scale(1.15);
   }
 }
-@keyframes senku-aurora-b {
+@keyframes hermes-aurora-b {
   0%,
   100% {
     transform: translate(10%, 6%) scale(1.05);
@@ -574,16 +574,16 @@
     transform: translate(-6%, -8%) scale(0.95);
   }
 }
-.senku-aurora {
-  animation: senku-aurora-a 18s ease-in-out infinite;
+.hermes-aurora {
+  animation: hermes-aurora-a 18s ease-in-out infinite;
   will-change: transform;
 }
-.senku-aurora-b {
-  animation: senku-aurora-b 22s ease-in-out infinite;
+.hermes-aurora-b {
+  animation: hermes-aurora-b 22s ease-in-out infinite;
   will-change: transform;
 }
 
-@keyframes senku-float {
+@keyframes hermes-float {
   0%,
   100% {
     transform: translateY(0);
@@ -592,8 +592,8 @@
     transform: translateY(-6px);
   }
 }
-.senku-float {
-  animation: senku-float 5s ease-in-out infinite;
+.hermes-float {
+  animation: hermes-float 5s ease-in-out infinite;
 }
 
 /* ── Run 29 — welcome screen height-adaptive compact mode ─────
@@ -602,58 +602,58 @@
    switch to a compact variant so the starter cards are NEVER
    clipped behind the composer — the exact flaw the design audit
    flagged twice. Unlayered CSS beats Tailwind's layered
-   utilities — the same mechanism .senku-fade-up relies on. */
+   utilities — the same mechanism .hermes-fade-up relies on. */
 @media (max-height: 799px) {
   /* the ⌘K hint is a nicety; power users already know it */
-  .senku-welcome .senku-w-hint {
+  .hermes-welcome .hermes-w-hint {
     display: none;
   }
 }
 @media (max-height: 759px) {
-  .senku-welcome .senku-w-pt {
+  .hermes-welcome .hermes-w-pt {
     padding-top: 1rem;
   }
-  .senku-welcome .senku-w-pb {
+  .hermes-welcome .hermes-w-pb {
     padding-bottom: 2.5rem;
   }
-  .senku-welcome .senku-w-fade {
+  .hermes-welcome .hermes-w-fade {
     height: 3rem;
   }
-  .senku-welcome .senku-w-logo-wrap {
+  .hermes-welcome .hermes-w-logo-wrap {
     margin-bottom: 0.75rem;
   }
-  .senku-welcome .senku-w-logo {
+  .hermes-welcome .hermes-w-logo {
     height: 2.75rem;
     width: 2.75rem;
   }
-  .senku-welcome .senku-w-hello {
+  .hermes-welcome .hermes-w-hello {
     font-size: 1rem;
     line-height: 1.3;
   }
-  .senku-welcome .senku-w-name-wrap {
+  .hermes-welcome .hermes-w-name-wrap {
     margin-top: 0.25rem;
   }
-  .senku-welcome .senku-w-name {
+  .hermes-welcome .hermes-w-name {
     font-size: 1.875rem;
   }
-  .senku-welcome .senku-w-sub {
+  .hermes-welcome .hermes-w-sub {
     margin-top: 0.5rem;
     font-size: 12.5px;
   }
-  .senku-welcome .senku-w-pulse {
+  .hermes-welcome .hermes-w-pulse {
     margin-top: 0.5rem;
   }
-  .senku-welcome .senku-w-mem {
+  .hermes-welcome .hermes-w-mem {
     margin-top: 0.5rem;
   }
-  .senku-welcome .senku-w-cards {
+  .hermes-welcome .hermes-w-cards {
     margin-top: 1rem;
     gap: 0.5rem;
   }
-  .senku-welcome .senku-w-card {
+  .hermes-welcome .hermes-w-card {
     padding: 0.55rem 0.7rem;
   }
-  .senku-welcome .senku-w-card-ic {
+  .hermes-welcome .hermes-w-card-ic {
     height: 1.75rem;
     width: 1.75rem;
   }
@@ -661,21 +661,21 @@
 @media (max-height: 599px) {
   /* very short windows: the value line yields — the lockup and the
      cards are the load-bearing walls */
-  .senku-welcome .senku-w-sub {
+  .hermes-welcome .hermes-w-sub {
     display: none;
   }
-  .senku-welcome .senku-w-logo {
+  .hermes-welcome .hermes-w-logo {
     height: 2.5rem;
     width: 2.5rem;
   }
-  .senku-welcome .senku-w-name {
+  .hermes-welcome .hermes-w-name {
     font-size: 1.625rem;
   }
 }
 
 /* ── Voice mode ──────────────────────────────────────────────
    Recording pulse, live waveform bars, playback equalizer. */
-@keyframes senku-rec-pulse {
+@keyframes hermes-rec-pulse {
   0%,
   100% {
     transform: scale(1);
@@ -686,11 +686,11 @@
     opacity: 0.5;
   }
 }
-.senku-rec-dot {
-  animation: senku-rec-pulse 1.1s ease-in-out infinite;
+.hermes-rec-dot {
+  animation: hermes-rec-pulse 1.1s ease-in-out infinite;
 }
 
-.senku-wave-bar {
+.hermes-wave-bar {
   width: 3px;
   min-height: 4px;
   border-radius: 9999px;
@@ -699,7 +699,7 @@
   will-change: height;
 }
 
-@keyframes senku-eq-bounce {
+@keyframes hermes-eq-bounce {
   0%,
   100% {
     transform: scaleY(0.35);
@@ -708,23 +708,23 @@
     transform: scaleY(1);
   }
 }
-.senku-eq span {
+.hermes-eq span {
   display: inline-block;
   width: 2.5px;
   height: 12px;
   border-radius: 2px;
   background: currentColor;
   transform-origin: bottom;
-  animation: senku-eq-bounce 0.9s ease-in-out infinite;
+  animation: hermes-eq-bounce 0.9s ease-in-out infinite;
 }
-.senku-eq span:nth-child(2) {
+.hermes-eq span:nth-child(2) {
   animation-delay: 0.22s;
 }
-.senku-eq span:nth-child(3) {
+.hermes-eq span:nth-child(3) {
   animation-delay: 0.44s;
 }
 
-@keyframes senku-rec-in {
+@keyframes hermes-rec-in {
   from {
     opacity: 0;
     transform: translateY(4px);
@@ -734,16 +734,16 @@
     transform: translateY(0);
   }
 }
-.senku-rec-in {
-  animation: senku-rec-in 0.18s ease-out both;
+.hermes-rec-in {
+  animation: hermes-rec-in 0.18s ease-out both;
 }
 
 /* ── Run 22 — Image Forge ─────────────────────────────────────
    The generating card's amber shimmer sweep. A wide soft gradient
    traverses the placeholder once every 1.9s — slow enough to read
    as “working”, never as a glitch. The float on the icon reuses
-   .senku-float (already in the kill group). */
-@keyframes senku-forge-sweep {
+   .hermes-float (already in the kill group). */
+@keyframes hermes-forge-sweep {
   0% {
     transform: translateX(-100%);
   }
@@ -751,10 +751,10 @@
     transform: translateX(100%);
   }
 }
-.senku-forge-card {
+.hermes-forge-card {
   contain: paint;
 }
-.senku-forge-shimmer {
+.hermes-forge-shimmer {
   background: linear-gradient(
     105deg,
     transparent 32%,
@@ -762,29 +762,29 @@
     rgba(255, 255, 255, 0.06) 52%,
     transparent 68%
   );
-  animation: senku-forge-sweep 1.9s ease-in-out infinite;
+  animation: hermes-forge-sweep 1.9s ease-in-out infinite;
   will-change: transform;
 }
 
 /* Respect users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .senku-aurora,
-  .senku-aurora-b,
-  .senku-float,
-  .senku-thinking-sparkle,
-  .senku-pulse,
-  .senku-fade-up,
-  .senku-caret {
+  .hermes-aurora,
+  .hermes-aurora-b,
+  .hermes-float,
+  .hermes-thinking-sparkle,
+  .hermes-pulse,
+  .hermes-fade-up,
+  .hermes-caret {
     animation: none !important;
   }
-  .senku-thinking-label {
+  .hermes-thinking-label {
     animation: none !important;
     background: none;
     color: #a1a1aa;
   }
-  .senku-rec-dot,
-  .senku-eq span,
-  .senku-rec-in {
+  .hermes-rec-dot,
+  .hermes-eq span,
+  .hermes-rec-in {
     animation: none !important;
   }
   /* Run 13: sidebar + view transitions become instant state
@@ -793,18 +793,18 @@
      stat chips land instantly (count-ups jump via the hook's own
      reduced-motion check).
      Run 22: the Image Forge shimmer freezes to a static tint. */
-  .senku-view-in,
-  .senku-input-in,
-  .senku-pill-loading,
-  .senku-pill-loading *,
-  .senku-pulse-ring,
-  .senku-bloom,
-  .senku-forge-shimmer {
+  .hermes-view-in,
+  .hermes-input-in,
+  .hermes-pill-loading,
+  .hermes-pill-loading *,
+  .hermes-pulse-ring,
+  .hermes-bloom,
+  .hermes-forge-shimmer {
     animation: none !important;
   }
-  .senku-sidebar,
-  .senku-sidebar .senku-sidebar-inner,
-  .senku-backdrop {
+  .hermes-sidebar,
+  .hermes-sidebar .hermes-sidebar-inner,
+  .hermes-backdrop {
     transition: none !important;
   }
 }
@@ -816,52 +816,52 @@
    every block type drifted. This is the typographic system:
    amber spark section markers, an editorial lede, amber list and
    quote markers, warm inline code, and one consistent rhythm. */
-.senku-md {
+.hermes-md {
   font-size: 15.25px;
   line-height: 1.78;
   color: #e8e8ea;
   word-break: break-word;
 }
-.senku-md > *:first-child {
+.hermes-md > *:first-child {
   margin-top: 0;
 }
-.senku-md > *:last-child {
+.hermes-md > *:last-child {
   margin-bottom: 0;
 }
 /* the lede — an answer's opening paragraph reads as a standfirst:
    one step larger and brighter, the editorial "here's the point" */
-.senku-md > p:first-child {
+.hermes-md > p:first-child {
   font-size: 1.075em;
   line-height: 1.72;
   color: #f2f2f4;
 }
-.senku-md p {
+.hermes-md p {
   margin: 0.72em 0;
   text-wrap: pretty;
 }
-.senku-md h1,
-.senku-md h2,
-.senku-md h3,
-.senku-md h4 {
+.hermes-md h1,
+.hermes-md h2,
+.hermes-md h3,
+.hermes-md h4 {
   font-weight: 650;
   letter-spacing: -0.01em;
   color: #fdfcfa;
   margin: 1.35em 0 0.5em;
   line-height: 1.3;
 }
-.senku-md h1 {
+.hermes-md h1 {
   font-size: 1.35em;
 }
-.senku-md h2 {
+.hermes-md h2 {
   font-size: 1.26em;
 }
-.senku-md h3 {
+.hermes-md h3 {
   font-size: 1.08em;
 }
 /* the brand enters the reading surface: a golden eureka spark —
    a tiny rotated amber diamond — leads every section header */
-.senku-md h2::before,
-.senku-md h3::before {
+.hermes-md h2::before,
+.hermes-md h3::before {
   content: "";
   display: inline-block;
   width: 0.5em;
@@ -873,57 +873,57 @@
   background: linear-gradient(135deg, #fde68a, #f59e0b);
   box-shadow: 0 0 10px rgba(251, 191, 36, 0.35);
 }
-.senku-md h3::before {
+.hermes-md h3::before {
   width: 0.4em;
   height: 0.4em;
   margin-right: 0.45em;
   opacity: 0.75;
   box-shadow: 0 0 8px rgba(251, 191, 36, 0.25);
 }
-.senku-md ul,
-.senku-md ol {
+.hermes-md ul,
+.hermes-md ol {
   margin: 0.65em 0;
   padding-left: 1.45em;
 }
-.senku-md ul {
+.hermes-md ul {
   list-style: disc;
 }
-.senku-md ol {
+.hermes-md ol {
   list-style: decimal;
 }
-.senku-md li {
+.hermes-md li {
   margin: 0.32em 0;
   text-wrap: pretty;
 }
 /* amber markers — quieter than the section sparks (the diamonds are
    THE accent moment; the bullets only carry the rhythm) */
-.senku-md li::marker {
+.hermes-md li::marker {
   color: #b08a3e;
   font-weight: 600;
 }
-.senku-md ul ul li::marker {
+.hermes-md ul ul li::marker {
   color: #7d6430;
 }
 /* definition lead-ins — models write `**Term** — detail` bullets
    constantly; the leading strong reads as the term being defined */
-.senku-md strong {
+.hermes-md strong {
   color: #fbf8f2;
   font-weight: 640;
 }
-.senku-md li > strong:first-child {
+.hermes-md li > strong:first-child {
   color: #f3ead2;
 }
-.senku-md a {
+.hermes-md a {
   color: #fcd34d;
   text-decoration: underline;
   text-decoration-color: rgba(252, 211, 77, 0.3);
   text-underline-offset: 2px;
 }
-.senku-md a:hover {
+.hermes-md a:hover {
   color: #fde68a;
 }
 /* pull-quote — an amber rule and a candle-lit panel */
-.senku-md blockquote {
+.hermes-md blockquote {
   border-left: 3px solid rgba(251, 191, 36, 0.45);
   background: rgba(251, 191, 36, 0.045);
   border-radius: 0 10px 10px 0;
@@ -931,7 +931,7 @@
   margin: 0.85em 0;
   color: #d6d6da;
 }
-.senku-md .senku-inline-code {
+.hermes-md .hermes-inline-code {
   font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 0.86em;
   background: #2a2721;
@@ -941,40 +941,40 @@
   color: #eee1c4;
 }
 /* fenced blocks are rendered by the Markdown component (syntax
-   highlighted) — .senku-code owns the chrome, tokens own the color */
-.senku-md .senku-code {
+   highlighted) — .hermes-code owns the chrome, tokens own the color */
+.hermes-md .hermes-code {
   font-family: var(--font-geist-mono), ui-monospace, monospace;
   scrollbar-width: thin;
   scrollbar-color: #3f3f46 transparent;
 }
-.senku-md .senku-code pre,
-.senku-md .senku-code code {
+.hermes-md .hermes-code pre,
+.hermes-md .hermes-code code {
   background: none;
   border: none;
   padding: 0;
   margin: 0;
 }
-.senku-md .senku-code code {
+.hermes-md .hermes-code code {
   display: block;
   overflow-x: auto;
 }
-.senku-md table {
+.hermes-md table {
   border-collapse: collapse;
   margin: 0.85em 0;
   width: 100%;
   font-size: 0.92em;
 }
-.senku-md th,
-.senku-md td {
+.hermes-md th,
+.hermes-md td {
   border: 1px solid #2f2f33;
   padding: 0.55em 0.85em;
   text-align: left;
 }
-.senku-md th {
+.hermes-md th {
   background: #222224;
   font-weight: 600;
 }
-.senku-md hr {
+.hermes-md hr {
   border: none;
   height: 1px;
   margin: 1.5em 0;
@@ -993,14 +993,14 @@
    fully scrolled. Desktop (pointer:fine) shows scrollbars on hover
    already and stays clean. */
 @media (pointer: coarse) {
-  .senku-md .overflow-x-auto {
+  .hermes-md .overflow-x-auto {
     display: flex;
     -webkit-overflow-scrolling: touch;
   }
-  .senku-md .overflow-x-auto > table {
+  .hermes-md .overflow-x-auto > table {
     flex: none;
   }
-  .senku-md .overflow-x-auto::after {
+  .hermes-md .overflow-x-auto::after {
     content: "";
     flex: none;
     position: sticky;
@@ -1017,16 +1017,16 @@
 }
 
 /* thinking mark = our white sparkle logo, animated by
-   .senku-thinking-sparkle (see the keyframes above) */
+   .hermes-thinking-sparkle (see the keyframes above) */
 
 /* Run 30 — reading cues on the timeline: a top fade that appears
    only when the conversation is scrolled (proof there's more above),
    and a jump-to-latest pill that floats in from the bottom edge
    the moment the reader drifts away from the newest message. */
-.senku-timeline {
+.hermes-timeline {
   position: relative;
 }
-.senku-tl-fade {
+.hermes-tl-fade {
   position: absolute;
   inset: 0 0 auto 0;
   height: 44px;
@@ -1036,10 +1036,10 @@
   transition: opacity 220ms ease;
   z-index: 5;
 }
-.senku-tl-fade[data-on="1"] {
+.hermes-tl-fade[data-on="1"] {
   opacity: 1;
 }
-.senku-jump {
+.hermes-jump {
   position: absolute;
   bottom: 14px;
   left: 50%;
@@ -1065,26 +1065,26 @@
     transform 180ms ease;
   z-index: 6;
 }
-.senku-jump[data-on="1"] {
+.hermes-jump[data-on="1"] {
   opacity: 1;
   transform: translate(-50%, 0);
   pointer-events: auto;
 }
-.senku-jump:hover {
+.hermes-jump:hover {
   border-color: rgba(251, 191, 36, 0.45);
   color: #fde68a;
 }
-.senku-jump:focus-visible {
+.hermes-jump:focus-visible {
   outline: 2px solid rgba(251, 191, 36, 0.6);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .senku-tl-fade,
-  .senku-jump {
+  .hermes-tl-fade,
+  .hermes-jump {
     transition: none;
   }
 }
 
-/* pro code blocks: .senku-code chrome, tokens own the color */
+/* pro code blocks: .hermes-code chrome, tokens own the color */
 
 /* voice-mode rules touch */

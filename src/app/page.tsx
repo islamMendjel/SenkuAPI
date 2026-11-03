@@ -1,5 +1,5 @@
-import { SenkuApp } from "@/components/senku/SenkuApp";
+import { HermesApp } from "@/components/hermes/HermesApp";
 
 export default function Home() {
-  return <SenkuApp />;
+  return <HermesApp />;
 }

@@ -1,7 +1,7 @@
 // Run 14 — independently recompute daily/all-time from the DB and
 // compare against what /api/usage serves.
 import { PrismaClient } from "@prisma/client";
-import { usageDayStart, nextUsageDayRollover } from "../src/lib/senku/limiter.ts";
+import { usageDayStart, nextUsageDayRollover } from "../src/lib/hermes/limiter.ts";
 const db = new PrismaClient();
 
 const res = await fetch("http://localhost:3000/api/usage");

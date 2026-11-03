@@ -3,9 +3,9 @@
 //                              (OpenAI-compatible), DB list as fallback
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { APINEX_NON_CHAT_IDS } from "@/lib/senku/constants";
-import { getActiveProvider } from "@/lib/senku/router";
-import { ensureSeed } from "@/lib/senku/seed";
+import { APINEX_NON_CHAT_IDS } from "@/lib/hermes/constants";
+import { getActiveProvider } from "@/lib/hermes/router";
+import { ensureSeed } from "@/lib/hermes/seed";
 
 export const dynamic = "force-dynamic";
 

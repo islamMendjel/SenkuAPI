@@ -1,6 +1,6 @@
 {
-  "name": "SenkuAPI",
-  "short_name": "SenkuAPI",
+  "name": "Hermes",
+  "short_name": "Hermes",
   "description": "Pooled key routing, prompt caching, and OpenAI compatibility.",
   "start_url": "/",
   "scope": "/",

@@ -1,4 +1,4 @@
-// SenkuAPI — client audio utilities.
+// Hermes — client audio utilities.
 // Converts a MediaRecorder blob (webm/ogg/mp4 — browser dependent) into
 // a 16 kHz mono WAV via decodeAudioData + OfflineAudioContext resampling,
 // so the cloud ASR always receives a format it accepts.

@@ -1,8 +1,8 @@
 // POST /api/providers/[id]/keys — add a pooled key to a provider
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { ensureSeed } from "@/lib/senku/seed";
-import { providerView } from "@/lib/senku/serialize";
+import { ensureSeed } from "@/lib/hermes/seed";
+import { providerView } from "@/lib/hermes/serialize";
 
 export const dynamic = "force-dynamic";
 

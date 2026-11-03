@@ -2,7 +2,7 @@
 // DELETE /api/keys/[id] — remove a pooled key
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { providerView } from "@/lib/senku/serialize";
+import { providerView } from "@/lib/hermes/serialize";
 
 export const dynamic = "force-dynamic";
 

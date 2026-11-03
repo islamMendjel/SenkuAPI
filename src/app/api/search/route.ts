@@ -1,7 +1,7 @@
 // POST /api/search — capped web search (≤3 results, ≤300 chars/snippet)
 import { NextRequest, NextResponse } from "next/server";
-import { webSearch } from "@/lib/senku/search";
-import { ensureSeed } from "@/lib/senku/seed";
+import { webSearch } from "@/lib/hermes/search";
+import { ensureSeed } from "@/lib/hermes/seed";
 
 export const dynamic = "force-dynamic";
 

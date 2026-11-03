@@ -2,11 +2,11 @@
 // chats, image gallery count, memory).
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { USER } from "@/lib/senku/constants";
-import { ensureSeed } from "@/lib/senku/seed";
-import { usageSnapshot } from "@/lib/senku/serialize";
-import { listGalleryImages } from "@/lib/senku/gallery";
-import { getMemories } from "@/lib/senku/memory";
+import { USER } from "@/lib/hermes/constants";
+import { ensureSeed } from "@/lib/hermes/seed";
+import { usageSnapshot } from "@/lib/hermes/serialize";
+import { listGalleryImages } from "@/lib/hermes/gallery";
+import { getMemories } from "@/lib/hermes/memory";
 
 export const dynamic = "force-dynamic";
 
