@@ -2403,7 +2403,7 @@ they ship).
 | --- | --- | --- |
 | File uploads with real content understanding (docs, images) | all three | **BEATEN (Run 9)** — we read text/code/PDF (text-layer) and images (pooled VISION pass: OCR + visual description), AND show per-file extraction provenance (chars read, truncation, method) the incumbents hide; unreadable files are honestly not sent |
 | Canvas / artifacts side-panel for long code+docs | ChatGPT, Claude | **MATCHED (Run 17)** — Senku Canvas: per-block Copy/Wrap/Preview controls, sandboxed (script-less, network-less) html/svg/mermaid previews in a split panel; js/py honestly view-only |
-| Scheduled prompts / recurring tasks | ChatGPT, Gemini | OPEN |
+| Scheduled prompts / recurring tasks | ChatGPT, Gemini | **BEATEN (Run 34)** — Rituals: scheduled prompts fire server-side on the gateway's own clock (instrumentation-armed 30s sweep, at-least-once catch-up, Africa/Algiers schedule math via Intl), each landing in its own dedicated chat with the FULL turn pipeline (search, memory, cache, pool dispatch, usage accounting); receipts are honest ("ok · cache hit · 0 tokens"), runs are pausable/resumable/re-runnable, and the chat's own history feeds later runs — ChatGPT's scheduled tasks have no conversation memory and no receipts |
 | Memory across chats | ChatGPT, Claude | OPEN (deliberately: personal gateway, no profile harvesting) |
 | Code interpreter / sandboxed execution | ChatGPT | OPEN |
 | Image generation in-chat | ChatGPT, Gemini | **MATCHED (Run 22)** — the Image Forge: composer mode + dimensions picker, live elapsed-time generating card, lightbox + download, per-image provenance receipts (dims · KB · seconds · 0 pool tokens) and re-roll variant history with per-image receipts — ChatGPT shows none of that honesty |
@@ -3182,3 +3182,113 @@ clipping; splash/sidebar/timeline mark surfaces untouched; the welcome
 screen's full lockup (emblem → greeting → name → pulse → cards) intact.
 Baselines: lint 0 errors (2 pre-existing warnings); tsc 8 pre-existing,
 zero new; console clean; dev.log healthy. Zero TODOs shipped.
+
+## Run 34 — 2026-11-03: THE RITUALS — Hermes works while you sleep
+
+**The directive:** "look at the site first, then innovate… Make one bold
+change that improves conversions or the look and feel, not a small
+tweak… don't make redundant things… cook but not break or downgrade."
+
+**Observe (site, ledger, gap list — before choosing):** live walkthrough
+confirmed the composer/starters/medallion all healthy; the ledger showed
+33 shipped runs; the COMPETITOR GAP LIST still had exactly one
+flagship-grade OPEN gap that is purely additive (zero risk to the
+streaming path): **scheduled prompts** — ChatGPT and Gemini both have
+them, we had nothing recurring. Code interpreter (the other big gap) was
+rejected as invasive to the core dispatch loop; projects/folders as
+organizational, not bold. Scheduled prompts are also the retention
+feature: a gateway that briefs you every morning is a daily habit, not a
+tool you open once.
+
+**Implement (one coherent feature, zero changes to the live turn
+pipeline):**
+
+1. **The engine — `src/lib/hermes/ritual.ts` (new, server-only).**
+   `runRitual(id)` loads the ritual + its dedicated chat, rebuilds the
+   chat's last-20-turn history (attachments included), and calls the
+   UNTOUCHED `runChatTurn` with a no-op emitter: search, memory, the
+   response cache, health-aware key dispatch and usage accounting all
+   run exactly as on a typed turn. The scheduler stamps the persisted
+   user row with `ritualId` POST-turn (the gateway itself is never
+   edited for the happy path), then advances the schedule. Failure
+   handling is deliberate: an errored run still advances its
+   nextRunAt (a broken ritual can never machine-gun the pool every
+   tick) and records `error: …` honestly; "Run now" is the manual
+   retry. In-flight guard on globalThis so a tick and a manual click
+   can never double-fire one ritual.
+2. **The clock.** Schedule fields (daily HH:MM, weekly day+HH:MM,
+   every-N-minutes ≥15) are interpreted in the owner's timezone via
+   `Intl.DateTimeFormat` (no hardcoded offsets — DST-safe for any zone
+   the constants ever name); storage is UTC instants. A run completing
+   AT 08:00 schedules tomorrow's 08:00 (never a second immediate
+   fire); downtime catches up at-least-once because nextRunAt only
+   advances after a run settles; resuming a paused ritual recomputes
+   from now (no stale catch-up burst).
+3. **The scheduler — `src/instrumentation.ts` (new).** Next.js calls
+   `register()` once per server boot; a singleton-guarded, unref'd 30 s
+   interval sweeps due rituals strictly SEQUENTIALLY (oldest-due
+   first) so the pool never takes a parallel burst, plus one catch-up
+   pass 8 s after boot. dev.log proves it live: `[rituals] scheduler
+   armed — 30s tick, clock: Africa/Algiers, cap: 12 rituals`.
+4. **The data model (additive only).** New `Ritual` table (schedule +
+   receipts: lastRunAt, lastStatus, runCount, nextRunAt) with a 1:1 to
+   a dedicated `Chat` (deleting either side cascades the other — zero
+   orphans either direction, verified); nullable `Message.ritualId`
+   stamps fired turns.
+5. **The API.** `GET/POST /api/rituals` (field-by-field
+   `sanitizeRitualInput`, 12-ritual cap), `PATCH /api/rituals/[id]`
+   (pause/resume recomputes, rename follows the chat, re-prompt),
+   `DELETE` (cascade via chat), `POST /api/rituals/[id]/run`
+   (maxDuration 120, honest 409 busy / 404). Bootstrap carries the
+   list; `refreshChats` follows every mutation so Recent stays true.
+6. **The UI.** Sidebar "Rituals" row with live count (sibling of the
+   Images row); ⌘K palette action; the **RitualsDialog** — empty state
+   with three one-click example briefs that fill the form, ritual rows
+   with live countdowns ("next 22:30 · in 6h 50m", 30 s poll + shared
+   useNow clock), schedule summaries, honest last-run receipts, run
+   counts, pause Switch, Run-now, Open-chat, inline title/prompt edit,
+   delete; the create form with a Daily/Weekly/Every-N segmented
+   control, hour/minute/weekday selects, interval number+unit, and a
+   grounded-search Switch (on by default — briefs want sources). In
+   the timeline, fired user bubbles carry an amber "Ritual · <title>"
+   badge (CalendarClock), block-positioned above the text.
+7. **Two correctness fixes found by auditing my own work.** (a) The
+   badge (and the Run 22 Image badge beside it) was `inline-flex`, so
+   message text could flow onto the badge's line — both are now
+   `flex w-fit` blocks. (b) The gateway's cache-hit `TurnResult` never
+   carried `userMessageId` (declared in the contract, omitted from the
+   done object) — callers reading it got undefined on every cached
+   turn; now actually carried, which is what lets cached ritual runs
+   stamp their origin.
+
+**Verify (all live, all passing):**
+- **API E2E:** create → `nextRunAt` = tomorrow 08:00 Africa/Algiers
+  (07:00 UTC — correct daily math); manual run → real generation
+  ("ritual online", 2.4k tokens, glm-5.3), user row stamped, chat
+  persisted; **unattended fire proven**: nextRunAt forced into the
+  past in SQLite (Prisma's INTEGER-ms format) → the 30 s tick fired it
+  on its own → runCount 1→2, receipt "ok · cache hit · 0 tokens" (the
+  honesty extends to zero-cost runs), schedule advanced to tomorrow
+  08:00. DELETE → 0 rituals, 0 orphan chats, 0 orphan messages.
+- **Browser E2E:** sidebar row → dialog; created "Evening science
+  spark" through the real form (Daily 22:30, ungrounded) → live
+  countdown "in 6h 50m"; Run-now from the row → toast "ok · 2.7k
+  tokens · free/glm-5.3"; Open-chat → the fired turn with its Ritual
+  badge + a real generated answer; pause/resume toasts correct;
+  inline edit saved and re-ran with the new prompt; ⌘K "Schedule a
+  ritual" action live with count hint; the cache-hit stamp fix
+  verified by a second run (user msgs: stamped=false → stamped=true).
+- **VLM audits (strict auditor):** chat surface 4/10 (my automation
+  had polluted the test data with literal "--text" flag text — app
+  code was innocent, data recreated clean) → after the badge-block
+  fix and the stamp fix: **8.5/10 desktop** ("badge implementation is
+  exactly to spec") and **8.5/10 mobile 390px** (badge wraps cleanly,
+  composer solid; the flagged "N avatar" is the dev-only Next.js
+  overlay, the disclaimer clip is pre-existing scroll behavior).
+- **Console** clean (HMR logs only); dev.log healthy (scheduler armed,
+  sweeps firing, all 200s — one mid-verification server death was
+  restarted and re-verified).
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc 8
+  pre-existing (the 2 gateway errors are the same pre-existing pair,
+  line-shifted by the 7-line fix comment), zero new. All test rituals
+  and their chats deleted — zero residue. Zero TODOs shipped.

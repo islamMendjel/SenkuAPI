@@ -343,3 +343,81 @@ export function memoryBlock(entries: MemoryEntry[]): string {
     entries.map((e) => `- ${e.content}`).join("\n")
   );
 }
+
+// ── Rituals (Run 34) — scheduled prompts ──────────────────────
+// PURE, CLIENT-SAFE pieces (limits, labels, formatters). The
+// scheduler engine that runs them lives in ./rituals (server-only —
+// it drives the gateway turn pipeline and Prisma).
+
+export type RitualKind = "daily" | "weekly" | "interval";
+
+export const RITUAL_MAX_ENTRIES = 12;
+export const RITUAL_MAX_TITLE_CHARS = 60;
+export const RITUAL_MAX_PROMPT_CHARS = 2000;
+/** Shortest allowed interval ritual — the scheduler ticks every
+ *  30 s, and anything tighter would hammer the key pool. */
+export const RITUAL_MIN_INTERVAL_MIN = 15;
+
+export const RITUAL_WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+/** "Every day · 08:00" | "Every Monday · 09:30" | "Every 6h" — the
+ *  one-line schedule summary every ritual row shows. */
+export function ritualScheduleSummary(r: {
+  kind: string;
+  hour: number;
+  minute: number;
+  weekday: number;
+  intervalMin: number;
+}): string {
+  const hh = String(r.hour).padStart(2, "0");
+  const mm = String(r.minute).padStart(2, "0");
+  if (r.kind === "weekly") {
+    const day = RITUAL_WEEKDAYS[r.weekday] ?? RITUAL_WEEKDAYS[1];
+    return `Every ${day} · ${hh}:${mm}`;
+  }
+  if (r.kind === "interval") {
+    const mins = r.intervalMin;
+    if (mins % 1440 === 0) return `Every ${mins / 1440}d`;
+    if (mins % 60 === 0) return `Every ${mins / 60}h`;
+    return `Every ${mins} min`;
+  }
+  return `Every day · ${hh}:${mm}`;
+}
+
+/** "in 14h 20m" / "in 3d 2h" / "in 45m" — live countdown label for
+ *  a future instant (returns "due" when it already passed). */
+export function ritualCountdown(iso: string, nowMs: number): string {
+  const ms = new Date(iso).getTime() - nowMs;
+  if (!Number.isFinite(ms)) return "";
+  if (ms <= 0) return "due";
+  const totalMin = Math.floor(ms / 60000);
+  const days = Math.floor(totalMin / 1440);
+  const hours = Math.floor((totalMin % 1440) / 60);
+  const mins = totalMin % 60;
+  if (days > 0) return `in ${days}d ${hours}h`;
+  if (hours > 0) return `in ${hours}h ${mins}m`;
+  return `in ${Math.max(1, mins)}m`;
+}
+
+/** Local-clock time for an instant, in the owner's timezone — used
+ *  for "next 07:30" labels so the shown clock matches the schedule. */
+export function ritualLocalTime(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: USER_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(iso));
+  } catch {
+    return "";
+  }
+}

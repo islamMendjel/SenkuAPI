@@ -18,6 +18,7 @@ import {
 } from "react";
 import {
   Brain,
+  CalendarClock,
   Clock,
   Gauge,
   Globe,
@@ -90,11 +91,13 @@ export function CommandPalette({
   onOpenLimiter,
   onManageProviders,
   onOpenMemory,
+  onOpenRituals,
 }: {
   onOpenChange: (v: boolean) => void;
   onOpenLimiter: () => void;
   onManageProviders: () => void;
   onOpenMemory: () => void;
+  onOpenRituals: () => void;
 }) {
   const {
     chats,
@@ -123,6 +126,8 @@ export function CommandPalette({
     flashMessage,
     // Run 28 — live memory count for the "Edit memory" action hint.
     memories,
+    // Run 34 — live ritual count for the "Schedule a ritual" hint.
+    rituals,
   } = useHermes();
   const { toast } = useToast();
 
@@ -283,6 +288,16 @@ export function CommandPalette({
         keywords:
           "gallery images history photos forged pictures collection every all",
         run: () => openGallery(),
+      },
+      {
+        id: "act-rituals",
+        group: "Actions",
+        label: "Schedule a ritual",
+        hint: rituals.length > 0 ? `${rituals.length}` : "new",
+        icon: <CalendarClock className="h-4 w-4" />,
+        keywords:
+          "ritual schedule scheduled recurring daily weekly brief morning alarm cron automate reminder timer while away asleep",
+        run: () => onOpenRituals(),
       },
       {
         id: "act-temp",

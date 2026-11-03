@@ -1,5 +1,5 @@
 // GET /api/bootstrap — one-shot app state (user, providers, limiter,
-// chats, image gallery count, memory).
+// chats, image gallery count, memory, rituals).
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { USER } from "@/lib/hermes/constants";
@@ -7,13 +7,14 @@ import { ensureSeed } from "@/lib/hermes/seed";
 import { usageSnapshot } from "@/lib/hermes/serialize";
 import { listGalleryImages } from "@/lib/hermes/gallery";
 import { getMemories } from "@/lib/hermes/memory";
+import { listRituals } from "@/lib/hermes/ritual";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     await ensureSeed();
-    const [snapshot, chats, galleryImages, memories] = await Promise.all([
+    const [snapshot, chats, galleryImages, memories, rituals] = await Promise.all([
       usageSnapshot(),
       db.chat.findMany({
         where: { isTemporary: false },
@@ -30,6 +31,7 @@ export async function GET() {
       }),
       listGalleryImages(),
       getMemories(),
+      listRituals(),
     ]);
     return NextResponse.json({
       user: USER,
@@ -46,6 +48,10 @@ export async function GET() {
       // system prompt by the gateway; surfaced in the profile menu
       // and the welcome screen as "remembers N things").
       memories,
+      // Run 34 — scheduled prompts (Rituals): the sidebar row badge
+      // and the management dialog both read this list; the dialog
+      // refetches on open + polls while open for live countdowns.
+      rituals,
     });
   } catch (e) {
     console.error("bootstrap failed", e);

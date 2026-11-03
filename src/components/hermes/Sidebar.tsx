@@ -18,6 +18,7 @@ import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   Brain,
+  CalendarClock,
   ChevronRight,
   CircleHelp,
   Download,
@@ -56,10 +57,12 @@ import {
 export function Sidebar({
   onManageProviders,
   onOpenMemory,
+  onOpenRituals,
   onCollapse,
 }: {
   onManageProviders: () => void;
   onOpenMemory: () => void;
+  onOpenRituals: () => void;
   onCollapse: () => void;
 }) {
   const {
@@ -88,6 +91,8 @@ export function Sidebar({
     setInstallPrompt,
     // Run 28 — memory count badge for the profile menu.
     memories,
+    // Run 34 — scheduled prompts (the Rituals row + badge).
+    rituals,
   } = useHermes();
   const { toast } = useToast();
 
@@ -340,6 +345,28 @@ export function Sidebar({
             title={`${imageCount} forged image${imageCount === 1 ? "" : "s"} across all chats`}
           >
             {imageCount}
+          </span>
+        )}
+      </button>
+
+      {/* Run 34 — scheduled prompts. The badge is the honest ritual
+          count (active + paused — the dialog manages them); opening
+          the dialog is a management action, not a view switch. */}
+      <button
+        onClick={() => {
+          closeDrawerOnMobile();
+          onOpenRituals();
+        }}
+        className="mx-3 mt-1.5 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-zinc-200 transition-colors hover:bg-white/5"
+      >
+        <CalendarClock className="h-4 w-4 text-zinc-400" />
+        Rituals
+        {rituals.length > 0 && (
+          <span
+            className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-400"
+            title={`${rituals.filter((r) => r.isActive).length} active of ${rituals.length} scheduled`}
+          >
+            {rituals.length}
           </span>
         )}
       </button>

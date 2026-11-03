@@ -321,6 +321,13 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     const done = {
       type: "done",
       chatId,
+      // Run 34 correctness fix: the cache-hit path persisted the
+      // user message (step 3) but never returned its id — callers
+      // reading TurnResult.userMessageId (the Ritual scheduler
+      // stamps its origin on that row) got undefined on every
+      // cached turn. The field was always in the contract; it is
+      // now actually carried.
+      userMessageId,
       assistantMessageId,
       content: cached.content,
       cached: true,

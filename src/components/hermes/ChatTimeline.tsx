@@ -14,6 +14,7 @@ import {
 } from "@/components/hermes/Typewriter";
 import {
   ArrowLeftRight,
+  CalendarClock,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -170,7 +171,7 @@ function AttachmentChips({ attachments }: { attachments: AttachmentRecord[] }) {
 }
 
 function UserMessage({ message }: { message: UIMessage }) {
-  const { editMessage, streaming } = useHermes();
+  const { editMessage, streaming, rituals } = useHermes();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
 
@@ -216,11 +217,21 @@ function UserMessage({ message }: { message: UIMessage }) {
       <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-white/[0.07] bg-gradient-to-br from-[#34322d] to-[#2a2a29] px-4 py-2.5 text-[15px] leading-relaxed text-zinc-100 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.4)]">
         {message.imageRequest && (
           <span
-            className="mb-1.5 inline-flex items-center gap-1.5 rounded-lg border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200"
+            className="mb-1.5 flex w-fit items-center gap-1.5 rounded-lg border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200"
             title={`Forged at ${IMAGE_SIZES[message.imageRequest.size].dims}`}
           >
             <ImageIcon className="h-3 w-3 shrink-0" aria-hidden />
             Image · {IMAGE_SIZES[message.imageRequest.size].dims}
+          </span>
+        )}
+        {message.ritualId && (
+          <span
+            className="mb-1.5 flex w-fit items-center gap-1.5 rounded-lg border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200"
+            title="Sent by a scheduled ritual — nobody typed this"
+          >
+            <CalendarClock className="h-3 w-3 shrink-0" aria-hidden />
+            Ritual ·{" "}
+            {rituals.find((r) => r.id === message.ritualId)?.title ?? "scheduled"}
           </span>
         )}
         {message.attachments?.length ? (

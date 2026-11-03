@@ -17,6 +17,7 @@ import type {
   ImageSize,
   LimiterStatus,
   ProviderView,
+  RitualView,
   SearchSource,
   TurnStyle,
 } from "@/lib/hermes/types";
@@ -121,6 +122,11 @@ export interface UIMessage {
    *  bubble badge and routes Retry back to the forge (client-only:
    *  failed turns are never persisted, so no column is needed) */
   imageRequest?: { size: ImageSize } | null;
+  /** Run 34 — set on user messages a scheduled ritual fired (the
+   *  scheduler stamps the persisted row). Drives the "Ritual ·
+   *  <title>" badge on the bubble; the title resolves from the
+   *  ritual list, falling back to "Ritual". */
+  ritualId?: string | null;
 }
 
 export interface ChatListItem {
@@ -150,6 +156,11 @@ export interface MemoryItem {
   id: string;
   content: string;
 }
+
+/** Run 34 — one scheduled prompt, as the dialog renders it. The
+ * server owns the shape (RitualView in lib/hermes/types); this
+ * alias keeps the MemoryItem convention for client components. */
+export type RitualItem = RitualView;
 
 interface UserInfo {
   name: string;
@@ -267,6 +278,32 @@ interface HermesState {
   addMemory: (content: string) => Promise<boolean>;
   updateMemory: (id: string, content: string) => Promise<boolean>;
   deleteMemory: (id: string) => Promise<boolean>;
+
+  /** Run 34 — scheduled prompts (Rituals): each fires server-side on
+   *  its own clock and lands in its dedicated chat. The list drives
+   *  the sidebar row badge + the management dialog; the dialog polls
+   *  refreshRituals while open so countdowns/status stay live. */
+  rituals: RitualItem[];
+  refreshRituals: () => Promise<void>;
+  createRitual: (input: {
+    title: string;
+    prompt: string;
+    kind: "daily" | "weekly" | "interval";
+    hour: number;
+    minute: number;
+    weekday: number;
+    intervalMin: number;
+    search: boolean;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  toggleRitual: (id: string, isActive: boolean) => Promise<boolean>;
+  editRitual: (
+    id: string,
+    patch: { title?: string; prompt?: string }
+  ) => Promise<boolean>;
+  deleteRitual: (id: string) => Promise<boolean>;
+  runRitualNow: (
+    id: string
+  ) => Promise<{ ok: boolean; error?: string; status?: string }>;
 
   /** Upload files for extraction — each becomes a chip showing what
    *      the gateway read (or why it couldn't be read). */
@@ -486,6 +523,8 @@ export const useHermes = create<HermesState>((set, get) => ({
               )
               .map((m: MemoryItem) => ({ id: m.id, content: m.content }))
           : [],
+        // Run 34 — scheduled prompts (sidebar badge + dialog).
+        rituals: Array.isArray(data.rituals) ? (data.rituals as RitualItem[]) : [],
         // Every fresh session boots on the default model (glm-5.3).
         model: models.includes(DEFAULT_MODEL)
           ? DEFAULT_MODEL
@@ -793,6 +832,115 @@ export const useHermes = create<HermesState>((set, get) => ({
     }
   },
 
+  // Run 34 — Rituals: scheduled prompts. Thin state mirrors of the
+  // API (the scheduler engine runs server-side); failures return
+  // false / {ok:false} and the caller toasts the honest error.
+  rituals: [],
+  async refreshRituals() {
+    try {
+      const res = await fetch("/api/rituals");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.rituals)) set({ rituals: data.rituals });
+    } catch {
+      // non-fatal — the next poll retries
+    }
+  },
+  async createRitual(input) {
+    try {
+      const res = await fetch("/api/rituals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error || "Could not schedule." };
+      }
+      set((s) => ({
+        rituals: [...s.rituals, data.ritual as RitualItem],
+      }));
+      // The dedicated chat joins Recent like any other (the server
+      // just created it — the list only knows after a refresh).
+      void get().refreshChats();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Could not schedule — network." };
+    }
+  },
+  async toggleRitual(id, isActive) {
+    try {
+      const res = await fetch(`/api/rituals/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      const ritual = data.ritual as RitualItem;
+      set((s) => ({
+        rituals: s.rituals.map((r) => (r.id === id ? ritual : r)),
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  async editRitual(id, patch) {
+    try {
+      const res = await fetch(`/api/rituals/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      const ritual = data.ritual as RitualItem;
+      set((s) => ({
+        rituals: s.rituals.map((r) => (r.id === id ? ritual : r)),
+        // A renamed ritual renames its dedicated chat — keep the
+        // sidebar in step without a full refetch.
+        chats:
+          ritual.title !== s.rituals.find((r) => r.id === id)?.title
+            ? s.chats.map((c) =>
+                c.id === ritual.chatId ? { ...c, title: ritual.title } : c
+              )
+            : s.chats,
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  async deleteRitual(id) {
+    try {
+      const res = await fetch(`/api/rituals/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("delete failed");
+      set((s) => ({ rituals: s.rituals.filter((r) => r.id !== id) }));
+      // The dedicated chat went with it (cascade) — refresh Recent.
+      void get().refreshChats();
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  async runRitualNow(id) {
+    try {
+      const res = await fetch(`/api/rituals/${id}/run`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error || "Run failed." };
+      }
+      // Both lists changed (status + nextRunAt; the chat gained a
+      // turn and its updatedAt bumped it up Recent).
+      void get().refreshRituals();
+      void get().refreshChats();
+      return { ok: true, status: data.status as string | undefined };
+    } catch {
+      return { ok: false, error: "Run failed — network." };
+    }
+  },
+
   newChat: () =>
     // Every new chat resets to the default model (glm-5.3) —
     // the user can then switch freely for that conversation.
@@ -903,6 +1051,11 @@ export const useHermes = create<HermesState>((set, get) => ({
           if (typeof n === "number") set({ imageCount: n });
         })
         .catch(() => {});
+    }
+    // Run 34 — deleting a chat cascades its ritual away (one owner,
+    // zero orphans); re-sync the ritual list so the badge follows.
+    if (!get().streaming) {
+      void get().refreshRituals();
     }
   },
 

@@ -171,3 +171,27 @@ export interface UsageSnapshot {
   providers: ProviderView[];
   limiter: LimiterStatus;
 }
+
+/**
+ * Run 34 — one scheduled prompt, as seen by the client. The chat it
+ * owns is created server-side on schedule; every fire appends the
+ * prompt + the gateway's grounded answer there.
+ */
+export interface RitualView {
+  id: string;
+  title: string;
+  prompt: string;
+  kind: "daily" | "weekly" | "interval";
+  hour: number;
+  minute: number;
+  weekday: number; // 0=Sun .. 6=Sat (weekly only)
+  intervalMin: number; // every N minutes (interval only)
+  search: boolean;
+  isActive: boolean;
+  chatId: string;
+  chatTitle: string;
+  nextRunAt: string; // ISO
+  lastRunAt: string | null; // ISO
+  lastStatus: string | null; // "ok · 1.4k tokens" | "error: …"
+  runCount: number;
+}

@@ -31,6 +31,7 @@ import { CommandPalette } from "@/components/hermes/CommandPalette";
 import { PWARegistrar } from "@/components/hermes/PWARegistrar";
 import { HermesSplash } from "@/components/hermes/HermesSplash";
 import { MemoryDialog } from "@/components/hermes/MemoryDialog";
+import { RitualsDialog } from "@/components/hermes/RitualsDialog";
 
 /** Hover-peek timings (Run 13).
  * OPEN — how long the cursor must rest on the toggle before the
@@ -68,6 +69,7 @@ export function HermesApp() {
   const [limiterOpen, setLimiterOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [ritualsOpen, setRitualsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ── Sidebar hover-peek (transient) vs pinned (store) ──
@@ -213,6 +215,7 @@ export function HermesApp() {
           <Sidebar
             onManageProviders={() => setProvidersOpen(true)}
             onOpenMemory={() => setMemoryOpen(true)}
+            onOpenRituals={() => setRitualsOpen(true)}
             onCollapse={collapseSidebar}
           />
         </div>
@@ -291,6 +294,7 @@ export function HermesApp() {
           onOpenLimiter={() => setLimiterOpen(true)}
           onManageProviders={() => setProvidersOpen(true)}
           onOpenMemory={() => setMemoryOpen(true)}
+          onOpenRituals={() => setRitualsOpen(true)}
         />
       )}
       <TokenLimiterDialog
@@ -301,6 +305,8 @@ export function HermesApp() {
       <ProvidersDialog open={providersOpen} onOpenChange={setProvidersOpen} />
       {/* Run 28 — persistent personal memory manager */}
       <MemoryDialog open={memoryOpen} onOpenChange={setMemoryOpen} />
+      {/* Run 34 — scheduled prompts manager */}
+      <RitualsDialog open={ritualsOpen} onOpenChange={setRitualsOpen} />
 
       {/* Run 27 — PWA plumbing: service-worker registration +
           beforeinstallprompt capture (renders nothing), and the

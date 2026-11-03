@@ -65,6 +65,7 @@ model Chat {
   updatedAt   DateTime @updatedAt
 
   messages Message[]
+  rituals  Ritual[]
 }
 
 model Message {
@@ -108,9 +109,50 @@ model Message {
   // the image card whenever this is set. Re-rolls snapshot earlier
   // images inside `variants` entries (image field there too).
   image        String? // JSON ImageRef
+  // Run 34 — Rituals: set on user messages a scheduled ritual
+  // fired (the scheduler stamps it right after the turn persists
+  // the row). The timeline renders a "Ritual · <title>" badge and
+  // the store resolves the title from the ritual list.
+  ritualId     String?
   createdAt DateTime @default(now())
 
   @@index([chatId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Rituals (Run 34) — scheduled prompts that fire server-side on
+// their own clock, whether or not the app is open. Each ritual
+// owns ONE dedicated chat: every run appends the ritual prompt
+// (user turn, stamped with ritualId) and the gateway's grounded
+// answer there, so briefs accumulate in one readable thread —
+// and the user can reply inside it, giving later runs context.
+//   kind        "daily" (hour:minute) | "weekly" (weekday+time) |
+//               "interval" (every intervalMin minutes)
+//   nextRunAt   UTC instant of the next due fire — the scheduler
+//               loop advances it AFTER each run (at-least-once:
+//   lastStatus  "ok · N tokens" | "error: …" — honest receipt
+// Schedule times are evaluated in the owner's timezone
+// (Africa/Algiers); storage is UTC instants only.
+// ─────────────────────────────────────────────────────────────
+model Ritual {
+  id          String   @id @default(cuid())
+  title       String
+  prompt      String
+  chatId      String   @unique
+  chat        Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  kind        String // "daily" | "weekly" | "interval"
+  hour        Int      @default(8) // daily/weekly — local hour (0-23)
+  minute      Int      @default(0) // daily/weekly — local minute (0-59)
+  weekday     Int      @default(1) // weekly — 0=Sun .. 6=Sat
+  intervalMin Int      @default(1440) // interval — every N minutes
+  search      Boolean  @default(true) // grounded with web search
+  isActive    Boolean  @default(true)
+  nextRunAt   DateTime
+  lastRunAt   DateTime?
+  lastStatus  String?
+  runCount    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // ─────────────────────────────────────────────────────────────
