@@ -2683,3 +2683,94 @@ them. (`/api/search` turned out to be web search — not conversation search.)
 - Welcome + hint render correctly; console clean; dev.log 200s only; lint 0 errors; tsc 8
   pre-existing (none in touched files). Test message sent in a TEMPORARY chat — excluded
   from search by design, nothing to clean up.
+
+## Run 27 — 2026-11-03: THE APP ON YOUR HOME SCREEN — SenkuAPI becomes a full installable PWA (desktop + Android + iOS)
+
+**Directive (verbatim):** "Convert SenkuAPI into a full installable Progressive Web App
+(PWA) for Desktop (Chrome/Brave/Edge) and Mobile (Android/iOS) using the same chatbot logo
+as the official app icon and splash screen emblem." — with exact per-section specs
+(manifest, head/viewport, service worker, branded splash + safe-areas, one-click Install
+App in the profile menu). A first attempt was interrupted mid-flight; this run completed,
+hardened, and verified every piece. Guardrails held: nothing existing was touched except
+additively.
+
+**1. Manifest (`public/manifest.json`) — exact spec, byte-for-byte fields:** name /
+short_name "SenkuAPI", the pooled-routing description, start_url/scope/id "/", display
+"standalone" + display_override ["window-controls-overlay","standalone"],
+orientation "portrait-primary", background/theme #0d0d0d, and the three-icon set.
+
+**2. Icons — the chatbot logo, Chrome-strict.** The app's actual bot mark is
+`/senku-sparkle.png` (562×563 — NOT a legal PWA size). Generated from it, verified by
+pixel-diff against the original: `icon-192.png` (192 any), `icon-512.png` (512 any,
+sparkle on the opaque #0d0d0d tile), `icon-maskable-512.png` (512 maskable — sparkle
+scaled into the safe zone; ring test at r=210/230/250 shows ZERO non-background pixels
+outside it), and `apple-icon.png` (180, opaque tile because iOS home screens black-matte
+transparent icons).
+
+**3. Head + viewport (`layout.tsx`).** manifest link, themeColor #0d0d0d, appleWebApp
+{ capable, black-translucent, "SenkuAPI" }, icons { icon: sparkle, apple: apple-icon }.
+Viewport: `width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover,
+interactive-widget=resizes-content` — the composer stays above the mobile keyboard. Next 16
+only emits the modern `mobile-web-app-capable` for appleWebApp.capable, so the classic
+`apple-mobile-web-app-capable` meta is injected explicitly (belt-and-suspenders for older
+WebKit; modern iOS reads the manifest anyway).
+
+**4. Service worker (`public/sw.js`).** Install → precache manifest + every icon variant,
+skipWaiting. Activate → purge foreign caches, clients.claim(). Fetch → network-first for
+same-origin GETs with cache as offline fallback — and hard bypasses for /api/* (SSE token
+streams must NEVER be buffered), non-GET, cross-origin, and dev HMR. Registered by
+`PWARegistrar` on window load, best-effort (a blocked SW can never break the chat).
+
+**5. Branded launch splash (`SenkuSplash`).** SSR'd at full opacity — the very first paint
+of a cold launch is #0d0d0d + the pulsing sparkle + "SenkuAPI" label (pixel-verified: a
+race screenshot at first paint is 99% uniform #0d0d0d, zero app pixels). Fades with
+`opacity-0 pointer-events-none transition-opacity duration-300` the moment `booted` flips
+(hydration + bootstrap round-trip), then unmounts. 4 s failsafe: a hung network can never
+trap the user behind it. Reduced-motion safe.
+
+**6. Safe areas.** viewport-fit=cover makes env() insets real; TopBar pads
+`env(safe-area-inset-top)`, the sidebar user card and the composer column pad
+`env(safe-area-inset-bottom)` — notch and home-indicator never eat the header, the profile
+card, or the send dock.
+
+**7. One-click "Install App" (profile menu, gamerislam21@gmail.com).** PWARegistrar
+captures `beforeinstallprompt` (preventDefault — Chrome's mini-infobar suppressed, the
+menu owns the UX) and stashes it in the store; `appinstalled` clears it and toasts.
+The menu item appears between Settings and Language ONLY when it can do something:
+real prompt → "Install App" (emerald Download icon); iOS → honest "Add to Home Screen"
+hint with Share-sheet guidance; already standalone or nothing available → hidden (no dead
+UI).
+
+**Verified (all real):**
+- /manifest.json, /sw.js, all 5 icons serve 200 with correct content-types; manifest JSON
+  matches spec field-for-field.
+- Head renders: manifest link, theme-color, BOTH capable metas, black-translucent,
+  apple title/icon, favicon = sparkle, viewport with interactive-widget=resizes-content.
+- SW: registered → activated → controlling; cache `senku-pwa-v1` holds exactly the
+  precache list (+ one font picked up by network-first).
+- **SSE regression (the risk of the whole change): real send through the live SW —**
+  "Reply with exactly: PWA STREAM OK" → GLM 5.3 streamed the reply token-by-token, no
+  buffering, cache-miss path, 1k tokens.
+- Install flow end-to-end with a synthetic beforeinstallprompt: captured
+  (defaultPrevented) → "Install App" appears live in the open menu → click → prompt()
+  called → "Installing SenkuAPI — it will land on your home screen / desktop." toast.
+  One-shot semantics confirmed (item disappears after use — matches Chrome's own event
+  contract). No prompt + not iOS → item correctly absent.
+- iPhone 14 emulation: "Add to Home Screen" item appears, click → correct Share-sheet
+  guidance toast.
+- Mobile 390px: no horizontal scroll, no white flash (0 near-white rows), composer
+  visible, drawer + profile menu work. Desktop 1440px clean.
+- Splash lifecycle: first-paint opaque cover (pixel-proven) → fades on boot → unmounts.
+- lint 0 errors (2 pre-existing warnings); tsc 8 pre-existing (none in touched files);
+  console clean; dev.log healthy.
+
+**Postscript — the hydration false alarm (worth remembering).** Mid-verification the
+console showed a hydration mismatch (Radix `aria-controls` useId skew: server
+`_R_2oue…` vs client `_R_m7ja…`). Isolation test: SW unregistered + caches cleared →
+clean; SW re-registered + 3 consecutive reloads → STILL clean. The skew came from the
+dev server instance itself (continuous phantom Fast-Refresh recompile cycles — that
+instance died minutes later and was restarted; known sandbox environmental issue, seen
+before in the Run 26 preview-blank incident). The SW is provably NOT the cause: network-
+first always returns fresh HTML, and /_next chunks are content-hashed. Test chats from
+the SSE regressions ("Pwa Stream Question", "Pwa Final Confirmation") were deleted via
+the API — zero orphans, user chat list untouched.

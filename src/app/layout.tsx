@@ -59,6 +59,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Next 16 emits only the modern `mobile-web-app-capable` for
+            appleWebApp.capable. WebKit 11.3+ honors the manifest's
+            display:"standalone" for home-screen launches, but the
+            classic prefixed meta is still the belt-and-suspenders
+            signal every iOS PWA guide carries — cheap, harmless, and
+            it makes older Safari treat the home-screen app as
+            full-screen too. */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
