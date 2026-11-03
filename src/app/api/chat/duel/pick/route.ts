@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getActiveProvider } from "@/lib/hermes/router";
 import { ensureSeed } from "@/lib/hermes/seed";
+import { advanceLeaf, currentLeaf, nextChildSlot } from "@/lib/hermes/tree";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,9 @@ export async function POST(req: NextRequest) {
   // Provenance is preserved exactly as the lane reported it — a
   // cache-hit winner records 0 tokens + cached, a cloud-failover
   // winner records no key. The pick never rewrites history.
+  // Run 39 — the winner chains to the duel turn's user row (which is
+  // the displayed leaf — no assistant row landed for this turn yet).
+  const slot = await nextChildSlot(chatId, (await currentLeaf(chatId)).id);
   const msg = await db.message.create({
     data: {
       chatId,
@@ -97,8 +101,11 @@ export async function POST(req: NextRequest) {
       effort: body.effort ?? null,
       altContent: runnerUpContent || null,
       altModel: runnerUpModel || null,
+      parentMessageId: slot.parentMessageId,
+      branchIndex: slot.branchIndex,
     },
   });
+  await advanceLeaf(chatId, msg.id);
 
   await db.chat.update({
     where: { id: chatId },

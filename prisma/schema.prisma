@@ -94,6 +94,11 @@ model Chat {
   // the CHAT's own row on every turn, never from client claims.
   projectId   String?
   project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  // Run 39 — THE FORK: the conversation is a TREE. This is the leaf
+  // (deepest message) of the branch path the timeline currently
+  // displays; the loader walks parents up from here to resolve the
+  // active path. Null falls back to the newest message (linear era).
+  activeLeafId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -147,9 +152,17 @@ model Message {
   // the row). The timeline renders a "Ritual · <title>" badge and
   // the store resolves the title from the ritual list.
   ritualId     String?
+  // Run 39 — THE FORK: message-tree branching. Editing a message
+  // NEVER deletes: the edit becomes a new SIBLING under the same
+  // parent (parentMessageId, branchIndex = sibling count) and the
+  // old turn + all of its descendants stay in the database, one
+  // ‹ › click away. Linear-era rows chain parent-by-createdAt.
+  parentMessageId String?
+  branchIndex     Int     @default(0)
   createdAt DateTime @default(now())
 
   @@index([chatId, createdAt])
+  @@index([chatId, parentMessageId])
 }
 
 // ─────────────────────────────────────────────────────────────

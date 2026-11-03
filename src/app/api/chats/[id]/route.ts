@@ -1,8 +1,9 @@
-// GET    /api/chats/[id] — chat with messages
+// GET    /api/chats/[id] — chat with the ACTIVE branch path
 // PATCH  /api/chats/[id] — rename
 // DELETE /api/chats/[id] — delete
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { resolveActivePath, serializeRow, type TreeRow } from "@/lib/hermes/tree";
 
 export const dynamic = "force-dynamic";
 
@@ -18,20 +19,19 @@ export async function GET(
   if (!chat) {
     return NextResponse.json({ error: "Chat not found" }, { status: 404 });
   }
+  // Run 39 — THE FORK: the chat is a tree; the timeline shows the
+  // ACTIVE PATH (leaf → root walk). ‹ › metadata rides on every
+  // fork node so the switcher renders without extra round-trips.
+  const { messages, ...chatFields } = chat;
+  const rows = messages as unknown as TreeRow[];
+  const resolved = resolveActivePath(rows, chat.activeLeafId);
   return NextResponse.json({
-    ...chat,
+    ...chatFields,
     createdAt: chat.createdAt.toISOString(),
     updatedAt: chat.updatedAt.toISOString(),
-    messages: chat.messages.map((m) => ({
-      ...m,
-      createdAt: m.createdAt.toISOString(),
-      sources: m.sources ? JSON.parse(m.sources) : null,
-      attachments: m.attachments ? JSON.parse(m.attachments) : null,
-      // Regenerate variant history (JSON column → array).
-      variants: m.variants ? JSON.parse(m.variants) : null,
-      // Image Forge reference (JSON column → object, Run 22).
-      image: m.image ? JSON.parse(m.image) : null,
-    })),
+    messages: resolved
+      ? resolved.path.map((r, i) => serializeRow(r, resolved.meta[i]))
+      : [],
   });
 }
 

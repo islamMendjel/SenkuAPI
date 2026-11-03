@@ -171,7 +171,7 @@ function AttachmentChips({ attachments }: { attachments: AttachmentRecord[] }) {
 }
 
 function UserMessage({ message }: { message: UIMessage }) {
-  const { editMessage, streaming, rituals } = useHermes();
+  const { editMessage, switchBranch, streaming, rituals } = useHermes();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
 
@@ -246,13 +246,51 @@ function UserMessage({ message }: { message: UIMessage }) {
       )}
       <div className="mt-1 flex items-center gap-1 hermes-hover-actions">
         <CopyButton text={message.content} />
+        {/* Run 39 — THE FORK: this turn was edited (or sits in an
+            edited group) — flip between the sibling branches; the
+            whole conversation after this point swaps with it. */}
+        {(message.siblingCount ?? 0) > 1 && (
+          <span
+            className="flex shrink-0 items-center gap-0.5"
+            role="group"
+            aria-label="Edit branches"
+          >
+            <button
+              onClick={() => void switchBranch(message.id, -1)}
+              disabled={streaming || (message.siblingPosition ?? 0) === 0}
+              aria-label="Previous edit branch"
+              title="Previous branch — the original wording and its answers"
+              className="flex h-7 w-5 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span
+              className="min-w-[30px] text-center text-[11px] tabular-nums text-zinc-500"
+              aria-live="polite"
+            >
+              {(message.siblingPosition ?? 0) + 1}/{message.siblingCount}
+            </span>
+            <button
+              onClick={() => void switchBranch(message.id, 1)}
+              disabled={
+                streaming ||
+                (message.siblingPosition ?? 0) === (message.siblingCount ?? 1) - 1
+              }
+              aria-label="Next edit branch"
+              title="Next branch — the edited wording and its answers"
+              className="flex h-7 w-5 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </span>
+        )}
         <button
           onClick={() => {
             setDraft(message.content);
             setEditing(true);
           }}
           aria-label="Edit message"
-          title="Edit message"
+          title="Edit message — the original stays as a branch you can flip back to"
           className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100"
         >
           <Pencil className="h-4 w-4" />

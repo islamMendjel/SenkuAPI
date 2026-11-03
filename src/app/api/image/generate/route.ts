@@ -18,6 +18,7 @@ import { deriveTitle } from "@/lib/hermes/gateway";
 import { discardImageFile, forgeImage } from "@/lib/hermes/imagegen";
 import { IMAGE_SIZE_KEYS } from "@/lib/hermes/image-forge";
 import { ensureSeed } from "@/lib/hermes/seed";
+import { advanceLeaf, currentLeaf, nextChildSlot } from "@/lib/hermes/tree";
 import type { ImageRef, ImageSize } from "@/lib/hermes/types";
 
 export const dynamic = "force-dynamic";
@@ -129,10 +130,19 @@ export async function POST(req: NextRequest) {
       });
       chatId = chat.id;
     }
+    // Run 39 — THE FORK: forge turns chain to the displayed leaf.
+    const slot = await nextChildSlot(chatId, (await currentLeaf(chatId)).id);
     const userMsg = await db.message.create({
-      data: { chatId, role: "user", content: prompt },
+      data: {
+        chatId,
+        role: "user",
+        content: prompt,
+        parentMessageId: slot.parentMessageId,
+        branchIndex: slot.branchIndex,
+      },
     });
     userMessageId = userMsg.id;
+    await advanceLeaf(chatId, userMsg.id);
   } else if (!temporary && chatId) {
     // Re-roll: the user row already exists — keep the chat fresh only.
     await db.chat.update({
@@ -186,6 +196,12 @@ export async function POST(req: NextRequest) {
             },
           ]
         : null;
+    // Run 39 — the forged image chains to its user row (or the leaf
+    // on re-rolls) and becomes the displayed branch's new leaf.
+    const slot = await nextChildSlot(
+      chatId,
+      userMessageId ?? (await currentLeaf(chatId)).id
+    );
     const msg = await db.message.create({
       data: {
         chatId,
@@ -197,12 +213,15 @@ export async function POST(req: NextRequest) {
         tokens: 0,
         cached: false,
         image: JSON.stringify(image),
+        parentMessageId: slot.parentMessageId,
+        branchIndex: slot.branchIndex,
         ...(variants
           ? { variants: JSON.stringify(variants), variantIndex: variants.length - 1 }
           : {}),
       },
     });
     assistantMessageId = msg.id;
+    await advanceLeaf(chatId, msg.id);
     await db.chat.update({
       where: { id: chatId },
       data: { updatedAt: new Date() },

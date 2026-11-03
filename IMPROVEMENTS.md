@@ -3722,3 +3722,110 @@ stops the recorded stream's tracks, so returning the same stream
 object makes the SECOND recording start with dead tracks. The first
 browser test failed for exactly this reason; the app code was right,
 the harness was wrong.
+
+## Run 39 — 2026-11-03: THE FORK — editing a message no longer destroys the conversation
+
+**The directive:** the H.E.R.M.E.S. architecture spec — "persistent
+tree branching… Do NOT delete messages when an edit occurs. Instead,
+create a new child message with parent_message_id pointing to the
+common ancestor, incrementing branch_index." The spec's literal
+Python/FastAPI tree is the OLD SenkuAPI layout; every capability it
+lists already exists in the Next.js incarnation (v1 OpenAI route,
+circuit-breaker dispatch, 3-tier limiter, <think> normalization,
+memory, PWA) — the round-robin was perfected in Run 35, so the ONE
+flagship gap left standing was the spec's own headline: **the
+conversation tree**.
+
+**Observe:** `editMessage` called `/api/chat/truncate`, which UPDATED
+the edited row in place and `deleteMany`'d every message after it —
+the user's question, the model's answer, tokens, provenance, images
+— permanent destruction on every single edit. Regenerate used the
+same primitive for "cleanup". Editing was the most destructive thing
+Hermes could do.
+
+**The change: the conversation is a TREE.**
+
+1. **Schema (additive, `db:push`, zero data loss).** `Message`
+   gains `parentMessageId` + `branchIndex`; `Chat` gains
+   `activeLeafId` — the leaf of the branch path the timeline
+   displays. Linear-era rows are self-healed lazily
+   (`ensureChatTree`) — no migration cliff, no backfill script.
+2. **The tree engine (`lib/hermes/tree.ts`).** One source of truth:
+   `resolveActivePath` (leaf→root walk, ‹ k/N › metadata per fork),
+   `nextChildSlot` (parent + branchIndex for every create),
+   `advanceLeaf` (the displayed branch follows new turns),
+   `deepestDescendant` (a flipped branch shows its latest
+   continuation), `serializeRow` (one wire shape).
+3. **All 7 persistence sites wired** — chat turns (user + cached +
+   streamed assistant), duel turns (user + winner pick), image
+   forges (user + forged image). Every new row chains to the
+   displayed leaf; every persisted row becomes the leaf.
+4. **Edit = FORK.** `/api/chat/fork` replaces truncate: the edit
+   becomes a NEW SIBLING under the same parent (branchIndex =
+   sibling count, attachments carried over) and the original turn —
+   with ALL of its descendants — stays in the database, one ‹ ›
+   click away. The old truncate route is DELETED.
+5. **Regenerate = leaf rewind.** `/api/chat/leaf` moves the leaf
+   back to the user row so the re-streamed answer chains as a
+   SIBLING of the old one — nothing deleted, the old answer stays
+   reachable (and in the variant history, as before).
+6. **Branch switcher.** `POST /api/chat/branch` flips the displayed
+   conversation to a sibling branch and persists the choice
+   (`activeLeafId`) — a reload keeps exactly the branch the user
+   flipped to. The timeline renders the ‹ k/N › control on edited
+   turns (the variant switcher's visual language), and the flip
+   bumps the view epoch so the reading surface remounts fresh.
+
+**The two bugs found and killed during verification** (both real,
+both caught by the E2E):
+
+- **Root-fork corruption.** `ensureChatTree` re-parented legitimate
+  ROOT FORKS (an edit of the FIRST message has parent NULL by
+  design — it's a sibling of the root, not a linear-era orphan),
+  chaining them to the previous row. Fixed with a stateless rule:
+  heal ONLY pure linear-era chats (every row parent-null); any
+  non-null parent means the chat is tree-structured and its null
+  rows are root forks. Same guard in the resolver's read-path
+  fallback. The corrupted test row was repaired.
+- **The phantom branch bubble.** Assistant rows are slot-keyed
+  (`slot-${i}`, the append-only streaming contract) — a branch flip
+  wholesale-replaces the timeline, so the surviving slot instance
+  kept the previous branch's typewriter state and rendered the old
+  answer with a stuck Skip button. Fixed by bumping the view epoch
+  on flips — the same calm remount every navigation gets.
+
+**Verify (browser-proven, not plausible):**
+
+- **No destruction, proven in the database:** a 4-message chat,
+  edit the FIRST message → **6 rows** (was 4): the fork (b1, same
+  parent) + its fresh answer; the original branch's 4 rows all
+  intact. The old flow would have left 2.
+- **Fork switcher both directions:** ‹ from the fork → the exact
+  4-message original path (LUMEN wording, original answers, no
+  NIMBUS anywhere); › from the original → the exact 2-message fork
+  path. Content verified per flip via DOM text.
+- **Persistence:** reload after a flip → the flipped branch is what
+  loads (leaf pointer), switcher position correct.
+- **Continuing an old branch:** a new message sent while viewing
+  the ORIGINAL branch chained to ITS leaf (parent = the old
+  branch's last answer) and the reply answered with the OLD
+  branch's context — 8 rows total, leaf tracked. ChatGPT-parity
+  tree semantics.
+- **Fresh-chat tree wiring:** a brand-new 3-turn chat chains
+  parent-by-parent with dense branchIndexes; the fork of turn 1
+  computes b1/sc2 against the root group.
+- **Server truth:** the resolver, not the client, decides the path;
+  the client never claims parentage (all parent pointers derived
+  server-side from the leaf pointer).
+- Mobile 390 px clean (no overflow, composer usable); console +
+  page errors clean across the whole session; both test chats
+  deleted afterward (28 chats remain, zero orphans).
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc 6
+  pre-existing, zero new. Zero TODOs shipped.
+
+**Sibling notes:** the ⌘K search and export still surface the full
+persisted history (branches included) — every word ever said stays
+findable, which is the point. And the fork switcher deliberately
+reuses the variant switcher's visual language: ‹ k/N › now means
+"versions of the CONVERSATION" on edited turns and "versions of
+this ANSWER" on regenerated ones — one grammar for time travel.

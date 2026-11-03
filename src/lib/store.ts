@@ -127,6 +127,12 @@ export interface UIMessage {
    *  <title>" badge on the bubble; the title resolves from the
    *  ritual list, falling back to "Ritual". */
   ritualId?: string | null;
+  /** Run 39 — THE FORK: where this message sits in its sibling
+   *  group (‹ k/N › switcher). Only fork-group members carry them;
+   *  siblingCount 1 = no switcher. */
+  branchIndex?: number;
+  siblingCount?: number;
+  siblingPosition?: number;
 }
 
 export interface ChatListItem {
@@ -390,6 +396,10 @@ interface HermesState {
   /** Flip a message's active answer to the previous/next variant
       (the ‹ 2/3 › control). Persists for saved chats. */
   navigateVariant: (messageId: string, dir: -1 | 1) => Promise<void>;
+  /** Run 39 — THE FORK: flip the displayed conversation to the
+      previous/next sibling branch at a fork point (the ‹ k/N ›
+      switcher on edited turns). Saved chats only. */
+  switchBranch: (messageId: string, dir: -1 | 1) => Promise<void>;
   stopStreaming: () => void;
 }
 
@@ -1493,18 +1503,25 @@ export const useHermes = create<HermesState>((set, get) => ({
       return;
     }
 
-    const res = await fetch("/api/chat/truncate", {
+    const res = await fetch("/api/chat/fork", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messageId, content: content.trim() }),
     });
     const data = await res.json();
-    if (!Array.isArray(data.messages)) return;
-    const kept: UIMessage[] = data.messages.map((m: UIMessage) => ({
-      ...m,
-      sources: m.sources ?? null,
-      attachments: m.attachments ?? null,
-    }));
+    if (!data.message) return;
+    // Run 39 — THE FORK: the edit became a new sibling branch; the
+    // original turn and its whole subtree stay in the database, one
+    // ‹ › click away. The local timeline continues from the fork row.
+    const fork = data.message as UIMessage;
+    const kept: UIMessage[] = [
+      ...state.messages.slice(0, idx),
+      {
+        ...fork,
+        sources: fork.sources ?? null,
+        attachments: fork.attachments ?? null,
+      },
+    ];
     set({ messages: kept });
     const history: ChatMessageData[] = kept.slice(0, -1).map((m) => ({
       role: m.role,
@@ -1520,6 +1537,39 @@ export const useHermes = create<HermesState>((set, get) => ({
       content: content.trim(),
       persistUser: false,
       attachments: edited?.role === "user" ? edited.attachments ?? [] : [],
+    });
+  },
+
+  // Run 39 — THE FORK: move the displayed conversation to a sibling
+  // branch at a fork point. The server re-resolves the active path
+  // (leaf walk) and persists the choice in chat.activeLeafId, so a
+  // reload keeps exactly the branch the user flipped to.
+  async switchBranch(messageId, dir) {
+    const s = get();
+    if (s.streaming || s.temporary || !s.currentChatId) return;
+    const msg = s.messages.find((m) => m.id === messageId);
+    if (!msg?.siblingCount || msg.siblingCount < 2) return;
+    const res = await fetch("/api/chat/branch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId: s.currentChatId, messageId, dir }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data.messages)) return;
+    set({
+      messages: (data.messages as UIMessage[]).map((m) => ({
+        ...m,
+        sources: m.sources ?? null,
+        attachments: m.attachments ?? null,
+      })),
+      highlightMessageId: null,
+      // Run 39 — the flip wholesale-replaces the timeline; assistant
+      // rows are slot-keyed (append-only contract), so a surviving
+      // instance would keep the previous branch's typewriter state.
+      // Bumping the view epoch remounts the reading surface fresh —
+      // the same calm settle every navigation gets.
+      viewEpoch: s.viewEpoch + 1,
     });
   },
 
@@ -1650,10 +1700,13 @@ export const useHermes = create<HermesState>((set, get) => ({
       ];
       const userPersisted = !userMsg.id.startsWith("u-");
       if (!state.temporary && state.currentChatId && userPersisted) {
-        await fetch("/api/chat/truncate", {
+        // Run 39 — THE FORK: nothing is deleted. The old image row
+        // stays in the tree as a sibling branch; the leaf rewinds to
+        // the user row so the re-forged image chains as its child.
+        await fetch("/api/chat/leaf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messageId: userMsg.id }),
+          body: JSON.stringify({ chatId: state.currentChatId, messageId: userMsg.id }),
         }).catch(() => {});
       }
       set({ messages: msgs.slice(0, userIdx + 1) });
@@ -1695,17 +1748,18 @@ export const useHermes = create<HermesState>((set, get) => ({
           : {}),
       }));
 
-    // Server-truth cleanup: the old answer row must not survive the
-    // re-stream, or a reload would show the same turn twice. The edit
-    // flow's truncate primitive is exactly right — it deletes every
-    // message after the user's (content untouched when omitted).
-    // Local-only turns (temporary / never-persisted user bubble) skip.
+    // Server-truth cleanup, FORK edition: the old answer row must not
+    // stay the displayed leaf, or the re-streamed answer would chain
+    // to IT instead of to the user's turn. The leaf rewinds to the
+    // user row — the old answer stays in the tree as a sibling branch
+    // (and lives on in the variant history too). Local-only turns
+    // (temporary / never-persisted user bubble) skip.
     const userPersisted = !userMsg.id.startsWith("u-");
     if (!state.temporary && state.currentChatId && userPersisted) {
-      await fetch("/api/chat/truncate", {
+      await fetch("/api/chat/leaf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageId: userMsg.id }),
+        body: JSON.stringify({ chatId: state.currentChatId, messageId: userMsg.id }),
       }).catch(() => {});
     }
 
@@ -2055,7 +2109,7 @@ async function streamTurn(
   const controller = new AbortController();
   streamController = controller;
   // Reconciled with the server-assigned id as soon as "meta" arrives so
-  // later edits hit /api/chat/truncate with the real message id.
+  // later edits hit /api/chat/fork with the real message id.
   let currentUserMsgId = userId;
 
   try {

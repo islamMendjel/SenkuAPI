@@ -6,6 +6,7 @@
 import { db } from "@/lib/db";
 import { computeCacheKey, getCached, putCached } from "./cache";
 import { getMemories } from "./memory";
+import { advanceLeaf, currentLeaf, nextChildSlot } from "./tree";
 import {
   attachmentContextBlock,
   sanitizeAttachments,
@@ -267,6 +268,8 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
       });
       chatId = chat.id;
     }
+    // Run 39 — THE FORK: the new turn chains to the displayed leaf.
+    const slot = await nextChildSlot(chatId, (await currentLeaf(chatId)).id);
     const userMsg = await db.message.create({
       data: {
         chatId,
@@ -274,9 +277,12 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
         content: params.content,
         sources: sources.length ? JSON.stringify(sources) : null,
         attachments: attachments.length ? JSON.stringify(attachments) : null,
+        parentMessageId: slot.parentMessageId,
+        branchIndex: slot.branchIndex,
       },
     });
     userMessageId = userMsg.id;
+    await advanceLeaf(chatId, userMsg.id);
   } else if (!params.temporary && params.chatId) {
     chatId = params.chatId;
   }
@@ -308,6 +314,12 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
     );
     let assistantMessageId: string | null = null;
     if (!params.temporary && chatId) {
+      // Run 39 — the cached answer chains to the turn's user row (or
+      // the displayed leaf on regenerate/retry turns).
+      const slot = await nextChildSlot(
+        chatId,
+        userMessageId ?? (await currentLeaf(chatId)).id
+      );
       const msg = await db.message.create({
         data: {
           chatId,
@@ -318,9 +330,12 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
           keyLabel: "cache",
           tokens: 0,
           cached: true,
+          parentMessageId: slot.parentMessageId,
+          branchIndex: slot.branchIndex,
         },
       });
       assistantMessageId = msg.id;
+      await advanceLeaf(chatId, msg.id);
       await db.chat.update({
         where: { id: chatId },
         data: { updatedAt: new Date(), model, provider: provider.name },
@@ -483,6 +498,12 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
   // keeps exactly what streamed before the user pressed stop (and
   // an empty partial creates no ghost message).
   if (!params.temporary && chatId && exec.content.trim()) {
+    // Run 39 — the answer chains to its user row (or the displayed
+    // leaf on regenerate/retry turns) and becomes the new leaf.
+    const slot = await nextChildSlot(
+      chatId,
+      userMessageId ?? (await currentLeaf(chatId)).id
+    );
     const msg = await db.message.create({
       data: {
         chatId,
@@ -495,9 +516,12 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
         tokensEstimated,
         cached: false,
         effort,
+        parentMessageId: slot.parentMessageId,
+        branchIndex: slot.branchIndex,
       },
     });
     assistantMessageId = msg.id;
+    await advanceLeaf(chatId, msg.id);
     await db.chat.update({
       where: { id: chatId },
       data: { updatedAt: new Date(), model, provider: provider.name },
@@ -672,6 +696,8 @@ export async function runDuelTurn(
       });
       chatId = chat.id;
     }
+    // Run 39 — THE FORK: the duel turn chains to the displayed leaf.
+    const slot = await nextChildSlot(chatId, (await currentLeaf(chatId)).id);
     const userMsg = await db.message.create({
       data: {
         chatId,
@@ -679,9 +705,12 @@ export async function runDuelTurn(
         content: params.content,
         sources: sources.length ? JSON.stringify(sources) : null,
         attachments: attachments.length ? JSON.stringify(attachments) : null,
+        parentMessageId: slot.parentMessageId,
+        branchIndex: slot.branchIndex,
       },
     });
     userMessageId = userMsg.id;
+    await advanceLeaf(chatId, userMsg.id);
   } else if (!params.temporary && params.chatId) {
     chatId = params.chatId;
   }
