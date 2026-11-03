@@ -514,19 +514,26 @@ export function Sidebar({
       className="flex h-full w-[264px] shrink-0 flex-col bg-[#212121]"
       aria-label="Sidebar"
     >
-      {/* Brand row */}
+      {/* Brand row — Run 40: the unified ecosystem identity. The
+          mark, the full name, and what the system IS now: a gateway,
+          an agent, an autonomous core. */}
       <div className="flex h-12 items-center gap-2 px-3">
         <Image
           src="/hermes-mark.png"
-          alt="Hermes logo"
+          alt="H.E.R.M.E.S. logo"
           width={875}
           height={1124}
           className="h-[26px] w-[26px] shrink-0 object-contain object-center"
           priority
         />
-        <span className="truncate text-[15px] font-semibold text-white">
-          Hermes
-        </span>
+        <div className="min-w-0 leading-tight">
+          <div className="truncate text-[14px] font-semibold tracking-[0.08em] text-white">
+            H.E.R.M.E.S.
+          </div>
+          <div className="truncate text-[8.5px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+            Gateway · Agent · Autonomous Core
+          </div>
+        </div>
         <div className="ml-auto flex items-center gap-0.5">
           <button
             aria-label="Search chats"

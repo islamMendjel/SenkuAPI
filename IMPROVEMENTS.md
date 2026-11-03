@@ -3829,3 +3829,170 @@ findable, which is the point. And the fork switcher deliberately
 reuses the variant switcher's visual language: ‹ k/N › now means
 "versions of the CONVERSATION" on edited turns and "versions of
 this ANSWER" on regenerated ones — one grammar for time travel.
+
+## Run 40 — 2026-11-03: THE EXOCORE — Hermes answers to any CLI, runs tools, and speaks
+
+**The directive:** the ecosystem shift — "a working OpenAI/Anthropic
+`/v1/chat/completions` bridge for Claude Code with 4-key APInex
+round-robin; a built-in Agent Tool-Calling loop; a dedicated Jev AI
+Decision Adapter (`free/jev-1.13` via `POST /v1/decisions`); voice
+streaming primitives" — plus the rebrand to H.E.R.M.E.S. with the
+"Gateway · Agent · Autonomous Core" sub-badge. Spec paths named a
+Python/FastAPI repo (`app/main.py`, port 8000); the OBSERVE pass
+mapped every requirement onto the real Next.js gateway instead of
+building a parallel stack — and found real gaps to build, not
+re-runs of Run 35/38/39 work.
+
+**What was built (five subsystems, one ring):**
+
+1. **The OpenAI bridge (`/v1/chat/completions`, `/v1/models`)** —
+   root-level namespace (no `/api`), OPTIONS+permissive CORS,
+   optional `HERMES_BRIDGE_TOKEN` lock (unset = open, the
+   personal-gateway default). `stream:true` forwards the provider's
+   SSE bytes VERBATIM (upstream chunk ids and vendor fields like
+   `sla_metrics` survive) with `X-Accel-Buffering: no` and pull
+   backpressure — a slow client throttles the provider. A parallel
+   accountant silently bills usage + feeds the 24h cache without
+   touching the wire. JSON mode aggregates the same stream.
+   temperature/max_tokens/tools ride through untouched; the client's
+   system prompt is never rewritten (a CLI's prompt is its own).
+   The legacy `/api/v1/chat/completions` route is untouched.
+2. **The Anthropic bridge (`/v1/messages`)** — Claude Code speaks
+   content BLOCKS and tool_use/tool_result; this is the honest
+   translator (system blocks, tools, tool_choice, stop_sequences →
+   OpenAI; tool_calls → tool_use blocks; delta.content →
+   content_block_delta; partial tool_calls → input_json_delta), JSON
+   and SSE both. Unknown "claude-*" model ids map to the pool
+   default with an honest `X-Hermes-Model-Mapped` header. No cache
+   here by design (CLI prompts are huge and unique) — but breaker,
+   rotation and accounting all apply.
+3. **The pre-stream circuit breaker, shared** — `withKeyFailover`
+   runs BOTH bridges over the SAME pickKey ring (Orrery cursor) and
+   keyhealth breaker the UI uses: a key that fails BEFORE the first
+   streamed byte (401/403 auth, 429, 5xx) is breaker-marked and the
+   request transparently retries the next key (≤3 retries), then the
+   Z.ai cloud answers last. Client disconnect aborts upstream mid-
+   stream; partials are billed, never cached.
+4. **The agent loop** — `lib/agent/orchestrator.ts` (ReAct: strict
+   JSON tool calls, ≤8 turns, forced synthesis) over
+   `dispatchCompletion`, so every agent turn rides rotation/breaker/
+   limiter/cache. Tool registry (`lib/agent/tools/`): `web_search`
+   (the existing grounded DDG pipeline — 3 snippets, ≤300 chars,
+   HTML stripped), `calculator` (whitelist-validated math evaluator
+   — names whitelisted, charset locked, no raw eval), `system_status`
+   (live pool truth: provider, per-key health, cursor, usage,
+   counts), `jev_decide` (the adapter below). `/api/agent/run` is the
+   raw SSE endpoint; `/api/chat/send?agent=true` is the FIRST-CLASS
+   chat path (`runAgentTurn` in `lib/hermes/agent-turn.ts`):
+   project+memory context, fork-safe persistence (nextChildSlot/
+   advanceLeaf — the tree cannot tell an agent turn from a normal
+   one), one key-attributed UsageEvent per model call, monthly
+   accumulator rolls, honest tokensEstimated. UI: `/agent` slash
+   command arms one agentic send; the trace (⚙ running… → ✓ result)
+   streams live into the assistant bubble and persists with the
+   answer, reload-stable.
+5. **The Jev adapter + `/api/decisions`** — probed the real
+   upstream twice: `free/jev-1.13` on `/v1/decisions` is a
+   fixed-taxonomy ENSEMBLE ASSESSOR (answers: assessment/is_safe/
+   category{coding|general|analysis|creative}/complexity 0-4), NOT
+   an option ranker — and it is indeed 400-rejected on
+   /chat/completions (the constants file knew). The adapter returns
+   the full verdict honestly: `decisionBasis: "option-match" |
+   "ensemble-classification"`, taxonomy probabilities as the
+   ranking, never a guessed decision. Keys for /decisions are drawn
+   from the APInex pool through the same ring+breaker (attempts: 3
+   in the live proof — the two dead keys scanned past).
+
+**The bold change — H.E.R.M.E.S. VOICE (the JARVIS layer):** a
+full-screen voice conversation overlay (`VoiceInterface.tsx`) on a
+golden orb in the composer. Tap to talk (the Run 33/38 recorder with
+its deferred onstop flush), tap to send (transcribe → sendMessage,
+the direct pipeline), the reply is then SPOKEN ALOUD via the cloud
+TTS (`/api/voice/speak`, LRU-cached) — playback end returns to
+listening, hands-free both directions. Interrupt anytime (tap stops
+playback; tap during thinking stops generation); a liveness effect
+guarantees "thinking" can never trap the overlay; muted mode
+continues the conversation silently; ESC closes everything;
+reduced-motion gets a calm orb. Store-side: `voiceMode` +
+`voiceReply` (set when a non-duel turn completes while the overlay
+is on, consumed when playback starts). The dictation mic and every
+existing capability stay exactly where they were.
+
+**Branding:** sidebar lockup is now "H.E.R.M.E.S." over
+"GATEWAY · AGENT · AUTONOMOUS CORE"; layout metadata and the PWA
+manifest carry the same identity. Tree-branching, token badges and
+every settings modal untouched.
+
+**Two real bugs found and killed during verification:**
+
+- **The double-emit tool call.** The agent's first live run leaked
+  raw JSON as the final answer: the model emitted its
+  `{"tool": …}` object TWICE (two lines), and the parser's
+  `lastIndexOf("}")` slice parsed neither. `extractToolCall` now
+  tolerates the messy reality — whole reply, line-per-object, first
+  string-aware balanced `{…}` block, code fences stripped — before
+  conceding it's prose.
+- **The suspended fake mic (harness, but instructive).** The
+  headless browser's oscillator AudioContext starts SUSPENDED
+  without a user gesture → MediaRecorder encoded ZERO chunks →
+  every orb tap bounced off the empty-recording guard. The app
+  handled it correctly (no phantom send, back to listening); the
+  harness needed `ctx.resume()`. Documented as the third browser-
+  harness lesson after Run 38's dead-track and const-redeclare
+  traps.
+
+**Verify (all live, all curl/browser-proven):**
+
+- `GET /v1/models` → the exact spec shape (both canonical ids
+  present, owned_by apinex) + the full live roster.
+- `POST /v1/chat/completions` JSON → valid OpenAI choices; the
+  X-Hermes-Key header walked the ring across sequential calls;
+  identical prompts hit the 24h cache (X-Hermes-Failover: cache,
+  0 tokens).
+- `POST … stream:true` → 14 verbatim provider frames + [DONE],
+  upstream ids preserved, `text/event-stream` + `X-Accel-Buffering:
+  no` + CORS exact.
+- **Rotation proof with an honest finding:** only 2 of 4 keys
+  served — direct probes showed Pool key #2/#3 answer HTTP 402
+  "Daily check-in required" (an account action on apinex.bond, not
+  a gateway bug). The ring cursor math checks out; the bridge and
+  the decision adapter scanned past the 402s transparently — zero
+  drops visible to any client. THE USER MUST CHECK IN on keys #2
+  and #3 to restore the full 4-key ring.
+- `POST /v1/messages` JSON → Anthropic message shape (claude-* id
+  mapped, header honest); SSE → the full grammar (message_start →
+  content_block_start/delta → content_block_stop → message_delta
+  with usage → message_stop); tools → `tool_use` block with parsed
+  input + `stop_reason:"tool_use"`; tool_result round-trip → final
+  text answer. Claude Code's whole protocol is served.
+- `POST /api/decisions` → structured ensemble verdict (decision
+  basis, taxonomy ranking, uncertainty/safety/complexity, servedBy
+  key+attempts).
+- `POST /api/agent/run` → turn 1 requests calculator → executes
+  (239481 × 34839 = 8,343,278,559, exact) → turn 2 final answer.
+  system_status reports "APInex, 2/4 keys healthy" honestly;
+  web_search returns a dated, sourced F1 result.
+- **Browser E2E:** `/agent` popover → armed pill → send → live
+  trace "✓ calculator(1283971 * 93812) = 120,451,887,452" → final
+  answer with provenance line; reload → the chat persists and
+  renders identically (fork-safe rows verified in the database:
+  user parent-null, assistant chained, two key-attributed
+  UsageEvents). Voice orb: overlay opens, mic starts, caption
+  states correct; two real sends through the overlay each fetched
+  `/api/voice/speak` (the speak-back wiring) and returned to
+  listening; overlay close leaves a clean timeline; mobile 390px
+  fits with no horizontal overflow. Console + page errors clean
+  (one pre-existing Radix aria-controls dev-only diff on the model
+  popover, untouched this run).
+- Test chats deleted afterward (28 remain, zero orphans).
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc
+  exactly the 6 pre-existing, zero new. Zero TODOs shipped.
+
+**Sibling notes:** the bridge deliberately does NOT reuse
+`tryProviderStream` — verbatim passthrough (tool-call deltas,
+vendor fields) and aggregation need different readers, so the
+shared pieces are the ring, the breaker and the accounting, not the
+reader. And the agent's assistant bubble renders its own trace as
+plain Markdown lines (`⚙ / ✓`) above the answer — the same visual
+grammar the timeline already uses for provenance, one more line of
+honesty per tool run.

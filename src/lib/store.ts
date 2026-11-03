@@ -230,6 +230,26 @@ interface HermesState {
     }
   ) => Promise<void>;
 
+  /** Run 40 — THE EXOCORE: /agent arms the NEXT message for the
+   *  agentic pipeline (tools: web search, calculator, gateway status,
+   *  Jev arbitration) instead of the plain gateway stream. One-shot —
+   *  consumed by the send it arms. */
+  agentArmed: boolean;
+  armAgent: () => void;
+  /** Run a task through the agent loop: live tool trace in the
+   *  assistant bubble, persisted exactly like every normal turn
+   *  (fork-safe tree, key-attributed usage, honest estimates). */
+  runAgent: (content: string) => Promise<void>;
+
+  /** Run 40 — H.E.R.M.E.S. VOICE: the full-screen voice conversation
+   *  overlay. While on, every completed non-duel reply is handed to
+   *  the overlay through voiceReply so it is SPOKEN aloud; the
+   *  overlay consumes the reply once playback starts. */
+  voiceMode: boolean;
+  setVoiceMode: (on: boolean) => void;
+  voiceReply: { id: string; content: string } | null;
+  consumeVoiceReply: () => void;
+
   currentChatId: string | null;
   messages: UIMessage[];
   streaming: boolean;
@@ -456,6 +476,10 @@ export const useHermes = create<HermesState>((set, get) => ({
   effort: "medium",
   imageMode: false,
   imageSize: "square",
+  // Run 40 — agent + voice defaults.
+  agentArmed: false,
+  voiceMode: false,
+  voiceReply: null,
 
   currentChatId: null,
   messages: [],
@@ -1231,6 +1255,13 @@ export const useHermes = create<HermesState>((set, get) => ({
   async sendMessage(content) {
     const state = get();
     if (state.streaming || !content.trim()) return;
+    // Run 40 — an armed /agent send routes through the agentic
+    // pipeline instead (the arm is consumed by exactly this send).
+    if (state.agentArmed) {
+      set({ agentArmed: false });
+      await get().runAgent(content);
+      return;
+    }
     // A duel still awaiting its pick? The primary lane becomes the
     // canonical answer so the next turn's history has one voice.
     const pending = [...state.messages].reverse().find((m) => m.duel && !m.duelPicked);
@@ -1282,6 +1313,206 @@ export const useHermes = create<HermesState>((set, get) => ({
       // Run 37 — a chat born now is stamped with the draft project.
       projectId: s2.temporary ? null : s2.draftProjectId,
     });
+  },
+
+  /** Run 40 — arm the agent for the next message (the /agent slash
+   *  command). Arming the agent disarms Image mode (a forged image is
+   *  never an agentic task). */
+  armAgent() {
+    set((s) => ({ agentArmed: true, imageMode: false }));
+  },
+
+  /** Run 40 — the agentic send. Optimistic bubbles like every send,
+   *  live tool trace streamed into the assistant bubble, server-side
+   *  persistence identical to a normal turn (fork-safe tree rows,
+   *  per-model-call UsageEvents, honest estimates). */
+  async runAgent(content) {
+    const text = content.trim();
+    const state0 = get();
+    if (state0.streaming || !text) return;
+    // A duel still awaiting its pick? Resolve it first — the next
+    // turn's history must have one voice.
+    const pendingDuel = [...state0.messages].reverse().find((m) => m.duel && !m.duelPicked);
+    if (pendingDuel) {
+      await get().pickDuelWinner(pendingDuel.id, "a");
+    }
+    const s2 = get();
+    const temporary = s2.temporary;
+    const userId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const assistantId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const hadChat = s2.currentChatId != null;
+
+    set({
+      streaming: true,
+      galleryOpen: false,
+      messages: [
+        ...s2.messages,
+        { id: userId, role: "user" as const, content: text },
+        {
+          id: assistantId,
+          role: "assistant" as const,
+          content: "",
+          streaming: true,
+          model: "hermes-agent",
+        },
+      ],
+    });
+
+    const history: ChatMessageData[] = s2.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    const updateAssistant = (patch: Partial<UIMessage>) =>
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === assistantId ? { ...m, ...patch } : m
+        ),
+      }));
+
+    const trace: string[] = [];
+    let sawTerminal = false;
+    const controller = new AbortController();
+    streamController = controller;
+
+    try {
+      const res = await fetch("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatId: temporary ? null : s2.currentChatId,
+          history,
+          content: text,
+          temporary,
+          persistUser: true,
+          agent: true,
+          model: s2.model,
+          projectId: temporary ? null : s2.draftProjectId,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "The agent run failed.");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t.startsWith("data:")) continue;
+          const payload = t.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(payload) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+
+          if (ev.type === "meta") {
+            if (typeof ev.chatId === "string" && ev.chatId && !temporary) {
+              set({ currentChatId: ev.chatId as string });
+            }
+            if (typeof ev.userMessageId === "string") {
+              const serverId = ev.userMessageId as string;
+              set((s) => ({
+                messages: s.messages.map((m) =>
+                  m.id === userId ? { ...m, id: serverId } : m
+                ),
+              }));
+            }
+          } else if (ev.type === "agent_tool") {
+            if (ev.ok === null || ev.ok === undefined) {
+              trace.push(`⚙ ${String(ev.tool)} — running…`);
+            } else {
+              if (trace.length && trace[trace.length - 1].startsWith("⚙ ")) trace.pop();
+              trace.push(`${ev.ok ? "✓" : "✗"} ${String(ev.summary ?? ev.tool)}`);
+            }
+            updateAssistant({ content: trace.join("  \n") });
+          } else if (ev.type === "agent_trace") {
+            // The server's authoritative trace — overwrites the local
+            // mirror so the bubble never drifts from the ledger.
+            const arr = Array.isArray(ev.trace) ? (ev.trace as string[]) : null;
+            if (arr) {
+              trace.length = 0;
+              trace.push(...arr);
+              updateAssistant({ content: trace.join("  \n") });
+            }
+          } else if (ev.type === "done") {
+            sawTerminal = true;
+            const finalContent =
+              typeof ev.content === "string" && ev.content
+                ? ev.content
+                : trace.join("  \n");
+            updateAssistant({
+              id: (ev.assistantMessageId as string) ?? assistantId,
+              content: finalContent,
+              streaming: false,
+              model: (ev.model as string) ?? "hermes-agent",
+              tokens: (ev.tokens as number) ?? 0,
+              tokensEstimated: ev.tokensEstimated === true,
+              servedBy: (ev.servedBy as string) ?? null,
+              keyLabel: (ev.keyLabel as string) ?? null,
+              provider: (ev.providerName as string) ?? null,
+              phase: null,
+            });
+            if (typeof ev.chatId === "string" && ev.chatId && !temporary && !hadChat) {
+              set({ currentChatId: ev.chatId as string });
+            }
+          } else if (ev.type === "error") {
+            sawTerminal = true;
+            updateAssistant({
+              streaming: false,
+              error: String(ev.message ?? "The agent run failed."),
+              phase: null,
+            });
+          }
+        }
+      }
+      if (!sawTerminal) {
+        updateAssistant({ streaming: false, phase: null });
+      }
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === "AbortError") {
+        updateAssistant({ streaming: false, phase: null });
+      } else {
+        updateAssistant({
+          streaming: false,
+          error: err.message || "The agent run failed.",
+          content: "",
+          phase: null,
+        });
+      }
+    } finally {
+      streamController = null;
+      set({ streaming: false });
+      if (!temporary) {
+        await get().refreshChats();
+        if (!hadChat) {
+          // A brand-new agent chat — refine its derived title too.
+          const freshId = get().currentChatId;
+          if (freshId) void refineTitle(set, freshId);
+        }
+      }
+      void get().refreshUsage();
+    }
+  },
+
+  setVoiceMode(on) {
+    set(on ? { voiceMode: true } : { voiceMode: false, voiceReply: null });
+  },
+
+  consumeVoiceReply() {
+    set({ voiceReply: null });
   },
 
   /** Run 22 — Image Forge send. Mirrors sendMessage's lifecycle:
@@ -2349,6 +2580,13 @@ async function streamTurn(
                 ? { variants, variantIndex: opts.regenVariants!.length }
                 : {}),
             });
+            // Run 40 — H.E.R.M.E.S. VOICE: while the voice overlay is
+            // on, every completed non-duel reply is queued to be
+            // SPOKEN (duel replies wait for the user's pick instead).
+            const st = get();
+            if (st.voiceMode && finalContent.trim()) {
+              set({ voiceReply: { id: assistantId, content: finalContent } });
+            }
           }
         } else if (ev.type === "error") {
           sawTerminal = true;

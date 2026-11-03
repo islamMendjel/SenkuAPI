@@ -1,12 +1,15 @@
 {
-  "name": "Hermes",
-  "short_name": "Hermes",
-  "description": "Pooled key routing, prompt caching, and OpenAI compatibility.",
+  "name": "H.E.R.M.E.S. \u2014 Gateway \u00b7 Agent \u00b7 Autonomous Core",
+  "short_name": "H.E.R.M.E.S.",
+  "description": "Pooled key routing, an OpenAI + Anthropic CLI bridge, an agentic tool loop, Jev AI arbitration and a voice core.",
   "start_url": "/",
   "scope": "/",
   "id": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
   "orientation": "portrait-primary",
   "background_color": "#0d0d0d",
   "theme_color": "#0d0d0d",

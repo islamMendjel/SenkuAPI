@@ -14,15 +14,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Hermes — Personal AI Gateway",
+  title: "H.E.R.M.E.S. — Gateway · Agent · Autonomous Core",
   description:
-    "Personal AI gateway with pooled key routing, 3-tier token pacing, prompt caching and OpenAI compatibility.",
-  applicationName: "Hermes",
+    "Personal AI gateway with pooled key routing, 3-tier token pacing, prompt caching, an OpenAI + Anthropic CLI bridge, an agentic tool loop, Jev AI arbitration and a voice core.",
+  applicationName: "H.E.R.M.E.S.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Hermes",
+    title: "H.E.R.M.E.S.",
   },
   icons: {
     // The brand mark itself (welcome / sidebar / timeline / splash all

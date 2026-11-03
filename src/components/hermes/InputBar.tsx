@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
+  Bot,
   Brain,
   ChevronDown,
   Check,
@@ -76,6 +77,11 @@ const SLASH_COMMANDS = [
     cmd: "image",
     icon: ImageIcon,
     desc: "Forge an image from your next message",
+  },
+  {
+    cmd: "agent",
+    icon: Bot,
+    desc: "Agentic task — tools, web search, calculator, Jev arbitration",
   },
 ] as const;
 type SlashCommand = (typeof SLASH_COMMANDS)[number];
@@ -264,6 +270,10 @@ export function InputBar() {
     turnStyle,
     setTurnStyle,
     stagePastedSnippet,
+    // Run 40 — THE EXOCORE
+    agentArmed,
+    armAgent,
+    setVoiceMode,
   } = useHermes();
   const { toast } = useToast();
 
@@ -511,6 +521,12 @@ export function InputBar() {
         description:
           "Image mode on — your next message becomes a generated image (30–90s).",
       });
+    } else if (c.cmd === "agent") {
+      armAgent();
+      toast({
+        description:
+          "Agent mode armed — your next message runs through the tool loop (web search, calculator, gateway status, Jev).",
+      });
     }
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -578,6 +594,29 @@ export function InputBar() {
               type="button"
               onClick={() => setTurnStyle(null)}
               aria-label={`Disable ${turnStyle} mode`}
+              className="flex h-5 w-5 items-center justify-center rounded-full text-amber-200/70 transition-colors hover:bg-white/10 hover:text-amber-100"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Run 40 — armed agent pill (/agent). Removable; consumed by
+          the next send, which routes through the agentic loop. */}
+      {agentArmed && (
+        <div className="mb-2 flex items-center gap-2 pl-1.5">
+          <div
+            className="flex items-center gap-1.5 rounded-full border border-amber-300/40 bg-amber-300/10 py-1 pl-2.5 pr-1 text-[12px] text-amber-200"
+            aria-live="polite"
+          >
+            <Bot className="h-3.5 w-3.5" aria-hidden />
+            Agent mode
+            <span className="text-amber-200/55">· next message runs tools</span>
+            <button
+              type="button"
+              onClick={() => useHermes.setState({ agentArmed: false })}
+              aria-label="Disable agent mode"
               className="flex h-5 w-5 items-center justify-center rounded-full text-amber-200/70 transition-colors hover:bg-white/10 hover:text-amber-100"
             >
               <X className="h-3 w-3" />
@@ -1313,6 +1352,17 @@ export function InputBar() {
               </span>
             ) : (
               <>
+                <button
+                  onClick={() => setVoiceMode(true)}
+                  aria-label="Open voice conversation"
+                  title="H.E.R.M.E.S. Voice — talk hands-free, hear the replies spoken aloud"
+                  className="group flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105"
+                >
+                  <span
+                    aria-hidden
+                    className="block h-[22px] w-[22px] rounded-full bg-gradient-to-br from-amber-200 via-amber-400 to-orange-500 shadow-[0_0_10px_rgba(251,191,36,0.45)] transition-shadow group-hover:shadow-[0_0_16px_rgba(251,191,36,0.7)]"
+                  />
+                </button>
                 <button
                   onClick={onMicClick}
                   aria-label="Start voice message"

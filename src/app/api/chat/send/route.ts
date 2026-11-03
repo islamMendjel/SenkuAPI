@@ -2,6 +2,7 @@
 // Events: meta → sources? → delta* → done | error
 // Duel turns: meta → duel_start → delta*(lane-tagged) → lane_done×2 → done(duel)
 import { NextRequest } from "next/server";
+import { runAgentTurn } from "@/lib/hermes/agent-turn";
 import { sanitizeAttachments } from "@/lib/hermes/attachments";
 import { runChatTurn, runDuelTurn } from "@/lib/hermes/gateway";
 import { ensureSeed } from "@/lib/hermes/seed";
@@ -29,6 +30,12 @@ interface SendBody {
   /** Attachment records from the composer (already extracted —
    *  rebuilt field-by-field by sanitizeAttachments). */
   attachments?: unknown;
+  /** Run 40 — THE EXOCORE: agent turns run the ReAct tool loop
+   *  (web_search / calculator / system_status / jev_decide) with
+   *  full chat persistence — the tree cannot tell them apart. */
+  agent?: boolean;
+  /** Cap on the agent's model turns (1-8). */
+  maxTurns?: number;
 }
 
 /** Only the three dial positions are valid — anything else is
@@ -99,7 +106,26 @@ export async function POST(req: NextRequest) {
         }
       };
       try {
-        if (body.duel === true) {
+        if (body.agent === true) {
+          await runAgentTurn({
+            chatId: body.chatId ?? null,
+            history,
+            content,
+            model: body.model ?? "",
+            temporary: body.temporary === true,
+            persistUser: body.persistUser !== false,
+            projectId: typeof body.projectId === "string" && body.projectId
+              ? body.projectId
+              : null,
+            attachments,
+            maxTurns:
+              typeof body.maxTurns === "number" && Number.isFinite(body.maxTurns)
+                ? Math.round(body.maxTurns)
+                : undefined,
+            signal: clientSignal,
+            emit: (ev) => emit(ev as Record<string, unknown>),
+          });
+        } else if (body.duel === true) {
           await runDuelTurn({
             chatId: body.chatId ?? null,
             history,

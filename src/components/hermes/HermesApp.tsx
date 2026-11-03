@@ -30,6 +30,7 @@ import { ProvidersDialog } from "@/components/hermes/ProvidersDialog";
 import { CommandPalette } from "@/components/hermes/CommandPalette";
 import { PWARegistrar } from "@/components/hermes/PWARegistrar";
 import { HermesSplash } from "@/components/hermes/HermesSplash";
+import { VoiceInterface } from "@/components/hermes/VoiceInterface";
 import { MemoryDialog } from "@/components/hermes/MemoryDialog";
 import { RitualsDialog } from "@/components/hermes/RitualsDialog";
 import { ProjectsDialog } from "@/components/hermes/ProjectsDialog";
@@ -66,6 +67,8 @@ export function HermesApp() {
     // button mounted — an in-flight forge is always abortable).
     galleryOpen,
     streaming,
+    // Run 40 — the voice conversation overlay
+    voiceMode,
   } = useHermes();
   const [limiterOpen, setLimiterOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
@@ -323,6 +326,11 @@ export function HermesApp() {
         onOpenChange={setProjectEditorOpen}
         editing={editingProject}
       />
+
+      {/* Run 40 — H.E.R.M.E.S. VOICE: the full-screen conversation
+          overlay (talk → send → spoken replies). Mounted last so it
+          covers every dialog; ESC / ✕ close it cleanly. */}
+      {voiceMode && <VoiceInterface />}
 
       {/* Run 27 — PWA plumbing: service-worker registration +
           beforeinstallprompt capture (renders nothing), and the
