@@ -42,7 +42,7 @@ import {
   type PreviewLang,
 } from "@/lib/senku/canvas-langs";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { SENKU_FORGE } from "@/lib/senku/forge-theme";
 
 /** Restrictive CSP for every preview document: everything external
  *  is denied; scripts are doubly blocked (CSP + sandbox). */
@@ -413,7 +413,7 @@ function CodeView({ language, code }: { language: string; code: string }) {
       <div className="senku-scroll min-h-0 flex-1 overflow-auto">
         <SyntaxHighlighter
           language={language.toLowerCase() || "text"}
-          style={oneDark}
+          style={SENKU_FORGE}
           PreTag="div"
           customStyle={{
             background: "transparent",

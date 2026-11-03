@@ -1050,11 +1050,11 @@
   height: 34px;
   padding: 0 13px;
   border-radius: 999px;
-  border: 1px solid rgba(63, 63, 70, 0.9);
-  background: rgba(32, 32, 36, 0.92);
+  border: 1px solid #3a3122;
+  background: rgba(38, 32, 25, 0.92);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  color: #d4d4d8;
+  color: #ddd6c8;
   font-size: 12px;
   font-weight: 500;
   box-shadow: 0 8px 28px -8px rgba(0, 0, 0, 0.6);

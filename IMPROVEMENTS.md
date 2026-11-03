@@ -3001,3 +3001,68 @@ typographic system, the same scale of boldness as Run 29 but on the retention su
   (examples/ ×2, skills/ ×1, attachments.ts ×3, gateway.ts ×2), zero new; console clean through
   cold start, streaming, scrolling and every interaction; dev.log healthy. The run's test chat
   ("Reverse Proxy API Pool", created during verification) was deleted via the API — zero orphans.
+
+## Run 31 — 2026-11-03: THE FORGE THEME — the code surface finally joins the brand
+
+**Directive (verbatim):** "Brilliant job, again look at the site first, then innovate. Think
+about the user experience and think outside the box. Make one bold change that improves
+conversions or the look and feel, not a small tweak. Use any tool you have. You must cook and
+ship a change every time." + standing guardrails (no redundancy, no downgrades).
+
+**Observe first.** Run 30 gilded the prose; this run pointed the same VLM critic at the one
+surface it never touched — **the code blocks** — with a real streamed TSX answer on screen. The
+verdict: **4/10 — "the prose says we care about every pixel; the code says we installed the
+default theme."** The stock oneDark ramp was measured in the live DOM to be a COOL spectrum —
+purple keywords (#c678dd), cyan functions (#61afef) — pasted into an amber product, on a neutral
+#0d0d10 container. For a developer gateway the code block is arguably the most on-brand surface
+possible. That became the target.
+
+**The change — a custom in-house syntax theme ("forge"), `src/lib/senku/forge-theme.ts`:**
+
+- **The ramp** (Ayu-warm lineage, tuned to the brand): functions carry the signature amber
+  #f2b64e (the most-read tokens get the brand color), keywords warm orange #ef9f4f, strings
+  sage #b0c85a, types/classes muted teal #72c0d4, numbers/booleans/null soft violet #bd9ae6,
+  JSX attributes gold #dbb063, comments warm gray-olive italic, punctuation/operators muted
+  sand, plain identifiers warm ivory #e8e2d2 — over a candle-lit warm-black stage.
+- **Engineering the theme correctly:** react-syntax-highlighter's style resolution was
+  reverse-engineered from source (create-element.js: power-set permutations of non-token
+  classes, merged in class order, with theme-key classes filtered out of the DOM class string)
+  and Prism's alias mechanism verified empirically by SSR (bun script rendering through the
+  exact same Prism import). TSX-specific token names (control-flow, nil, generic-function,
+  maybe-class-name, dom…) are declared explicitly so the ramp never depends on the alias du
+  jour; deliberately UNdeclared names (property-access) fall through to the token they
+  accompany. The full ramp was audited mechanically before it ever hit the browser:
+  functions→amber, keywords→orange, strings→sage, types→teal, literals→violet, comments→olive,
+  `window`→ivory.
+- **The chrome joins the forge:** container #0d0d10/neutral border → warm-black #17130e with an
+  amber-tinted #332a1a border, candle-lit header #1e1812, language badge raised to
+  amber-200/60. Both consumers swapped — the timeline CodeBlock AND the Canvas source view.
+- **Calibration passes from the follow-up audits:** punctuation darkened a clear step below
+  ivory (#93876f), comments deepened (#6f6657), strings brightened and teal lifted so the
+  three mid-tiers separate by VALUE, not hue alone (colorblind-safe); the Run 30 "Latest" jump
+  pill re-tinted warm (the critic flagged its cool neutrality twice).
+
+**Verified (all real, through the live UI):**
+- **The same VLM critic, post-redesign:** **4 → 8.5/10** — "brand-integrated, scannable,
+  professional… one design system with two registers (light prose / dark code); the code block
+  should be dark, but *warm* dark." Final gate: "Ship it" — punctuation pass, three-value tier
+  pass, two-accent system pass, container anchoring pass.
+- **Geometry/live-DOM:** block bg rgb(23,19,14), border rgb(51,42,26), header rgb(30,24,18),
+  badge amber-200/60, base ivory rgb(232,226,210); the live token dump matches the designed
+  ramp exactly (functions rgb(242,182,78) amber, keywords rgb(239,159,79), strings
+  rgb(176,200,90), types rgb(114,192,212), literals rgb(189,154,230), punctuation
+  rgb(147,135,111)).
+- **Interactions:** Wrap toggles (aria-pressed false→true→false); Copy clicks without errors
+  (the "Code copied" state couldn't be confirmed only because the headless browser denies
+  clipboard writes — `permissions.query` says granted but writeText throws; environmental,
+  real users have clipboards); Preview button correctly ABSENT for tsx (not a previewable
+  language — html/svg/mermaid/js/py only, by design) and PRESENT for javascript — clicking it
+  opened the Canvas, whose Code tab renders the full forge ramp (orange `function`, amber
+  `greet`, sand punctuation, sage template string).
+- **Regressions:** mobile 390×844 — zero horizontal overflow, block + badge intact; welcome
+  screen fully intact after New chat (sparkle field, 4 cards); the older chats untouched.
+- **Hygiene:** lint 0 errors (2 pre-existing warnings); tsc 8 errors — all pre-existing
+  (examples/ ×2, skills/ ×1, attachments.ts ×3, gateway.ts ×2), zero new; console clean
+  through cold start, streaming, canvas, and every interaction; dev.log healthy (one mid-run
+  dev-server death — the known sandbox issue — restarted cleanly). The run's test chat
+  ("TypeScript LocalStorage Hook") was deleted via the API — zero orphans.

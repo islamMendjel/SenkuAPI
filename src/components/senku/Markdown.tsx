@@ -17,7 +17,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy, PanelRight, WrapText } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { SENKU_FORGE } from "@/lib/senku/forge-theme";
 import { useSenku } from "@/lib/store";
 import { canonicalPreviewLang } from "@/lib/senku/canvas-langs";
 
@@ -82,10 +82,12 @@ const CodeBlock = memo(function CodeBlock({
   const label = language || "code";
 
   return (
-    <div className="senku-code my-3 overflow-hidden rounded-xl border border-zinc-800 bg-[#0d0d10]">
-      {/* sticky header: language badge · wrap · preview-in-Tools · copy */}
-      <div className="sticky top-0 z-10 flex h-9 items-center justify-between gap-1 border-b border-zinc-800/80 bg-[#141417] pl-3.5 pr-2">
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-zinc-500">
+    <div className="senku-code my-3 overflow-hidden rounded-xl border border-[#332a1a] bg-[#17130e]">
+      {/* sticky header: language badge · wrap · preview-in-Tools · copy.
+          Run 31 — the chrome joins the forge: warm-black stage,
+          candle-lit header, amber language badge. */}
+      <div className="sticky top-0 z-10 flex h-9 items-center justify-between gap-1 border-b border-[#2b2314] bg-[#1e1812] pl-3.5 pr-2">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-amber-200/60">
           {label}
         </span>
         <div className="flex items-center gap-0.5">
@@ -135,7 +137,7 @@ const CodeBlock = memo(function CodeBlock({
 
       <SyntaxHighlighter
         language={resolvePrismLang(language)}
-        style={oneDark}
+        style={SENKU_FORGE}
         PreTag="div"
         wrapLongLines={wrapped}
         customStyle={{
