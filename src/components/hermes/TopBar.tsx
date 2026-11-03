@@ -11,8 +11,12 @@
 // Run 13: the sidebar toggle also PEEKS the sidebar open on hover
 // (no click needed) — the shell decides the peek/pin lifecycle,
 // this component only reports cursor enter/leave and clicks.
+//
+// Run 37 — the project pill: when the chat you're writing belongs
+// to a project (or the next one will — draft mode), an amber folder
+// chip names it, so scope is always visible where you type.
 
-import { Clock, EyeOff, PanelLeft, Search } from "lucide-react";
+import { Clock, EyeOff, Folder, PanelLeft, Search } from "lucide-react";
 import { useHermes } from "@/lib/store";
 import { formatCompact, pillLabel } from "@/lib/hermes/format";
 import {
@@ -62,7 +66,23 @@ export function TopBar({
   onOpenLimiter: () => void;
   onOpenPalette: () => void;
 }) {
-  const { temporary, toggleTemporary, limiter, booted } = useHermes();
+  const { temporary, toggleTemporary, limiter, booted, chats, currentChatId, draftProjectId, projects } =
+    useHermes();
+
+  // Run 37 — the project whose scope the composer is writing in:
+  // the CURRENT chat's own project, or the draft project for a
+  // chat that doesn't exist yet. Null → no pill (Recent).
+  const activeProjectName = (() => {
+    if (draftProjectId && !currentChatId) {
+      return projects.find((p) => p.id === draftProjectId)?.name ?? null;
+    }
+    if (currentChatId) {
+      const chat = chats.find((c) => c.id === currentChatId);
+      if (!chat?.projectId) return null;
+      return projects.find((p) => p.id === chat.projectId)?.name ?? null;
+    }
+    return null;
+  })();
 
   const unlimited = limiter?.unlimited ?? false;
   // Run 14: the pill's headline number is the DAILY usage — it resets
@@ -113,14 +133,41 @@ export function TopBar({
       </div>
 
       {/* Temporary chat indicator (centered) */}
-      {temporary && (
+      {temporary ? (
         <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-[13px] font-medium text-zinc-400">
           Temporary Chat
         </span>
+      ) : (
+        activeProjectName && (
+          <span className="pointer-events-none absolute left-1/2 flex max-w-[40vw] -translate-x-1/2 items-center gap-1.5 text-[13px] font-medium text-amber-200/90">
+            <Folder className="h-3.5 w-3.5 shrink-0 text-amber-300/80" />
+            <span className="truncate">{activeProjectName}</span>
+          </span>
+        )
       )}
 
-      {/* right: temporary toggle + token pill */}
+      {/* right: project chip (mobile-visible echo of the centered
+          name), temporary toggle + token pill */}
       <div className="flex items-center gap-2">
+        {/* Run 37 — project scope chip. On phones the centered name
+            would fight the toggle for room, so the chip carries it. */}
+        {activeProjectName && !temporary && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex h-8 max-w-[26vw] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 text-[12.5px] text-amber-200 sm:hidden">
+                <Folder className="h-3.5 w-3.5 shrink-0 text-amber-300/80" />
+                <span className="truncate">{activeProjectName}</span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              className="max-w-[220px] border border-zinc-700 bg-[#262627] text-center text-[12px] leading-relaxed text-zinc-300"
+            >
+              This chat runs inside the project — its instructions
+              steer every answer here.
+            </TooltipContent>
+          </Tooltip>
+        )}
         {/* Temporary chat — visible on/off state; the tooltip spells
             out the consequence BEFORE the user flips the switch. */}
         <Tooltip>

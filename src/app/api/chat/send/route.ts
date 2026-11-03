@@ -23,6 +23,9 @@ interface SendBody {
   effort?: EffortLevel;
   /** One-shot response style (/code, /concise) — normal turns only. */
   style?: TurnStyle;
+  /** Run 37 — the project a NEW chat is born into (the composer's
+   *  draft project). Only read when chatId is absent. */
+  projectId?: string | null;
   /** Attachment records from the composer (already extracted —
    *  rebuilt field-by-field by sanitizeAttachments). */
   attachments?: unknown;
@@ -107,6 +110,9 @@ export async function POST(req: NextRequest) {
             temporary: body.temporary === true,
             persistUser: body.persistUser !== false,
             effort: normalizeEffort(body.effort),
+            projectId: typeof body.projectId === "string" && body.projectId
+              ? body.projectId
+              : null,
             attachments,
             signal: clientSignal,
             emit: (ev) => emit(ev as Record<string, unknown>),
@@ -122,6 +128,9 @@ export async function POST(req: NextRequest) {
             persistUser: body.persistUser !== false,
             effort: normalizeEffort(body.effort),
             style: normalizeStyle(body.style),
+            projectId: typeof body.projectId === "string" && body.projectId
+              ? body.projectId
+              : null,
             attachments,
             signal: clientSignal,
             emit: (ev) => emit(ev as Record<string, unknown>),

@@ -344,6 +344,31 @@ export function memoryBlock(entries: MemoryEntry[]): string {
   );
 }
 
+// ── Projects (Run 37) — per-project instructions ───────────────
+// PURE, CLIENT-SAFE limits + the prompt block builder. The server
+// routes own persistence; this stays importable anywhere.
+
+export const PROJECT_LIMIT = 12;
+export const PROJECT_NAME_MAX = 60;
+export const PROJECT_INSTRUCTIONS_MAX = 4000;
+
+/** The system-prompt block carrying a project's instructions.
+ *  Appended AFTER the memory block (project scope is narrower
+ *  than personal memory, so it may specialize it) and BEFORE the
+ *  live clock. An empty-instructions project yields "" — the
+ *  prompt stays byte-identical and old cache entries still hit. */
+export function projectBlock(name: string, instructions: string): string {
+  const body = instructions.trim();
+  if (!body) return "";
+  return (
+    `PROJECT — "${name}". The current chat belongs to this project. ` +
+    "Follow these project instructions in every answer of this " +
+    "conversation; they specialize (but do not erase) the general " +
+    "contract above:\n" +
+    body
+  );
+}
+
 // ── Rituals (Run 34) — scheduled prompts ──────────────────────
 // PURE, CLIENT-SAFE pieces (limits, labels, formatters). The
 // scheduler engine that runs them lives in ./rituals (server-only —

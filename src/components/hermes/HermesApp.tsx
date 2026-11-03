@@ -16,7 +16,7 @@
 // transition instead of popping in.
 
 import { useEffect, useRef, useState } from "react";
-import { useHermes } from "@/lib/store";
+import { useHermes, type ProjectItem } from "@/lib/store";
 import { Sidebar } from "@/components/hermes/Sidebar";
 import { RightRail } from "@/components/hermes/RightRail";
 import { CanvasPanel } from "@/components/hermes/CanvasPanel";
@@ -32,6 +32,7 @@ import { PWARegistrar } from "@/components/hermes/PWARegistrar";
 import { HermesSplash } from "@/components/hermes/HermesSplash";
 import { MemoryDialog } from "@/components/hermes/MemoryDialog";
 import { RitualsDialog } from "@/components/hermes/RitualsDialog";
+import { ProjectsDialog } from "@/components/hermes/ProjectsDialog";
 
 /** Hover-peek timings (Run 13).
  * OPEN — how long the cursor must rest on the toggle before the
@@ -71,6 +72,13 @@ export function HermesApp() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [ritualsOpen, setRitualsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Run 37 — the project editor dialog (null → create mode).
+  const [projectEditorOpen, setProjectEditorOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<ProjectItem | null>(null);
+  const openProjectEditor = (project: ProjectItem | null) => {
+    setEditingProject(project);
+    setProjectEditorOpen(true);
+  };
 
   // ── Sidebar hover-peek (transient) vs pinned (store) ──
   // `peek` opens the panel while the cursor is around; `sidebarOpen`
@@ -216,6 +224,7 @@ export function HermesApp() {
             onManageProviders={() => setProvidersOpen(true)}
             onOpenMemory={() => setMemoryOpen(true)}
             onOpenRituals={() => setRitualsOpen(true)}
+            onEditProject={openProjectEditor}
             onCollapse={collapseSidebar}
           />
         </div>
@@ -295,6 +304,7 @@ export function HermesApp() {
           onManageProviders={() => setProvidersOpen(true)}
           onOpenMemory={() => setMemoryOpen(true)}
           onOpenRituals={() => setRitualsOpen(true)}
+          onOpenProjectEditor={openProjectEditor}
         />
       )}
       <TokenLimiterDialog
@@ -307,6 +317,12 @@ export function HermesApp() {
       <MemoryDialog open={memoryOpen} onOpenChange={setMemoryOpen} />
       {/* Run 34 — scheduled prompts manager */}
       <RitualsDialog open={ritualsOpen} onOpenChange={setRitualsOpen} />
+      {/* Run 37 — project editor (create + edit modes) */}
+      <ProjectsDialog
+        open={projectEditorOpen}
+        onOpenChange={setProjectEditorOpen}
+        editing={editingProject}
+      />
 
       {/* Run 27 — PWA plumbing: service-worker registration +
           beforeinstallprompt capture (renders nothing), and the

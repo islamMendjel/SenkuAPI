@@ -13,6 +13,13 @@
 // no page refresh), Export as Markdown / JSON (clean download), and
 // Delete (SQLite wipe). The menu reveals on hover/focus, exactly
 // like the old trash button, but with all three actions.
+//
+// Run 37 — THE PROJECTS: the stub becomes a living section.
+// Projects are folders that carry their own instructions; chats
+// nest under their project, Recent lists only unfiled chats, every
+// chat menu gains “Move to project”, and project rows get their own
+// menu (rename / edit instructions / new chat / delete). Deleting a
+// project keeps its chats (SetNull) — nothing is ever lost.
 
 import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
@@ -25,18 +32,22 @@ import {
   FileJson,
   FileText,
   Folder,
+  FolderInput,
+  FolderPlus,
+  FolderOpen,
   Images,
   Languages,
   LogOut,
   MoreHorizontal,
   PanelLeft,
   Pencil,
+  Plus,
   Search,
   Settings,
   Smartphone,
   Trash2,
 } from "lucide-react";
-import { useHermes, type ChatListItem } from "@/lib/store";
+import { useHermes, type ChatListItem, type ProjectItem } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -44,6 +55,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
@@ -58,11 +72,14 @@ export function Sidebar({
   onManageProviders,
   onOpenMemory,
   onOpenRituals,
+  onEditProject,
   onCollapse,
 }: {
   onManageProviders: () => void;
   onOpenMemory: () => void;
   onOpenRituals: () => void;
+  /** Run 37 — open the project editor (null → create mode). */
+  onEditProject: (project: ProjectItem | null) => void;
   onCollapse: () => void;
 }) {
   const {
@@ -93,6 +110,11 @@ export function Sidebar({
     memories,
     // Run 34 — scheduled prompts (the Rituals row + badge).
     rituals,
+    // Run 37 — THE PROJECTS: list + moves.
+    projects,
+    moveChat,
+    deleteProject,
+    draftProjectId,
   } = useHermes();
   const { toast } = useToast();
 
@@ -134,6 +156,17 @@ export function Sidebar({
 
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [recentOpen, setRecentOpen] = useState(true);
+  // Run 37 — which project rows are expanded (nested chats).
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    new Set()
+  );
+  const toggleProject = (id: string) =>
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // Run 25 — on phones the sidebar is a modal drawer (backdrop
   // md:hidden): any navigation — new chat, open chat, open gallery —
@@ -264,8 +297,217 @@ export function Sidebar({
 
   const filteredChats = useMemo(() => {
     const f = searchFilter.trim().toLowerCase();
-    return f ? chats.filter((c) => c.title.toLowerCase().includes(f)) : chats;
+    const unfiled = chats.filter((c) => !c.projectId);
+    return f ? unfiled.filter((c) => c.title.toLowerCase().includes(f)) : unfiled;
   }, [chats, searchFilter]);
+
+  // Run 37 — chats nested under a project row (membership, not
+  // search — the search box filters Recent, projects stay whole).
+  const chatsOf = (projectId: string) =>
+    chats.filter((c) => c.projectId === projectId);
+
+  /** Run 37 — move a chat between project / Recent, with an honest
+   *  toast either way (the lists refresh through the store). */
+  const doMove = async (chat: ChatListItem, projectId: string | null) => {
+    if (chat.projectId === projectId) return;
+    const result = await moveChat(chat.id, projectId);
+    if (!result.ok) {
+      toast({ variant: "destructive", description: result.error ?? "Move failed." });
+      return;
+    }
+    const target = projectId
+      ? projects.find((p) => p.id === projectId)?.name
+      : null;
+    toast({
+      description: target
+        ? `“${chat.title}” moved to ${target}.`
+        : `“${chat.title}” moved back to Recent.`,
+    });
+  };
+
+  /** Run 37 — delete a project: chats survive (SetNull → Recent). */
+  const doDeleteProject = async (project: ProjectItem) => {
+    const result = await deleteProject(project.id);
+    if (!result.ok) {
+      toast({ variant: "destructive", description: "Delete failed." });
+      return;
+    }
+    toast({
+      description:
+        typeof result.releasedChats === "number" && result.releasedChats > 0
+          ? `Project “${project.name}” deleted — ${result.releasedChats} chat${
+              result.releasedChats === 1 ? "" : "s"
+            } returned to Recent.`
+          : `Project “${project.name}” deleted.`,
+    });
+  };
+
+  // One chat row renderer, reused by Recent AND project nesting
+  // (Run 37). `nested` only shifts the padding — the row, its
+  // inline-rename state and its 3-dot menu (now with the Move
+  // submenu) are identical everywhere a chat can appear.
+  const renderChatRow = (chat: ChatListItem, nested = false) => {
+    if (renamingId === chat.id) {
+      return (
+        <div
+          key={chat.id}
+          className="flex items-center rounded-lg bg-white/10 px-1.5 py-1"
+        >
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                renameDone.current = true;
+                void commitRename(chat.id, renameValue);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                renameDone.current = true;
+                setRenamingId(null);
+              }
+            }}
+            onBlur={() => {
+              if (renameDone.current) return;
+              renameDone.current = true;
+              void commitRename(chat.id, renameValue);
+            }}
+            aria-label="Rename chat"
+            className="h-7 border-zinc-700/80 bg-[#18181b] text-[13px] text-zinc-200 focus-visible:ring-zinc-600"
+          />
+        </div>
+      );
+    }
+    return (
+      <div
+        key={chat.id}
+        className={`group flex items-center rounded-lg transition-colors ${
+          currentChatId === chat.id && !temporary
+            ? "bg-white/10"
+            : "hover:bg-white/5"
+        }`}
+      >
+        <button
+          onClick={() => {
+            closeDrawerOnMobile();
+            void selectChat(chat.id);
+          }}
+          className={`min-w-0 flex-1 truncate py-2 pr-1 text-left text-[13px] text-zinc-300 group-hover:text-zinc-100 ${
+            nested ? "pl-8" : "pl-2.5"
+          }`}
+          title={chat.title}
+        >
+          {chat.title}
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              aria-label={`Chat actions: ${chat.title}`}
+              title="Chat actions"
+              className="mr-1 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 group-hover:flex group-focus-within:flex data-[state=open]:flex [@media(hover:none)]:flex"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="right"
+            align="end"
+            className="w-52 border-zinc-800 bg-[#262627] text-zinc-200"
+          >
+            <DropdownMenuLabel className="truncate text-[11px] tracking-wide text-zinc-500">
+              {chat.title}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator className="bg-zinc-800" />
+            <DropdownMenuItem
+              className="gap-2.5 py-2 text-[13px]"
+              onClick={() => startRename(chat)}
+            >
+              <Pencil className="h-4 w-4 text-zinc-400" />
+              Rename
+            </DropdownMenuItem>
+            {/* Run 37 — file the chat: project submenu, with an
+                honest "No project" exit back to Recent. */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="gap-2.5 py-2 text-[13px]">
+                <FolderInput className="h-4 w-4 text-zinc-400" />
+                Move to project
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-48 border-zinc-800 bg-[#262627] text-zinc-200">
+                {projects.length === 0 ? (
+                  <DropdownMenuItem
+                    className="gap-2.5 py-2 text-[13px]"
+                    onClick={() => onEditProject(null)}
+                  >
+                    <FolderPlus className="h-4 w-4 text-amber-300/80" />
+                    New project…
+                  </DropdownMenuItem>
+                ) : (
+                  <>
+                    {projects.map((p) => (
+                      <DropdownMenuItem
+                        key={p.id}
+                        className="gap-2.5 py-2 text-[13px]"
+                        disabled={chat.projectId === p.id}
+                        onClick={() => void doMove(chat, p.id)}
+                      >
+                        {chat.projectId === p.id ? (
+                          <FolderOpen className="h-4 w-4 text-amber-300" />
+                        ) : (
+                          <Folder className="h-4 w-4 text-zinc-400" />
+                        )}
+                        <span className="truncate">{p.name}</span>
+                        {chat.projectId === p.id && (
+                          <span className="ml-auto text-[10.5px] text-zinc-500">
+                            here
+                          </span>
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                    {chat.projectId && (
+                      <>
+                        <DropdownMenuSeparator className="bg-zinc-800" />
+                        <DropdownMenuItem
+                          className="gap-2.5 py-2 text-[13px]"
+                          onClick={() => void doMove(chat, null)}
+                        >
+                          <MoreHorizontal className="h-4 w-4 text-zinc-400" />
+                          No project (Recent)
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </>
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuItem
+              className="gap-2.5 py-2 text-[13px]"
+              onClick={() => void exportChat(chat, "md")}
+            >
+              <FileText className="h-4 w-4 text-zinc-400" />
+              Export as Markdown
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="gap-2.5 py-2 text-[13px]"
+              onClick={() => void exportChat(chat, "json")}
+            >
+              <FileJson className="h-4 w-4 text-zinc-400" />
+              Export as JSON
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-zinc-800" />
+            <DropdownMenuItem
+              className="gap-2.5 py-2 text-[13px] text-red-400 focus:bg-red-500/10 focus:text-red-300"
+              onClick={() => void deleteChat(chat.id)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
 
   return (
     <aside
@@ -386,31 +628,181 @@ export function Sidebar({
 
       {/* Accordions */}
       <nav className="hermes-scroll mt-3 flex-1 overflow-y-auto pb-2">
-        {/* Projects */}
+        {/* Projects — Run 37: folders that carry their own
+            instructions. Rows expand to their nested chats; the
+            header's plus and the empty-state CTA both open the
+            editor dialog. */}
         <div>
-          <button
-            onClick={() => setProjectsOpen(!projectsOpen)}
-            className="flex w-full items-center gap-1.5 px-4 py-1.5 text-[13px] font-medium text-zinc-300 transition-colors hover:text-white"
-            aria-expanded={projectsOpen}
-          >
-            <ChevronRight
-              className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${
-                projectsOpen ? "rotate-90" : ""
-              }`}
-            />
-            Projects
-          </button>
-          {projectsOpen && (
-            <div className="flex items-center gap-2 px-4 py-1.5 pl-[26px]">
-              <Folder className="h-3.5 w-3.5 text-zinc-600" />
-              <span className="text-[13px] italic text-zinc-500">
-                No projects
-              </span>
-            </div>
-          )}
+          <div className="group/projhead flex items-center pr-3">
+            <button
+              onClick={() => setProjectsOpen(!projectsOpen)}
+              className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-1.5 text-[13px] font-medium text-zinc-300 transition-colors hover:text-white"
+              aria-expanded={projectsOpen}
+            >
+              <ChevronRight
+                className={`h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform ${
+                  projectsOpen ? "rotate-90" : ""
+                }`}
+              />
+              Projects
+              {projects.length > 0 && (
+                <span
+                  className="ml-1 rounded-full bg-white/10 px-1.5 py-0.5 text-[10.5px] font-medium tabular-nums text-zinc-400"
+                  title={`${projects.length} project${projects.length === 1 ? "" : "s"}`}
+                >
+                  {projects.length}
+                </span>
+              )}
+            </button>
+            <button
+              aria-label="New project"
+              title="New project"
+              onClick={() => onEditProject(null)}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-amber-300"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {projectsOpen &&
+            (projects.length === 0 ? (
+              <button
+                onClick={() => onEditProject(null)}
+                className="mx-2 mt-0.5 flex w-[calc(100%-1rem)] items-center gap-2 rounded-lg py-2 pl-[26px] pr-2.5 text-left text-[13px] text-zinc-400 transition-colors hover:bg-white/5 hover:text-zinc-200"
+              >
+                <FolderPlus className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                <span className="italic">Create your first project</span>
+              </button>
+            ) : (
+              <div className="mt-0.5 px-2">
+                {projects.map((project) => {
+                  const expanded = expandedProjects.has(project.id);
+                  const nested = chatsOf(project.id);
+                  const isDraftHome =
+                    draftProjectId === project.id && !currentChatId;
+                  return (
+                    <div key={project.id}>
+                      <div
+                        className={`group/proj flex items-center rounded-lg transition-colors ${
+                          isDraftHome
+                            ? "bg-amber-400/10"
+                            : "hover:bg-white/5"
+                        }`}
+                      >
+                        <button
+                          onClick={() => toggleProject(project.id)}
+                          aria-expanded={expanded}
+                          className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-2.5 pr-1 text-left text-[13px] font-medium text-zinc-200"
+                          title={
+                            project.instructions
+                              ? "Has instructions — edits via the ⋯ menu"
+                              : "Folder"
+                          }
+                        >
+                          {expanded ? (
+                            <FolderOpen className="h-4 w-4 shrink-0 text-amber-300/90" />
+                          ) : (
+                            <Folder className="h-4 w-4 shrink-0 text-zinc-400" />
+                          )}
+                          <span className="truncate">{project.name}</span>
+                          {project.instructions.trim() && (
+                            <span
+                              className="h-1 w-1 shrink-0 rounded-full bg-amber-300/90"
+                              title="Carries instructions"
+                            />
+                          )}
+                        </button>
+                        <button
+                          aria-label={`New chat in ${project.name}`}
+                          title={`New chat in ${project.name}`}
+                          onClick={() => {
+                            closeDrawerOnMobile();
+                            newChat(project.id);
+                          }}
+                          className="mr-0.5 hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-amber-300 group-hover/proj:flex group-focus-within/proj:flex"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                        <span
+                          className="mr-1 shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[10.5px] font-medium tabular-nums text-zinc-400"
+                          title={`${project.chatCount} chat${project.chatCount === 1 ? "" : "s"} in this project`}
+                        >
+                          {project.chatCount}
+                        </span>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              aria-label={`Project actions: ${project.name}`}
+                              title="Project actions"
+                              className="mr-1 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 group-hover/proj:flex group-focus-within/proj:flex data-[state=open]:flex [@media(hover:none)]:flex"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            side="right"
+                            align="end"
+                            className="w-48 border-zinc-800 bg-[#262627] text-zinc-200"
+                          >
+                            <DropdownMenuLabel className="truncate text-[11px] tracking-wide text-zinc-500">
+                              {project.name}
+                            </DropdownMenuLabel>
+                            <DropdownMenuSeparator className="bg-zinc-800" />
+                            <DropdownMenuItem
+                              className="gap-2.5 py-2 text-[13px]"
+                              onClick={() => {
+                                closeDrawerOnMobile();
+                                newChat(project.id);
+                              }}
+                            >
+                              <Plus className="h-4 w-4 text-zinc-400" />
+                              New chat here
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="gap-2.5 py-2 text-[13px]"
+                              onClick={() => onEditProject(project)}
+                            >
+                              <Pencil className="h-4 w-4 text-zinc-400" />
+                              Edit instructions
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator className="bg-zinc-800" />
+                            <DropdownMenuItem
+                              className="gap-2.5 py-2 text-[13px] text-red-400 focus:bg-red-500/10 focus:text-red-300"
+                              onClick={() => void doDeleteProject(project)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Delete project
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      {expanded &&
+                        (nested.length === 0 ? (
+                          <p className="px-2 py-1 pl-8 text-[12.5px] italic text-zinc-500">
+                            No chats yet —{" "}
+                            <button
+                              className="text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
+                              onClick={() => {
+                                closeDrawerOnMobile();
+                                newChat(project.id);
+                              }}
+                            >
+                              start one
+                            </button>
+                          </p>
+                        ) : (
+                          <div className="mt-0.5">
+                            {nested.map((chat) => renderChatRow(chat, true))}
+                          </div>
+                        ))}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
         </div>
 
-        {/* Recent */}
+        {/* Recent — unfiled chats only (Run 37); project chats live
+            under their project rows above. */}
         <div className="mt-1">
           <button
             onClick={() => setRecentOpen(!recentOpen)}
@@ -431,109 +823,7 @@ export function Sidebar({
                   {searchFilter ? "No matches" : "No chats yet"}
                 </p>
               ) : (
-                filteredChats.map((chat) =>
-                  renamingId === chat.id ? (
-                    <div
-                      key={chat.id}
-                      className="flex items-center rounded-lg bg-white/10 px-1.5 py-1"
-                    >
-                      <Input
-                        autoFocus
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onFocus={(e) => e.target.select()}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            renameDone.current = true;
-                            void commitRename(chat.id, renameValue);
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            renameDone.current = true;
-                            setRenamingId(null);
-                          }
-                        }}
-                        onBlur={() => {
-                          if (renameDone.current) return;
-                          renameDone.current = true;
-                          void commitRename(chat.id, renameValue);
-                        }}
-                        aria-label="Rename chat"
-                        className="h-7 border-zinc-700/80 bg-[#18181b] text-[13px] text-zinc-200 focus-visible:ring-zinc-600"
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      key={chat.id}
-                      className={`group flex items-center rounded-lg transition-colors ${
-                        currentChatId === chat.id && !temporary
-                          ? "bg-white/10"
-                          : "hover:bg-white/5"
-                      }`}
-                    >
-                      <button
-                        onClick={() => {
-                          closeDrawerOnMobile();
-                          void selectChat(chat.id);
-                        }}
-                        className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px] text-zinc-300 group-hover:text-zinc-100"
-                        title={chat.title}
-                      >
-                        {chat.title}
-                      </button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            aria-label={`Chat actions: ${chat.title}`}
-                            title="Chat actions"
-                            className="mr-1 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 group-hover:flex group-focus-within:flex data-[state=open]:flex [@media(hover:none)]:flex"
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          side="right"
-                          align="end"
-                          className="w-48 border-zinc-800 bg-[#262627] text-zinc-200"
-                        >
-                          <DropdownMenuLabel className="truncate text-[11px] tracking-wide text-zinc-500">
-                            {chat.title}
-                          </DropdownMenuLabel>
-                          <DropdownMenuSeparator className="bg-zinc-800" />
-                          <DropdownMenuItem
-                            className="gap-2.5 py-2 text-[13px]"
-                            onClick={() => startRename(chat)}
-                          >
-                            <Pencil className="h-4 w-4 text-zinc-400" />
-                            Rename
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="gap-2.5 py-2 text-[13px]"
-                            onClick={() => void exportChat(chat, "md")}
-                          >
-                            <FileText className="h-4 w-4 text-zinc-400" />
-                            Export as Markdown
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="gap-2.5 py-2 text-[13px]"
-                            onClick={() => void exportChat(chat, "json")}
-                          >
-                            <FileJson className="h-4 w-4 text-zinc-400" />
-                            Export as JSON
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator className="bg-zinc-800" />
-                          <DropdownMenuItem
-                            className="gap-2.5 py-2 text-[13px] text-red-400 focus:bg-red-500/10 focus:text-red-300"
-                            onClick={() => void deleteChat(chat.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  )
-                )
+                filteredChats.map((chat) => renderChatRow(chat))
               )}
             </div>
           )}

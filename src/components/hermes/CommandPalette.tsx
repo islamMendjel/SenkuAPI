@@ -20,6 +20,8 @@ import {
   Brain,
   CalendarClock,
   Clock,
+  Folder,
+  FolderPlus,
   Gauge,
   Globe,
   Image as ImageIcon,
@@ -35,7 +37,7 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { useHermes } from "@/lib/store";
+import { useHermes, type ProjectItem } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { modelHint, modelMeta } from "@/lib/hermes/models";
 
@@ -92,12 +94,15 @@ export function CommandPalette({
   onManageProviders,
   onOpenMemory,
   onOpenRituals,
+  onOpenProjectEditor,
 }: {
   onOpenChange: (v: boolean) => void;
   onOpenLimiter: () => void;
   onManageProviders: () => void;
   onOpenMemory: () => void;
   onOpenRituals: () => void;
+  /** Run 37 — open the project editor (null → create mode). */
+  onOpenProjectEditor: (project: ProjectItem | null) => void;
 }) {
   const {
     chats,
@@ -128,6 +133,8 @@ export function CommandPalette({
     memories,
     // Run 34 — live ritual count for the "Schedule a ritual" hint.
     rituals,
+    // Run 37 — projects: quick-create + per-project new-chat.
+    projects,
   } = useHermes();
   const { toast } = useToast();
 
@@ -299,6 +306,29 @@ export function CommandPalette({
           "ritual schedule scheduled recurring daily weekly brief morning alarm cron automate reminder timer while away asleep",
         run: () => onOpenRituals(),
       },
+      // Run 37 — THE PROJECTS: the launcher creates one, and every
+      // existing project offers a one-key "new chat inside it"
+      // (the next send is stamped with the project + its
+      // instructions).
+      {
+        id: "act-new-project",
+        group: "Actions",
+        label: "New project",
+        hint: projects.length > 0 ? `${projects.length}` : "new",
+        icon: <FolderPlus className="h-4 w-4" />,
+        keywords:
+          "project folder organize group instructions workspace collection file move",
+        run: () => onOpenProjectEditor(null),
+      },
+      ...projects.map((p) => ({
+        id: `act-project-${p.id}`,
+        group: "Actions",
+        label: `New chat in ${p.name}`,
+        hint: `${p.chatCount}`,
+        icon: <Folder className="h-4 w-4" />,
+        keywords: `project folder chat new start ${p.name.toLowerCase()}`,
+        run: () => newChat(p.id),
+      })),
       {
         id: "act-temp",
         group: "Actions",

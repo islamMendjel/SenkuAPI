@@ -134,6 +134,21 @@ export interface ChatListItem {
   title: string;
   model: string;
   provider: string;
+  /** Run 37 — the project this chat belongs to (null = Recent). */
+  projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Run 37 — one project: a folder for chats WITH its own
+ *  instructions, injected into every turn of every chat inside it
+ *  (server-side, gateway → projectBlock). The sidebar section,
+ *  the move submenu and the ⌘K palette read this list. */
+export interface ProjectItem {
+  id: string;
+  name: string;
+  instructions: string;
+  chatCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -305,6 +320,30 @@ interface HermesState {
     id: string
   ) => Promise<{ ok: boolean; error?: string; status?: string }>;
 
+  /** Run 37 — THE PROJECTS: chats that live in folders, folders
+   *  that carry their own instructions. `draftProjectId` names the
+   *  project the NEXT new chat is born into (set by newChat(id) /
+   *  the project row's plus button; cleared by any navigation).
+   *  The current chat's project is derived from its row — server
+   *  truth on every turn. */
+  projects: ProjectItem[];
+  draftProjectId: string | null;
+  refreshProjects: () => Promise<void>;
+  createProject: (
+    name: string,
+    instructions: string
+  ) => Promise<{ ok: boolean; error?: string; id?: string }>;
+  updateProject: (
+    id: string,
+    patch: { name?: string; instructions?: string }
+  ) => Promise<{ ok: boolean; error?: string }>;
+  deleteProject: (id: string) => Promise<{ ok: boolean; releasedChats?: number }>;
+  /** Move a chat into a project (or back to Recent with null). */
+  moveChat: (
+    chatId: string,
+    projectId: string | null
+  ) => Promise<{ ok: boolean; error?: string }>;
+
   /** Upload files for extraction — each becomes a chip showing what
    *      the gateway read (or why it couldn't be read). */
   addAttachments: (files: File[]) => Promise<void>;
@@ -332,7 +371,7 @@ interface HermesState {
   deleteKey: (keyId: string) => Promise<void>;
   toggleKey: (keyId: string, isActive: boolean) => Promise<void>;
 
-  newChat: () => void;
+  newChat: (projectId?: string | null) => void;
   selectChat: (id: string) => Promise<void>;
   deleteChat: (id: string) => Promise<void>;
   /** Rename a chat (optimistic — rolls back to the server list on
@@ -420,6 +459,9 @@ export const useHermes = create<HermesState>((set, get) => ({
   highlightMessageId: null,
   galleryOpen: false,
   imageCount: 0,
+  // Run 37 — projects (folders with instructions).
+  projects: [],
+  draftProjectId: null,
 
   async addAttachments(files) {
     const existing = get().pendingAttachments;
@@ -525,6 +567,10 @@ export const useHermes = create<HermesState>((set, get) => ({
           : [],
         // Run 34 — scheduled prompts (sidebar badge + dialog).
         rituals: Array.isArray(data.rituals) ? (data.rituals as RitualItem[]) : [],
+        // Run 37 — projects (sidebar section + move submenu + ⌘K).
+        projects: Array.isArray(data.projects)
+          ? (data.projects as ProjectItem[])
+          : [],
         // Every fresh session boots on the default model (glm-5.3).
         model: models.includes(DEFAULT_MODEL)
           ? DEFAULT_MODEL
@@ -583,6 +629,9 @@ export const useHermes = create<HermesState>((set, get) => ({
       messages: [],
       // staged files belong to the abandoned conversation
       pendingAttachments: [],
+      // Run 37 — the draft project belonged to the abandoned
+      // conversation too; a fresh start is unscoped until said otherwise.
+      draftProjectId: null,
       // Run 23 — a mode switch is a navigation: leave the gallery.
       galleryOpen: false,
     })),
@@ -941,9 +990,92 @@ export const useHermes = create<HermesState>((set, get) => ({
     }
   },
 
-  newChat: () =>
+  // ── Run 37 — THE PROJECTS: folder CRUD + chat moves ──
+  async refreshProjects() {
+    try {
+      const res = await fetch("/api/projects");
+      const data = await res.json();
+      if (Array.isArray(data.projects)) set({ projects: data.projects });
+    } catch {
+      // non-fatal — the sidebar keeps the last known list
+    }
+  },
+
+  async createProject(name, instructions) {
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, instructions }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || "Create failed." };
+      await get().refreshProjects();
+      return { ok: true, id: data.project?.id as string | undefined };
+    } catch {
+      return { ok: false, error: "Create failed — network." };
+    }
+  },
+
+  async updateProject(id, patch) {
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || "Save failed." };
+      await get().refreshProjects();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Save failed — network." };
+    }
+  },
+
+  async deleteProject(id) {
+    try {
+      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) return { ok: false };
+      // The chats survive (SetNull) — both lists refresh so Recent
+      // re-honests itself immediately. A deleted draft must not
+      // linger either.
+      set((s) => ({
+        draftProjectId: s.draftProjectId === id ? null : s.draftProjectId,
+      }));
+      await get().refreshProjects();
+      await get().refreshChats();
+      return { ok: true, releasedChats: data.releasedChats as number | undefined };
+    } catch {
+      return { ok: false };
+    }
+  },
+
+  async moveChat(chatId, projectId) {
+    try {
+      const res = await fetch(`/api/chats/${chatId}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || "Move failed." };
+      // Optimistic shape is unnecessary — both lists are small and
+      // local; one round-trip keeps them exactly true.
+      await Promise.all([get().refreshChats(), get().refreshProjects()]);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Move failed — network." };
+    }
+  },
+
+  newChat: (projectId) =>
     // Every new chat resets to the default model (glm-5.3) —
     // the user can then switch freely for that conversation.
+    // Run 37 — an explicit projectId (or null) sets the DRAFT
+    // project the next send stamps onto the new chat; plain
+    // "New chat" always clears it.
     set((s) => ({
       currentChatId: null,
       messages: [],
@@ -951,6 +1083,7 @@ export const useHermes = create<HermesState>((set, get) => ({
       galleryOpen: false,
       highlightMessageId: null,
       viewEpoch: s.viewEpoch + 1,
+      draftProjectId: projectId ?? null,
       model: s.models.includes(DEFAULT_MODEL)
         ? DEFAULT_MODEL
         : s.models[0] ?? s.model,
@@ -968,6 +1101,9 @@ export const useHermes = create<HermesState>((set, get) => ({
       set((s) => ({
         currentChatId: id,
         temporary: false,
+        // Run 37 — entering a chat adopts ITS project context; the
+        // draft only ever described a chat that didn't exist yet.
+        draftProjectId: null,
         // Run 23 — entering a conversation always leaves the gallery.
         galleryOpen: false,
         // Run 26 — flash target arrives separately (flashMessage AFTER
@@ -1133,6 +1269,8 @@ export const useHermes = create<HermesState>((set, get) => ({
       duel,
       attachments,
       style,
+      // Run 37 — a chat born now is stamped with the draft project.
+      projectId: s2.temporary ? null : s2.draftProjectId,
     });
   },
 
@@ -1212,6 +1350,8 @@ export const useHermes = create<HermesState>((set, get) => ({
           size,
           temporary,
           persistUser,
+          // Run 37 — a forge born now is stamped with the draft project.
+          projectId: temporary ? null : s2.draftProjectId,
           ...(opts?.regenVariants?.length
             ? { regenVariants: opts.regenVariants }
             : {}),
@@ -1769,6 +1909,9 @@ interface TurnOptions {
   attachments?: AttachmentRecord[];
   /** One-shot response style (/code, /concise) — normal turns only. */
   style?: TurnStyle;
+  /** Run 37 — the project a NEW chat is born into (draft). The
+   *  server only reads it when chatId is null. */
+  projectId?: string | null;
   /** Regenerate: the earlier answers of this same turn. When set,
       the finalized message carries them as its variant history
       (the fresh answer is appended and made active). */
@@ -1929,6 +2072,9 @@ async function streamTurn(
         temporary,
         persistUser: opts.persistUser,
         effort,
+        // Run 37 — names the project a NEW chat is born into; the
+        // server re-derives from the chat row whenever chatId exists.
+        projectId: opts.projectId ?? null,
         ...(attachments.length ? { attachments } : {}),
         ...(duel ? { duel: true, challengerModel: duel.challenger } : {}),
         ...(opts.style ? { style: opts.style } : {}),
@@ -2221,6 +2367,9 @@ async function streamTurn(
       // Await the refresh so the raw derived title is in the list
       // BEFORE the refined one patches it (no clobber race).
       await get().refreshChats();
+      // Run 37 — a chat born inside a project just landed in the
+      // sidebar's nested list; the project's chatCount follows.
+      if (opts.projectId) void get().refreshProjects();
       if (createdChatId) void refineTitle(set, createdChatId);
     }
     void get().refreshUsage();

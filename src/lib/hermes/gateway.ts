@@ -21,12 +21,14 @@ import {
   liveContextBlock,
   liveContextBlockHourStable,
   memoryBlock,
+  projectBlock,
   searchContextBlock,
 } from "./constants";
 import { dispatchCompletion } from "./dispatch";
 import { appendConfidenceLabel, estimateTokens, revealWords } from "./executor";
 import { confidenceOf } from "./grounding";
 import { effortModel } from "./models";
+import { projectForTurn } from "./projects";
 import { getActiveProvider } from "./router";
 import { deepSearchDetailed, webSearchDetailed } from "./search";
 import type {
@@ -74,6 +76,11 @@ export interface TurnParams {
    *  Appended to the system prompt (and thus the cache key) — the
    *  /code and /concise variants of one question cache separately. */
   style?: TurnStyle;
+  /** Run 37 — the project a NEW chat is born into (the composer's
+   *  draft project). Only read when chatId is absent: existing
+   *  chats carry their own project on the row (server truth,
+   *  re-derived every turn). */
+  projectId?: string | null;
   /** Fires when the CLIENT disconnects (Stop button, tab close).
    *  The upstream generation is cancelled at the source, the
    *  partial reply is persisted, and the truncated answer NEVER
@@ -204,11 +211,23 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
   // naturally invalidates stale cached answers). No memories →
   // empty block → byte-identical prompts → old cache entries still hit.
   const memBlock = memoryBlock(await getMemories());
+  // Run 37 — the project context. Existing chats carry their own
+  // project on the row (server truth); new chats carry the
+  // composer's draft project (validated against the table). No
+  // project, or a folder-only project (no instructions) → empty
+  // block → byte-identical prompt → old cache entries still hit;
+  // editing instructions changes the block → the cache key moves
+  // naturally, exactly like memory.
+  const project = await projectForTurn(params.chatId, params.projectId);
+  const projBlock = project
+    ? projectBlock(project.name, project.instructions)
+    : "";
   const baseSystemPrompt =
     (params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT) +
     (effortAddon ? `\n\n${effortAddon}` : "") +
     (styleAddon ? `\n\n${styleAddon}` : "") +
-    (memBlock ? `\n\n${memBlock}` : "");
+    (memBlock ? `\n\n${memBlock}` : "") +
+    (projBlock ? `\n\n${projBlock}` : "");
   // The model always knows the real "now" (user's timezone).
   const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
 
@@ -241,6 +260,9 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
           model,
           provider: provider.name,
           isTemporary: false,
+          // Run 37 — a chat born inside a project is STAMPED with it
+          // (validated by projectForTurn; null when no draft).
+          projectId: project?.id ?? null,
         },
       });
       chatId = chat.id;
@@ -549,6 +571,8 @@ export interface DuelParams {
   /** Files the gateway read — shared by both lanes (the same
    *  material, the same rules as a normal turn). */
   attachments?: AttachmentRecord[];
+  /** Run 37 — the project a NEW duel chat is born into. */
+  projectId?: string | null;
   /** Client disconnect cancels BOTH racing lanes at the source. */
   signal?: AbortSignal;
   emit: (ev: TurnEvent) => void;
@@ -610,9 +634,17 @@ export async function runDuelTurn(
   // turns (appended to the base prompt → both the live prompt and
   // each lane's cache key include it; empty memory = byte-identical).
   const memBlock = memoryBlock(await getMemories());
+  // Run 37 — duels inherit the project context too (the user
+  // asked inside a project; both lanes race under the same
+  // instructions). Same server-truth rule as a normal turn.
+  const project = await projectForTurn(params.chatId, params.projectId);
+  const projBlock = project
+    ? projectBlock(project.name, project.instructions)
+    : "";
   const baseSystemPrompt =
     (params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT) +
-    (memBlock ? `\n\n${memBlock}` : "");
+    (memBlock ? `\n\n${memBlock}` : "") +
+    (projBlock ? `\n\n${projBlock}` : "");
   const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
   const finalUserContent =
     params.content +
@@ -634,6 +666,8 @@ export async function runDuelTurn(
           model: modelA,
           provider: provider.name,
           isTemporary: false,
+          // Run 37 — duel chats born inside a project are stamped too.
+          projectId: project?.id ?? null,
         },
       });
       chatId = chat.id;

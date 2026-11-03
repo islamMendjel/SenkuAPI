@@ -30,6 +30,8 @@ interface GenerateBody {
   temporary?: unknown;
   persistUser?: unknown;
   regenVariants?: unknown;
+  /** Run 37 — the project a NEW image chat is born into. */
+  projectId?: unknown;
 }
 
 /** Narrow one re-roll variant entry — same shape the variant route
@@ -99,6 +101,15 @@ export async function POST(req: NextRequest) {
     : "square";
   const temporary = body.temporary === true;
   const persistUser = body.persistUser !== false;
+  // Run 37 — a forge begun inside a project stamps the chat with
+  // it (validated; null when the draft is empty or bogus).
+  const draftProjectId =
+    typeof body.projectId === "string" && body.projectId
+      ? (await db.project.findUnique({
+          where: { id: body.projectId },
+          select: { id: true },
+        }))?.id ?? null
+      : null;
   const regenVariants = Array.isArray(body.regenVariants)
     ? (body.regenVariants
         .map(toRegenVariant)
@@ -114,7 +125,7 @@ export async function POST(req: NextRequest) {
     if (!chatId) {
       title = deriveTitle(prompt);
       const chat = await db.chat.create({
-        data: { title, model: "image-forge", provider: "Z.ai cloud", isTemporary: false },
+        data: { title, model: "image-forge", provider: "Z.ai cloud", isTemporary: false, projectId: draftProjectId },
       });
       chatId = chat.id;
     }

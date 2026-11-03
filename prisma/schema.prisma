@@ -59,6 +59,28 @@ model ApiKey {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Projects (Run 37) — chats that live in folders, and folders
+// that carry their own mind. Each project has a NAME and a set
+// of INSTRUCTIONS that the gateway injects into every turn of
+// every chat that belongs to it (appended to the base system
+// prompt AFTER memory — and therefore into the response-cache
+// key, exactly like memory: editing a project's instructions
+// naturally invalidates its stale cached answers; a project with
+// NO instructions changes nothing, byte-identical prompts).
+// Deleting a project keeps its chats (SetNull) — they simply
+// fall back to "Recent"; no cascade, ever.
+// ─────────────────────────────────────────────────────────────
+model Project {
+  id           String   @id @default(cuid())
+  name         String
+  instructions String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  chats Chat[]
+}
+
+// ─────────────────────────────────────────────────────────────
 // Chats — temporary chats are kept out of the "Recent" history.
 // ─────────────────────────────────────────────────────────────
 model Chat {
@@ -67,6 +89,11 @@ model Chat {
   model       String   @default("free/glm-5.3")
   provider    String   @default("APInex")
   isTemporary Boolean  @default(false)
+  // Run 37 — the project this chat belongs to (null = "Recent").
+  // Server truth: the gateway re-derives the project block from
+  // the CHAT's own row on every turn, never from client claims.
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

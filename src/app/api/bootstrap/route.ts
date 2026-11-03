@@ -7,6 +7,7 @@ import { ensureSeed } from "@/lib/hermes/seed";
 import { usageSnapshot } from "@/lib/hermes/serialize";
 import { listGalleryImages } from "@/lib/hermes/gallery";
 import { getMemories } from "@/lib/hermes/memory";
+import { listProjects } from "@/lib/hermes/projects";
 import { listRituals } from "@/lib/hermes/ritual";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     await ensureSeed();
-    const [snapshot, chats, galleryImages, memories, rituals] = await Promise.all([
+    const [snapshot, chats, galleryImages, memories, rituals, projects] = await Promise.all([
       usageSnapshot(),
       db.chat.findMany({
         where: { isTemporary: false },
@@ -25,6 +26,7 @@ export async function GET() {
           title: true,
           model: true,
           provider: true,
+          projectId: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -32,6 +34,7 @@ export async function GET() {
       listGalleryImages(),
       getMemories(),
       listRituals(),
+      listProjects(),
     ]);
     return NextResponse.json({
       user: USER,
@@ -52,6 +55,11 @@ export async function GET() {
       // and the management dialog both read this list; the dialog
       // refetches on open + polls while open for live countdowns.
       rituals,
+      // Run 37 — projects (folders with their own instructions).
+      // The sidebar's Projects section, the move submenu and the
+      // ⌘K palette actions all read this list; chats carry their
+      // projectId alongside.
+      projects,
     });
   } catch (e) {
     console.error("bootstrap failed", e);

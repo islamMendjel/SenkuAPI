@@ -2408,7 +2408,7 @@ they ship).
 | Code interpreter / sandboxed execution | ChatGPT | **MATCHED (Run 36)** — THE SANDBOX ALIVE: every `js` block runs in-browser (allow-scripts opaque-origin iframe, CSP `connect-src 'none'`, 5 s hard cap, console bridge with timing/status/error capture, top-level await works, network stubs fail LOUD); Canvas' JavaScript Preview is a live runner; python stays honestly view-only — theirs runs server-side Python, ours runs client-side JS with zero server cost and zero pipeline risk |
 | Image generation in-chat | ChatGPT, Gemini | **MATCHED (Run 22)** — the Image Forge: composer mode + dimensions picker, live elapsed-time generating card, lightbox + download, per-image provenance receipts (dims · KB · seconds · 0 pool tokens) and re-roll variant history with per-image receipts — ChatGPT shows none of that honesty |
 | Image history / gallery across chats | ChatGPT (Library/Photos), Gemini (saved images) | **MATCHED (Run 23)** — the Gallery: sidebar Images row with live count, masonry of every forged image from every chat (variant snapshots included, file-deduped), lightbox with full provenance + collection browsing (←/→) + one-click Download + "Open in chat" jump-to-source, empty-state forge CTA |
-| Projects / folders with per-project instructions | ChatGPT, Claude | OPEN |
+| Projects / folders with per-project instructions | ChatGPT, Claude | **MATCHED (Run 37)** — THE PROJECTS: folders that carry their own mind — per-project instructions injected server-side into every turn of every chat in the project (both normal and duel paths, appended after memory → cache-key-participant exactly like memory; folder-only projects leave prompts byte-identical); server-truth re-derivation from the chat row every turn, draft-project stamping for chats born inside one (text + image forges both), live nested sidebar rows with per-project counts + instructions dot, Move-to-project submenu on every chat menu, SetNull deletes that return chats to Recent, an amber project identity pill in the top bar, and ⌘K actions — ChatGPT/Claude projects don't duel, don't cache-key their instructions honestly, and don't tell you which project you're writing in from the composer |
 | Voice mode (live duplex conversation) | ChatGPT, Gemini | PARTIAL — we have push-to-talk dictation + read-aloud |
 | Deep research (multi-step agentic search) | Gemini, ChatGPT | **MATCHED (Run 8)** — plan → multi-angle retrieve → cross-check, with per-source date/authority audits the incumbents don't surface; every stage streams live |
 | Thinking mode / effort levels (fast–medium–deep) | ChatGPT, Claude, Gemini | **BEATEN (Run 8)** — theirs toggles one backend's switch; ours routes to a different pooled ENGINE per level with transparent previews |
@@ -3508,3 +3508,135 @@ tells the user both facts upfront in its system line. The gateway's
 system prompt was deliberately NOT touched: cache fingerprints stay
 stable and the zero-pipeline-change guarantee holds; the model's js
 blocks are already runnable as-is.
+
+## Run 37 — 2026-11-03: THE PROJECTS — chats that live in folders, folders that carry their own mind
+
+**The directive:** "look at the site first, then innovate. Think about
+the user experience and think outside the box. Make one bold change
+that improves conversions or the look and feel, not a small tweak…
+dont make redundant things / only improvements and upgrades, cook but
+not break or downgrade / to make Hermes near perfection."
+
+**Observe (live walkthrough first):** welcome, composer, TopBar and
+reading surface all healthy (VLM-audited); the expanded sidebar told
+the real story — thirteen chats flat in "Recent" and a "Projects ·
+No projects" stub that Run 36 had deliberately left shadowing the
+gap list. The COMPETITOR GAP LIST had exactly ONE flagship-grade
+OPEN gap left standing: **Projects / folders with per-project
+instructions** (ChatGPT and Claude both ship it). Run 34 had once
+rejected projects as "organizational, not bold" — but with every
+other gap closed, the last one standing IS the bold move, and it
+had a Hermes-grade twist available that neither incumbent has:
+folders whose instructions ride the SAME honest prompt pipeline as
+memory (cache-key participant, server-truth re-derivation, visible
+scope in the composer's top bar).
+
+**The bold change: THE PROJECTS.** A project is a folder for chats
+WITH its own instructions, injected into every turn of every chat
+that belongs to it.
+
+**Implement (additive, zero pipeline breakage):**
+
+1. **The data model (additive only, `db:push`).** New `Project`
+   table (name ≤60, instructions ≤4,000, capped at 12) and nullable
+   `Chat.projectId` with `onDelete: SetNull` — deleting a project
+   can NEVER delete a chat; they fall back to Recent. No cascade
+   anywhere.
+2. **The injection (gateway, both turn paths).** `projectBlock()`
+   (constants, pure) renders the instructions; `projectForTurn()`
+   (projects.ts, server) resolves the project: for EXISTING chats
+   from the chat's own row (server truth — the client never claims
+   scope on a persisted chat), for NEW chats from a validated
+   draft `projectId`. The block appends AFTER memory and BEFORE
+   the live clock in `baseSystemPrompt` — normal turns and duel
+   turns alike — so both the live prompt AND the hour-stable
+   cache-key prompt carry it: editing instructions invalidates
+   stale cached answers naturally, exactly like memory. No project,
+   or a folder-only project (no instructions) → empty block →
+   byte-identical prompt → every existing cache entry still hits.
+3. **Stamping.** Chats born inside a project are stamped at
+   creation — text turns, DUEL turns, and image forges all thread
+   the draft `projectId` through their create paths (validated
+   server-side; a bogus id stamps nothing).
+4. **The API.** `GET/POST /api/projects` (field-by-field sanitize,
+   honest 400/409), `PATCH/DELETE /api/projects/[id]` (partial
+   updates; DELETE returns `releasedChats` for the honest toast),
+   `POST /api/chats/[id]/move` (project ↔ Recent). Bootstrap
+   carries the list + `projectId` on every chat.
+5. **The store.** `projects`/`draftProjectId` state; CRUD + `moveChat`
+   actions (both lists refresh on every mutation — one round-trip,
+   exactly true); `newChat(projectId?)` arms the draft, every
+   navigation clears it (selectChat, temporary toggle, plain new
+   chat); `refreshProjects()` fires after sends that stamped a
+   project so the count badge and nesting are live.
+6. **The UI.** The sidebar stub is now a living section: project
+   rows (folder icon → amber folder-open when expanded, an amber
+   dot marking instruction-carrying projects, live chat-count
+   badge, hover "+" for a new chat inside, and a 3-dot menu —
+   New chat here / Edit instructions / Delete); chats nest under
+   their project; **Recent lists only unfiled chats**; every chat
+   menu gains a **Move-to-project submenu** (with a "No project"
+   exit and the current project marked "here"); the empty state is
+   a "Create your first project" CTA; the header carries a
+   FolderPlus. The **ProjectsDialog** (create + edit modes, the
+   Memory/Rituals render-time-reset pattern, live char counters,
+   and a "Start a chat in it now" switch that drops you straight
+   into the newborn project). The **TopBar project pill**: an
+   amber folder chip naming the scope you're writing in (the
+   chat's own project, or the armed draft) — visible identity the
+   incumbents don't give you. The **⌘K palette** gains "New
+   project" plus per-project "New chat in X" actions with live
+   count hints.
+7. **The one-row renderer.** Chat rows (inline rename, export,
+   delete, move submenu) are ONE renderer used by Recent and
+   project nesting — no duplicated row logic to drift.
+
+**Verify (browser-proven, not plausible):**
+
+- **Injection, end to end.** Created "Hermes Test Lab" through the
+  real dialog with instructions demanding every reply start with
+  "LABCHECK" and stay under 25 words; sent a real message — the
+  streamed answer opened **"LABCHECK I am GLM…"** (2.9k tokens,
+  cache: miss — the project block moved the key exactly as
+  designed).
+- **Server truth.** A SECOND turn in the same chat (draft long
+  consumed) ALSO opened with LABCHECK — the gateway re-derived the
+  project from the chat's row, not from any client claim.
+- **Birth, nesting, identity.** The chat (refined title and all)
+  landed nested under its project row; the TopBar showed the amber
+  "Hermes Test Lab" pill; the count badge read 1; Recent listed
+  only unfiled chats.
+- **Move.** "Say OK" (a Recent chat) moved via its 3-dot → Move to
+  project → nested instantly, toast confirmed; the submenu marked
+  the current project "here" and offered the Recent exit only for
+  filed chats.
+- **Edit.** Rename + instruction edit through the dialog → saved,
+  toast, nesting intact.
+- **Delete (SetNull, the no-data-loss proof).** Deleting the
+  project returned BOTH chats to Recent with the honest toast
+  "Project 'Hermes Lab v2' deleted — 2 chats returned to Recent."
+  Zero orphans.
+- **⌘K.** "New project" and "New chat in Hermes Test Lab · 2"
+  both present with live hints.
+- **Mobile 390 px.** Drawer open + closed states clean (no
+  horizontal overflow, composer fully usable closed); the project
+  editor dialog fits with all controls tappable (VLM: "no
+  functional layout defects"); the flagged artifacts were the
+  dev-only Next.js overlay badge and scroll-position clipping —
+  both pre-existing, both non-app.
+- **VLM design audits:** empty-state CTA "tastefully executed —
+  minimal, on-theme, clearly actionable without being noisy";
+  final sidebar state **8.5/10** polish/consistency.
+- **Console + page errors** clean across the whole session;
+  dev.log healthy (all 200s).
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc 6
+  pre-existing, zero new. All test data deleted — 0 projects,
+  28 chats, 0 with projectId. Zero TODOs shipped.
+
+**Sibling notes:** the sidebar's move submenu renders a
+"New project…" item when no projects exist — the fastest path
+from "I want to file this" to a filed chat is one menu click.
+And the duel path inherits project instructions too: both racing
+lanes run under the same scope, so even a model race respects the
+project's contract — something neither ChatGPT nor Claude
+projects can claim.
