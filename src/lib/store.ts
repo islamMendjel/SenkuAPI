@@ -143,6 +143,14 @@ export interface BeforeInstallPromptEvent extends Event {
   }>;
 }
 
+/** Run 28 — one persistent memory entry (durable fact or preference
+ *  the user asked the gateway to remember; injected into every
+ *  system prompt server-side). */
+export interface MemoryItem {
+  id: string;
+  content: string;
+}
+
 interface UserInfo {
   name: string;
   email: string;
@@ -249,6 +257,16 @@ interface SenkuState {
   pwaStandalone: boolean;
   setInstallPrompt: (ev: BeforeInstallPromptEvent | null) => void;
   setPwaStandalone: (v: boolean) => void;
+
+  /** Run 28 — persistent personal memory: durable facts/preferences
+   *  the user asked the gateway to remember. Injected into every
+   *  system prompt by the gateway (see lib/senku/memory.ts); the
+   *  bootstrap seeds the list, the MemoryDialog owns the CRUD, and
+   *  the welcome screen surfaces "remembers N things" when N > 0. */
+  memories: MemoryItem[];
+  addMemory: (content: string) => Promise<boolean>;
+  updateMemory: (id: string, content: string) => Promise<boolean>;
+  deleteMemory: (id: string) => Promise<boolean>;
 
   /** Upload files for extraction — each becomes a chip showing what
    *      the gateway read (or why it couldn't be read). */
@@ -458,6 +476,16 @@ export const useSenku = create<SenkuState>((set, get) => ({
         chats: data.chats ?? [],
         models,
         imageCount: typeof data.imageCount === "number" ? data.imageCount : 0,
+        // Run 28 — memory list for the welcome indicator + dialog.
+        memories: Array.isArray(data.memories)
+          ? data.memories
+              .filter(
+                (m: unknown): m is MemoryItem =>
+                  !!m && typeof (m as MemoryItem).id === "string" &&
+                  typeof (m as MemoryItem).content === "string"
+              )
+              .map((m: MemoryItem) => ({ id: m.id, content: m.content }))
+          : [],
         // Every fresh session boots on the default model (glm-5.3).
         model: models.includes(DEFAULT_MODEL)
           ? DEFAULT_MODEL
@@ -716,6 +744,54 @@ export const useSenku = create<SenkuState>((set, get) => ({
   pwaStandalone: false,
   setInstallPrompt: (ev) => set({ installPrompt: ev }),
   setPwaStandalone: (v) => set({ pwaStandalone: v }),
+
+  // Run 28 — persistent memory CRUD (the gateway reads the table on
+  // every turn, so these are thin state mirrors of the API; errors
+  // return false and the caller toasts).
+  memories: [],
+  async addMemory(content) {
+    try {
+      const res = await fetch("/api/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save.");
+      set((s) => ({ memories: [...s.memories, { id: data.id, content: data.content }] }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  async updateMemory(id, content) {
+    try {
+      const res = await fetch(`/api/memory/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save.");
+      set((s) => ({
+        memories: s.memories.map((m) => (m.id === id ? { ...m, content } : m)),
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  async deleteMemory(id) {
+    try {
+      const res = await fetch(`/api/memory/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not delete.");
+      set((s) => ({ memories: s.memories.filter((m) => m.id !== id) }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
 
   newChat: () =>
     // Every new chat resets to the default model (glm-5.3) —

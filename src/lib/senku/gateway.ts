@@ -5,6 +5,7 @@
 
 import { db } from "@/lib/db";
 import { computeCacheKey, getCached, putCached } from "./cache";
+import { getMemories } from "./memory";
 import {
   attachmentContextBlock,
   sanitizeAttachments,
@@ -19,6 +20,7 @@ import {
   SEARCH_SYSTEM_DIRECTIVE,
   liveContextBlock,
   liveContextBlockHourStable,
+  memoryBlock,
   searchContextBlock,
 } from "./constants";
 import { dispatchCompletion } from "./dispatch";
@@ -196,10 +198,17 @@ export async function runChatTurn(params: TurnParams): Promise<TurnResult> {
       : params.style === "concise"
         ? CONCISE_STYLE_ADDON
         : "";
+  // Run 28 — the user's persistent memory. Fetched once per turn,
+  // appended to the BASE prompt so both the live system prompt and
+  // the hour-stable cache-key prompt carry it (editing memory
+  // naturally invalidates stale cached answers). No memories →
+  // empty block → byte-identical prompts → old cache entries still hit.
+  const memBlock = memoryBlock(await getMemories());
   const baseSystemPrompt =
     (params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT) +
     (effortAddon ? `\n\n${effortAddon}` : "") +
-    (styleAddon ? `\n\n${styleAddon}` : "");
+    (styleAddon ? `\n\n${styleAddon}` : "") +
+    (memBlock ? `\n\n${memBlock}` : "");
   // The model always knows the real "now" (user's timezone).
   const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
 
@@ -592,8 +601,13 @@ export async function runDuelTurn(
     });
   }
 
+  // Run 28 — duels run with the same persistent memory as normal
+  // turns (appended to the base prompt → both the live prompt and
+  // each lane's cache key include it; empty memory = byte-identical).
+  const memBlock = memoryBlock(await getMemories());
   const baseSystemPrompt =
-    params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT;
+    (params.search && sources.length ? SEARCH_SYSTEM_DIRECTIVE : BASE_SYSTEM_PROMPT) +
+    (memBlock ? `\n\n${memBlock}` : "");
   const systemPrompt = `${baseSystemPrompt}\n\n${liveContextBlock()}`;
   const finalUserContent =
     params.content +

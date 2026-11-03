@@ -17,6 +17,7 @@
 import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
+  Brain,
   ChevronRight,
   CircleHelp,
   Download,
@@ -54,9 +55,11 @@ import {
 
 export function Sidebar({
   onManageProviders,
+  onOpenMemory,
   onCollapse,
 }: {
   onManageProviders: () => void;
+  onOpenMemory: () => void;
   onCollapse: () => void;
 }) {
   const {
@@ -83,6 +86,8 @@ export function Sidebar({
     installPrompt,
     pwaStandalone,
     setInstallPrompt,
+    // Run 28 — memory count badge for the profile menu.
+    memories,
   } = useSenku();
   const { toast } = useToast();
 
@@ -543,6 +548,21 @@ export function Sidebar({
               >
                 <Settings className="h-4 w-4 text-zinc-400" />
                 Settings
+              </DropdownMenuItem>
+              {/* Run 28 — persistent personal memory. The badge is the
+                  live count (hidden when empty — the item teaches
+                  itself the first time something is remembered). */}
+              <DropdownMenuItem
+                className="gap-2.5 py-2 text-[13px]"
+                onClick={onOpenMemory}
+              >
+                <Brain className="h-4 w-4 text-zinc-400" />
+                Memory
+                {memories.length > 0 && (
+                  <span className="ml-auto rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[10.5px] font-medium tabular-nums text-amber-300">
+                    {memories.length}
+                  </span>
+                )}
               </DropdownMenuItem>
               {!pwaStandalone && (installPrompt || isIOS) && (
                 <DropdownMenuItem

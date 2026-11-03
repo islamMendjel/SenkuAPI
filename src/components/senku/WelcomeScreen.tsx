@@ -18,6 +18,7 @@
 
 import Image from "next/image";
 import {
+  Brain,
   Code2,
   Globe,
   GraduationCap,
@@ -136,8 +137,8 @@ const STARTERS = [
   },
 ];
 
-export function WelcomeScreen() {
-  const { user, sendMessage, setSearchEnabled, limiter } = useSenku();
+export function WelcomeScreen({ onOpenMemory }: { onOpenMemory: () => void }) {
+  const { user, sendMessage, setSearchEnabled, limiter, memories } = useSenku();
 
   const fire = (prompt: string, withSearch?: boolean) => {
     if (withSearch) setSearchEnabled(true);
@@ -199,6 +200,26 @@ export function WelcomeScreen() {
         </p>
 
         <LiveClock />
+
+        {/* Run 28 — the gateway's living memory: real count, honest
+            copy, one click to edit. Only rendered when something is
+            actually remembered — an empty memory stays silent (the
+            profile menu and ⌘K palette own the discovery). */}
+        {memories.length > 0 && (
+          <button
+            onClick={onOpenMemory}
+            title="What SenkuAPI always remembers about you — click to edit"
+            className="senku-fade-up mt-3 flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-400/[0.07] px-3.5 py-1.5 text-[12px] text-amber-200/90 transition-colors hover:border-amber-400/45 hover:bg-amber-400/[0.12] [animation-delay:150ms]"
+          >
+            <Brain className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
+            <span className="tabular-nums">
+              Remembers <span className="font-semibold text-amber-100">{memories.length}</span>{" "}
+              thing{memories.length === 1 ? "" : "s"} about you
+            </span>
+            <span className="text-amber-200/50" aria-hidden>·</span>
+            <span className="text-amber-200/70">Edit</span>
+          </button>
+        )}
 
         {/* Run 19 — the gateway's live stat strip. REAL numbers only:
             today's usage, all-time usage, keys in the active pool +

@@ -306,3 +306,40 @@ export function searchContextBlock(
     lines.join("\n")
   );
 }
+
+// ── Persistent personal memory (Run 28) ──────────────────────
+// PURE, CLIENT-SAFE pieces live here (this module has no db
+// import); the db-backed reader stays in ./memory (server-only —
+// a client component importing it would drag Prisma into the
+// browser, which is exactly the crash this split prevents).
+
+export const MEMORY_MAX_ENTRIES = 50;
+export const MEMORY_MAX_CHARS = 500;
+
+export interface MemoryEntry {
+  id: string;
+  content: string;
+}
+
+/** Normalize + validate a memory entry. Returns null when the raw
+ *  value can't be a memory (empty / whitespace / too long). */
+export function sanitizeMemory(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim().replace(/\s+\n/g, "\n").replace(/[ \t]+/g, " ");
+  if (!t || t.length > MEMORY_MAX_CHARS) return null;
+  return t;
+}
+
+/** Format the memory system-prompt block. Empty string when there is
+ *  nothing to remember — callers append it to the base prompt and the
+ *  empty case must leave that prompt byte-identical to before. */
+export function memoryBlock(entries: MemoryEntry[]): string {
+  if (!entries.length) return "";
+  return (
+    "MEMORY — durable facts and preferences the user asked you to " +
+    "remember. They persist across every conversation and override " +
+    "your defaults in every answer, unless the current request " +
+    "explicitly contradicts them:\n" +
+    entries.map((e) => `- ${e.content}`).join("\n")
+  );
+}

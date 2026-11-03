@@ -89,10 +89,12 @@ export function CommandPalette({
   onOpenChange,
   onOpenLimiter,
   onManageProviders,
+  onOpenMemory,
 }: {
   onOpenChange: (v: boolean) => void;
   onOpenLimiter: () => void;
   onManageProviders: () => void;
+  onOpenMemory: () => void;
 }) {
   const {
     chats,
@@ -119,6 +121,8 @@ export function CommandPalette({
     syncModels,
     // Run 26 — jump-to-message after picking a content-search hit.
     flashMessage,
+    // Run 28 — live memory count for the "Edit memory" action hint.
+    memories,
   } = useSenku();
   const { toast } = useToast();
 
@@ -309,6 +313,15 @@ export function CommandPalette({
         run: () => onManageProviders(),
       },
       {
+        id: "act-memory",
+        group: "Actions",
+        label: "Edit memory",
+        hint: memories.length ? `${memories.length} remembered` : "teach it",
+        icon: <Brain className="h-4 w-4" />,
+        keywords: "memory remember facts preferences personal customize instructions",
+        run: () => onOpenMemory(),
+      },
+      {
         id: "act-sync",
         group: "Actions",
         label: "Sync model list from provider",
@@ -404,6 +417,8 @@ export function CommandPalette({
     toast,
     onOpenLimiter,
     onManageProviders,
+    onOpenMemory,
+    memories,
     imageMode,
     toggleImageMode,
     imageCount,

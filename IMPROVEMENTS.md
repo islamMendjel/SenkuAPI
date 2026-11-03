@@ -2774,3 +2774,71 @@ before in the Run 26 preview-blank incident). The SW is provably NOT the cause: 
 first always returns fresh HTML, and /_next chunks are content-hashed. Test chats from
 the SSE regressions ("Pwa Stream Question", "Pwa Final Confirmation") were deleted via
 the API — zero orphans, user chat list untouched.
+
+## Run 28 — 2026-11-03: THE GATEWAY THAT KNOWS YOU — persistent personal memory, injected into every answer
+
+**Directive (verbatim):** "very good job, again look at the site first, then innovate. Think
+about the user experience and think outside the box. Make one bold change that improves
+conversions or the look and feel, not a small tweak. Use any tool you have. You must cook
+and ship a change every time." + standing guardrails.
+
+**Observe first.** Walked the live app: message hover actions exist (copy markdown, edit,
+regenerate + variant flipping), the voice loop is complete both ways (ASR dictation in,
+TTS read-aloud out), ⌘K searches everything including message content, PWA installs
+(Run 27), 11-model roster, duels, gallery, canvas. Diagnosis: the gateway knows the TIME
+(live clock in every prompt) but knows **nothing about its owner** — no custom
+instructions, no memory, no persistence of who I am or how I like my answers. Every
+conversation starts from zero. The boldest non-redundant change: **memory**.
+
+**The change — SenkuAPI remembers:**
+- **Data.** New `Memory` Prisma model (≤ 50 entries, ≤ 500 chars each, oldest-first
+  stable order). CRUD API: `GET/POST /api/memory`, `PATCH/DELETE /api/memory/[id]`
+  (400 on bad input, 404 on unknown id, 409 when full). `/api/bootstrap` now ships the
+  list; the store mirrors it with `memories` + add/update/delete actions.
+- **Injection (the heart).** `memoryBlock()` formats the entries as a durable-facts
+  directive, appended to `baseSystemPrompt` in BOTH gateway paths (normal turn + duel
+  lanes) — so the live prompt AND the hour-stable response-cache key both carry it.
+  Consequences, all free: editing memory invalidates stale cached answers by key change;
+  empty memory = byte-identical prompts = existing cache entries still hit (zero
+  regression); a failed memory read degrades to "no memory", never breaking a turn.
+- **The client/server split that saved the run.** First attempt exported the constants
+  from `lib/senku/memory.ts` — which imports Prisma — and MemoryDialog (client)
+  imported them → Prisma dragged into the browser → "unrecoverable" client exception.
+  Fixed by the proper split: PURE pieces (limits, types, sanitize, formatter) live in
+  client-safe `constants.ts`; ONLY the db-backed `getMemories()` stays in `memory.ts`.
+- **UI.** `MemoryDialog`: inline edit per row (dirty-aware Save/Cancel, Enter/Esc),
+  one-click Forget with toast, add-field with live counter, honest empty state that
+  TEACHES — three one-click example chips. Entry points: profile menu "Memory" (amber
+  live-count badge), ⌘K palette "Edit memory" action, and the welcome screen chip
+  "Remembers N things about you · Edit" (only when N > 0 — an empty memory stays
+  silent).
+- **Scope decision.** The v1 OpenAI-compat endpoint stays memory-free — external
+  callers own their system prompt; surprise injection would be wrong there.
+
+**Verified (all real, through the live UI):**
+- API: GET [] → POST (400 on whitespace, 201 on valid) → PATCH 200 → bad id 404 →
+  bootstrap carries the list.
+- **Injection proof:** memory "Always end your reply with the exact word BAMBOO." →
+  "What is the capital of Japan?" → **"The capital of Japan is Tokyo. BAMBOO"**
+  (cache: miss). Re-ask identical question → same answer, **cache: hit** — the cached
+  entry was keyed WITH the memory (memory provably part of the cache key).
+- **Invalidation proof:** edited memory to a SALAM greeting → identical question →
+  **cache: miss** (key changed) → fresh never-asked question → **"SALAM Jupiter is the
+  largest planet…"** (new memory obeyed, old marker gone).
+- **Delete proof:** entry forgotten via dialog → API [] → clean-context fresh question →
+  plain answer, no marker, cache: miss. Welcome chip disappeared live (and reappeared
+  live when re-added).
+- Mid-test "echo" results (BAMBOO/SALAM persisting after edit/delete) were root-caused
+  to my own test sequencing — asks piling into one in-memory temporary chat, where the
+  model mimics its own prior answers from history. Clean-context reloads proved the
+  system prompt correct every time. History is not part of the cache key — by design.
+- UI: profile menu shows "Memory 1" badge; palette "Edit memory · teach it" opens the
+  dialog; empty-state example chip adds a memory in one click (counter 1/50, toast,
+  welcome chip live-updates); edit and forget flows toast real outcomes.
+- Mobile 390px: drawer → menu → dialog all work; dialog fits exactly (390px wide, no
+  horizontal scroll).
+- lint 0 errors; tsc 8 pre-existing; console clean after the fix (the earlier
+  client-side crash was the Prisma-in-browser import, fixed by the split); dev.log
+  healthy. Temporary test chats are in-memory only — nothing persisted, nothing to
+  clean. One real memory seeded as the feature's first entry: "I'm a TypeScript
+  developer — always answer in TypeScript." (true for this gateway's owner).

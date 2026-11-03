@@ -30,6 +30,7 @@ import { ProvidersDialog } from "@/components/senku/ProvidersDialog";
 import { CommandPalette } from "@/components/senku/CommandPalette";
 import { PWARegistrar } from "@/components/senku/PWARegistrar";
 import { SenkuSplash } from "@/components/senku/SenkuSplash";
+import { MemoryDialog } from "@/components/senku/MemoryDialog";
 
 /** Hover-peek timings (Run 13).
  * OPEN — how long the cursor must rest on the toggle before the
@@ -66,6 +67,7 @@ export function SenkuApp() {
   } = useSenku();
   const [limiterOpen, setLimiterOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ── Sidebar hover-peek (transient) vs pinned (store) ──
@@ -210,6 +212,7 @@ export function SenkuApp() {
         <div className="senku-sidebar-inner h-full">
           <Sidebar
             onManageProviders={() => setProvidersOpen(true)}
+            onOpenMemory={() => setMemoryOpen(true)}
             onCollapse={collapseSidebar}
           />
         </div>
@@ -258,7 +261,7 @@ export function SenkuApp() {
             (galleryOpen ? (
               <ImageGallery />
             ) : messages.length === 0 ? (
-              <WelcomeScreen />
+              <WelcomeScreen onOpenMemory={() => setMemoryOpen(true)} />
             ) : (
               <ChatTimeline />
             ))}
@@ -284,6 +287,7 @@ export function SenkuApp() {
           onOpenChange={setPaletteOpen}
           onOpenLimiter={() => setLimiterOpen(true)}
           onManageProviders={() => setProvidersOpen(true)}
+          onOpenMemory={() => setMemoryOpen(true)}
         />
       )}
       <TokenLimiterDialog
@@ -292,6 +296,8 @@ export function SenkuApp() {
         onManageProviders={() => setProvidersOpen(true)}
       />
       <ProvidersDialog open={providersOpen} onOpenChange={setProvidersOpen} />
+      {/* Run 28 — persistent personal memory manager */}
+      <MemoryDialog open={memoryOpen} onOpenChange={setMemoryOpen} />
 
       {/* Run 27 — PWA plumbing: service-worker registration +
           beforeinstallprompt capture (renders nothing), and the
