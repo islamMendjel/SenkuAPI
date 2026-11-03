@@ -54,7 +54,7 @@ async function extractMark() {
   const bg = [med(vals.map((v) => v[0])), med(vals.map((v) => v[1])), med(vals.map((v) => v[2]))];
 
   // alpha ramp: 0 below LO (noise/vignette), 1 above HI (the gold)
-  const LO = 24, HI = 64;
+  const LO = 26, HI = 46;
   const out = Buffer.alloc(info.width * info.height * 4);
   for (let p = 0, q = 0; p < data.length; p += info.channels, q += 4) {
     const d = Math.max(

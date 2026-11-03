@@ -249,11 +249,13 @@
   animation: hermes-input-in 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
-/* Run 19 — THE LIVING GATEWAY: the welcome screen's breathing health
-   ring + one-time logo bloom. The ring is a conic sweep masked to a
-   hairline circle around the logo; emerald while the limiter is
-   quiet, amber (.hermes-pulse-warn) when the gateway raised a
-   warning. Rotation is slow and calm — telemetry, not a toy. */
+/* Run 19 — the living gateway ring, RE-TUNED in Run 33: the sweep is
+   now BRAND GOLD (the VLM re-audit flagged the emerald arc as a
+   palette clash against the gold caduceus — "a different app crashed
+   into the frame"). Health telemetry didn't go away: the PulseLine
+   status dot still carries emerald/amber, and when the limiter raises
+   a warning the whole medallion warms up (.hermes-warn below) — a
+   clearer signal than one foreign-colored arc. */
 @keyframes hermes-spin-slow {
   to {
     transform: rotate(360deg);
@@ -262,20 +264,20 @@
 .hermes-pulse-ring {
   background: conic-gradient(
     from 0deg,
-    rgba(52, 211, 153, 0) 0%,
-    rgba(52, 211, 153, 0.55) 12%,
-    rgba(52, 211, 153, 0.07) 32%,
-    rgba(52, 211, 153, 0) 58%
+    rgba(252, 211, 77, 0) 0%,
+    rgba(252, 211, 77, 0.9) 16%,
+    rgba(252, 211, 77, 0.16) 38%,
+    rgba(252, 211, 77, 0) 62%
   );
   -webkit-mask: radial-gradient(
     farthest-side,
-    transparent calc(100% - 2.5px),
-    #000 calc(100% - 2px)
+    transparent calc(100% - 3px),
+    #000 calc(100% - 2.5px)
   );
   mask: radial-gradient(
     farthest-side,
-    transparent calc(100% - 2.5px),
-    #000 calc(100% - 2px)
+    transparent calc(100% - 3px),
+    #000 calc(100% - 2.5px)
   );
   animation: hermes-spin-slow 9s linear infinite;
 }
@@ -283,9 +285,73 @@
   background: conic-gradient(
     from 0deg,
     rgba(251, 191, 36, 0) 0%,
-    rgba(251, 191, 36, 0.6) 12%,
-    rgba(251, 191, 36, 0.08) 32%,
-    rgba(251, 191, 36, 0) 58%
+    rgba(251, 191, 36, 0.95) 16%,
+    rgba(251, 191, 36, 0.2) 38%,
+    rgba(251, 191, 36, 0) 62%
+  );
+}
+
+/* Run 32 — THE MEDALLION: the hero emblem's stage. The VLM audit of
+   the rebranded hero scored it 4.5/10 — the conic sweep alone read as
+   a 60%-invisible stray arc, and the scale-150 blur blob read as a
+   dark smudge, leaving the gold mark stranded in a void. The fix is
+   staging, not decoration: a soft amber halo that actually falls off,
+   a hairline plate that holds the mark in pooled light, and a full
+   track under the health sweep so the ring reads as designed at every
+   rotation angle. All three are inset-relative — the compact-mode
+   media queries shrink the whole emblem proportionally.
+   Run 33 re-tune: track committed to brand gold (white was still too
+   shy), plate light lifted, and .hermes-warn warms the ENTIRE
+   medallion when the limiter raises a warning. */
+.hermes-medallion-glow {
+  background: radial-gradient(
+    circle,
+    rgba(251, 191, 36, 0.14) 0%,
+    rgba(251, 191, 36, 0.055) 40%,
+    rgba(251, 191, 36, 0.015) 58%,
+    transparent 72%
+  );
+}
+.hermes-medallion-plate {
+  background:
+    radial-gradient(
+      circle at 50% 42%,
+      rgba(251, 191, 36, 0.16) 0%,
+      rgba(251, 191, 36, 0.05) 50%,
+      rgba(251, 191, 36, 0) 72%
+    ),
+    rgba(255, 255, 255, 0.02);
+  box-shadow:
+    inset 0 0 22px rgba(251, 191, 36, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.hermes-medallion-track {
+  border: 1.5px solid rgba(253, 230, 138, 0.14);
+}
+.hermes-w-logo-wrap.hermes-warn .hermes-medallion-track {
+  border-color: rgba(251, 191, 36, 0.3);
+}
+.hermes-w-logo-wrap.hermes-warn .hermes-medallion-plate {
+  background:
+    radial-gradient(
+      circle at 50% 42%,
+      rgba(251, 191, 36, 0.2) 0%,
+      rgba(251, 191, 36, 0.07) 50%,
+      rgba(251, 191, 36, 0) 72%
+    ),
+    rgba(255, 255, 255, 0.02);
+  box-shadow:
+    inset 0 0 26px rgba(251, 191, 36, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border-color: rgba(251, 191, 36, 0.34);
+}
+.hermes-w-logo-wrap.hermes-warn .hermes-medallion-glow {
+  background: radial-gradient(
+    circle,
+    rgba(251, 191, 36, 0.2) 0%,
+    rgba(251, 191, 36, 0.08) 40%,
+    rgba(251, 191, 36, 0.02) 58%,
+    transparent 72%
   );
 }
 @keyframes hermes-bloom {
@@ -620,11 +686,11 @@
     height: 3rem;
   }
   .hermes-welcome .hermes-w-logo-wrap {
-    margin-bottom: 0.75rem;
+    margin-bottom: 1rem;
   }
   .hermes-welcome .hermes-w-logo {
-    height: 2.75rem;
-    width: 2.75rem;
+    height: 3rem;
+    width: 3rem;
   }
   .hermes-welcome .hermes-w-hello {
     font-size: 1rem;
@@ -665,8 +731,8 @@
     display: none;
   }
   .hermes-welcome .hermes-w-logo {
-    height: 2.5rem;
-    width: 2.5rem;
+    height: 2.75rem;
+    width: 2.75rem;
   }
   .hermes-welcome .hermes-w-name {
     font-size: 1.625rem;

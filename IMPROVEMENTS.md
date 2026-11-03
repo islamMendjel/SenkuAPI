@@ -3142,3 +3142,43 @@ avatar, splash, favicon, SW precache) — none of them the official mark.
   pre-existing (examples/ ×2, skills/ ×1, attachments.ts ×3, gateway.ts ×2,
   paths now `lib/hermes/`), zero new; dev.log healthy. The run's test chat
   ("Identity Inquiry") was deleted via the API — zero orphans.
+
+## Run 33 — 2026-11-03: THE MEDALLION — the hero emblem rebuilt until the auditor said "ship it"
+
+**The directive:** the owner flagged the welcome hero emblem (rebranded in
+Run 32) and said "fix this section and make it perfect."
+
+**Observe (measure first, then audit):** live geometry showed a 31×40px
+gold squiggle floating inside a 64px hairline circle whose conic sweep was
+the only visible part — plus the old scale-150 blur blob reading as a dark
+smudge behind everything. VLM audit #1: **4.5/10** — "placeholder that got
+shipped": 60%-invisible ring arc, teal-emerald sweep clashing with the gold
+mark ("a different app crashed into the frame"), glow with no luminance,
+mark stranded in a void, mushy edges.
+
+**Implement (two rounds, audit-driven):**
+- Round 1 — THE MEDALLION: the mark gets a real stage. A radial amber halo
+  (replacing the blur blob), a hairline medallion plate holding the mark in
+  pooled light (`hermes-medallion-glow/-plate`), and a full track ring under
+  the rotating health sweep. All inset-relative, so the compact-mode media
+  queries scale the whole emblem proportionally. The mark itself was
+  regenerated with a steeper alpha ramp (26→46) for crisper gold edges.
+  VLM audit #2: 6.5/10 — "commit to the ring, pick one identity color."
+- Round 2 — UNIFY & COMMIT: the sweep is now brand gold (rgba amber-300,
+  alpha 0.9 head) on a gold-tinted track (`hermes-medallion-track`); health
+  telemetry stays honest — the PulseLine dot carries the quiet emerald
+  state, and when the limiter raises a warning the ENTIRE medallion warms
+  up (`.hermes-warn` retunes track, plate light, halo and sweep together —
+  a louder signal than one foreign-colored arc ever was). Mark base size
+  h-14→h-16, compact rungs 44→48px / 40→44px, breathing room to the greeting
+  (mb-4→mb-5 / 0.75rem→1rem), greeting lifted zinc-400→zinc-300.
+  VLM audit #3: **8/10 — "the emblem is finished and polished. Ship the
+  emblem."** Ring complete, palette unified, mark legible and staged.
+
+**Verify:** VLM-scored 4.5 → 6.5 → 8 across the same auditor prompt; the
+emblem verified at all three size rungs (64px full, 48px compact, 44px very
+short) and on mobile 390px — proportional medallion, no collisions, no
+clipping; splash/sidebar/timeline mark surfaces untouched; the welcome
+screen's full lockup (emblem → greeting → name → pulse → cards) intact.
+Baselines: lint 0 errors (2 pre-existing warnings); tsc 8 pre-existing,
+zero new; console clean; dev.log healthy. Zero TODOs shipped.

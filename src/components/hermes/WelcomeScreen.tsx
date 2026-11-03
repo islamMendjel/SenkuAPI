@@ -264,27 +264,51 @@ export function WelcomeScreen({
           ref={contentRef}
           className="hermes-w-pt hermes-w-pb my-auto flex w-full flex-col items-center pt-7 pb-16"
         >
-          {/* logo — the breathing health ring stays: emerald = keys
-              healthy, amber = the limiter raised a warning */}
-          <div className="hermes-w-logo-wrap hermes-bloom relative mb-4">
+          {/* logo — the Hermes medallion: the official caduceus staged
+              in amber light inside a hairline plate, under a rotating
+              gold health sweep (the medallion warms up entirely when
+              the limiter raises a warning; the PulseLine dot carries
+              the quiet emerald state). Everything is inset-relative,
+              so the compact-mode media queries shrink the whole
+              emblem proportionally. */}
+          <div
+            className={`hermes-w-logo-wrap hermes-bloom relative mb-5 ${
+              warn ? "hermes-warn" : ""
+            }`}
+          >
+            {/* halo — a real glow: amber light falling off into the dark
+                (replaces the old blur blob that read as a smudge) */}
             <div
               aria-hidden
-              className="absolute inset-0 -z-10 scale-150 rounded-full bg-amber-400/10 blur-3xl"
+              className="hermes-medallion-glow absolute -inset-10 -z-20 rounded-full"
+            />
+            {/* the plate — a defined stage for the mark, not a void */}
+            <div
+              aria-hidden
+              className="hermes-medallion-plate absolute -inset-2.5 -z-10 rounded-full border border-white/[0.08]"
             />
             {pulse && (
-              <span
-                aria-hidden
-                className={`hermes-pulse-ring absolute -inset-3 rounded-full ${
-                  warn ? "hermes-pulse-warn" : ""
-                }`}
-              />
+              <>
+                {/* full track — committed to brand gold so the ring
+                    reads as designed at every rotation angle */}
+                <span
+                  aria-hidden
+                  className="hermes-medallion-track absolute -inset-4 rounded-full"
+                />
+                <span
+                  aria-hidden
+                  className={`hermes-pulse-ring absolute -inset-4 rounded-full ${
+                    warn ? "hermes-pulse-warn" : ""
+                  }`}
+                />
+              </>
             )}
             <Image
               src="/hermes-mark.png"
               alt="Hermes logo"
               width={875}
               height={1124}
-              className="hermes-w-logo hermes-float h-14 w-14 object-contain object-center drop-shadow-[0_0_24px_rgba(251,191,36,0.25)]"
+              className="hermes-w-logo hermes-float h-16 w-16 object-contain object-center drop-shadow-[0_0_24px_rgba(251,191,36,0.3)]"
               priority
             />
           </div>
@@ -292,7 +316,7 @@ export function WelcomeScreen({
           {/* the headline lockup — quiet greeting, then the name at
               display scale in brand gold */}
           <h1 className="hermes-fade-up [animation-delay:60ms]">
-            <span className="hermes-w-hello block text-[clamp(19px,3vw,27px)] font-medium text-zinc-400">
+            <span className="hermes-w-hello block text-[clamp(19px,3vw,27px)] font-medium text-zinc-300">
               {lockup.hello}
             </span>
             <span className="hermes-w-name-wrap mt-1 block text-[clamp(33px,5.5vw,50px)] font-semibold leading-[1.05] tracking-tight">
