@@ -67,12 +67,12 @@ function CopyButton({ text }: { text: string }) {
       }}
       aria-label="Copy raw markdown"
       title="Copy raw markdown"
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100"
     >
       {copied ? (
-        <Check className="h-3.5 w-3.5 text-emerald-400" />
+        <Check className="h-4 w-4 text-emerald-400" />
       ) : (
-        <Copy className="h-3.5 w-3.5" />
+        <Copy className="h-4 w-4" />
       )}
     </button>
   );
@@ -213,7 +213,7 @@ function UserMessage({ message }: { message: UIMessage }) {
 
   return (
     <div className="group senku-fade-up flex flex-col items-end">
-      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-[#2f2f30] px-4 py-2.5 text-[15px] leading-relaxed text-zinc-100">
+      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-white/[0.07] bg-gradient-to-br from-[#34322d] to-[#2a2a29] px-4 py-2.5 text-[15px] leading-relaxed text-zinc-100 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.4)]">
         {message.imageRequest && (
           <span
             className="mb-1.5 inline-flex items-center gap-1.5 rounded-lg border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200"
@@ -242,9 +242,9 @@ function UserMessage({ message }: { message: UIMessage }) {
           }}
           aria-label="Edit message"
           title="Edit message"
-          className="flex h-6 w-6 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100"
         >
-          <Pencil className="h-3.5 w-3.5" />
+          <Pencil className="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -724,7 +724,7 @@ function AssistantMessage({
               variant history navigation (‹ 2/3 ›) and — on the last
               settled answer — regenerate live here too. */}
           {!message.streaming && !message.error && !message.duel && (
-            <div className="mt-1.5 flex items-center gap-1 senku-meta-row">
+            <div className="mt-2 flex items-center gap-1 senku-meta-row">
               {/* answer variants: flip through this turn's earlier
                   answers; each carries its own honest receipt */}
               {message.variants &&
@@ -740,9 +740,9 @@ function AssistantMessage({
                       disabled={streaming || message.variantIndex === 0}
                       aria-label="Previous answer version"
                       title="Previous answer"
-                      className="flex h-6 w-5 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                      className="flex h-7 w-5 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent"
                     >
-                      <ChevronLeft className="h-3.5 w-3.5" />
+                      <ChevronLeft className="h-4 w-4" />
                     </button>
                     <span
                       className="min-w-[30px] text-center text-[11px] tabular-nums text-zinc-500"
@@ -758,9 +758,9 @@ function AssistantMessage({
                       }
                       aria-label="Next answer version"
                       title="Next answer"
-                      className="flex h-6 w-5 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                      className="flex h-7 w-5 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent"
                     >
-                      <ChevronRight className="h-3.5 w-3.5" />
+                      <ChevronRight className="h-4 w-4" />
                     </button>
                   </span>
               )}
@@ -772,9 +772,9 @@ function AssistantMessage({
                   disabled={streaming}
                   aria-label="Regenerate this answer"
                   title="Regenerate — the current answer stays in the version history"
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-200 disabled:opacity-40"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400/80 transition-colors hover:bg-white/10 hover:text-zinc-100 disabled:opacity-40"
                 >
-                  <RefreshCcw className="h-3 w-3" />
+                  <RefreshCcw className="h-3.5 w-3.5" />
                 </button>
               )}
               <CopyButton text={message.content} />
@@ -786,22 +786,22 @@ function AssistantMessage({
                   }
                   aria-pressed={speechPlaying}
                   title={speechPlaying ? "Stop reading aloud" : "Read aloud"}
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors ${
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
                     speechPlaying
                       ? "text-emerald-300"
-                      : "text-zinc-500 hover:bg-white/10 hover:text-zinc-200"
+                      : "text-zinc-400/80 hover:bg-white/10 hover:text-zinc-100"
                   }`}
                 >
                   {speechLoading ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Loader2 className="h-4 w-4 animate-spin" />
                   ) : speechPlaying ? (
-                    <span className="senku-eq flex h-3.5 items-end gap-[2px]" aria-hidden>
+                    <span className="senku-eq flex h-4 items-end gap-[2px]" aria-hidden>
                       <span />
                       <span />
                       <span />
                     </span>
                   ) : (
-                    <Volume2 className="h-3.5 w-3.5" />
+                    <Volume2 className="h-4 w-4" />
                   )}
                 </button>
               )}
@@ -814,7 +814,7 @@ function AssistantMessage({
                 </span>
               )}
               <span
-                className="ml-0.5 truncate text-[11px] text-zinc-600"
+                className="ml-0.5 truncate text-[11px] text-zinc-500"
                 title={provenanceLine(message)}
               >
                 {provenanceLine(message)}
@@ -989,9 +989,36 @@ export function ChatTimeline() {
     };
   }, [highlightMessageId, messages, flashMessage]);
 
+  // Run 30 — reading cues: the top fade proves there is content above
+  // (on the moment the timeline is scrolled) and the jump pill appears
+  // once the reader drifts more than ~240px from the newest message.
+  // Both live off one passive scroll listener; direct state writes
+  // (no rAF) — a class toggle per scroll event is cheap, and React
+  // bails out when the booleans don't change.
+  const [scrolledTop, setScrolledTop] = useState(false);
+  const [offBottom, setOffBottom] = useState(false);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const sync = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setScrolledTop(el.scrollTop > 6);
+      setOffBottom(distance > 240);
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    return () => el.removeEventListener("scroll", sync);
+  }, []);
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
   return (
-    <div ref={scrollRef} className="senku-scroll flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl space-y-6 px-4 pb-6 pt-4">
+    <div className="senku-timeline flex min-h-0 flex-1 flex-col">
+      <div ref={scrollRef} className="senku-scroll flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-3xl space-y-7 px-4 pb-6 pt-5">
         {messages.map((m, i) =>
           m.role === "user" ? (
             <div
@@ -1026,7 +1053,27 @@ export function ChatTimeline() {
           )
         )}
         <div ref={bottomRef} />
+        </div>
       </div>
+
+      {/* reading cues — see the scroll-sync effect above for when each
+          earns its visibility (aria-hidden fade; labeled button) */}
+      <div
+        aria-hidden
+        className="senku-tl-fade"
+        data-on={scrolledTop ? "1" : "0"}
+      />
+      <button
+        type="button"
+        onClick={jumpToLatest}
+        aria-label="Jump to the latest message"
+        title="Jump to the latest message"
+        className="senku-jump"
+        data-on={offBottom ? "1" : "0"}
+      >
+        <ChevronDown className="h-4 w-4" aria-hidden />
+        Latest
+      </button>
     </div>
   );
 }

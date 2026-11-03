@@ -809,11 +809,17 @@
   }
 }
 
-/* Markdown timeline rendering */
+/* Markdown timeline rendering — Run 30: THE GILDED ANSWER.
+   A design audit of the old surface scored it 5.5/10: "an unstyled
+   markdown preview wearing a premium app's chrome" — the amber brand
+   never entered the reading surface, hierarchy was weight-only, and
+   every block type drifted. This is the typographic system:
+   amber spark section markers, an editorial lede, amber list and
+   quote markers, warm inline code, and one consistent rhythm. */
 .senku-md {
-  font-size: 15px;
-  line-height: 1.7;
-  color: #e4e4e7;
+  font-size: 15.25px;
+  line-height: 1.78;
+  color: #e8e8ea;
   word-break: break-word;
 }
 .senku-md > *:first-child {
@@ -822,31 +828,62 @@
 .senku-md > *:last-child {
   margin-bottom: 0;
 }
+/* the lede — an answer's opening paragraph reads as a standfirst:
+   one step larger and brighter, the editorial "here's the point" */
+.senku-md > p:first-child {
+  font-size: 1.075em;
+  line-height: 1.72;
+  color: #f2f2f4;
+}
 .senku-md p {
-  margin: 0.65em 0;
+  margin: 0.72em 0;
+  text-wrap: pretty;
 }
 .senku-md h1,
 .senku-md h2,
 .senku-md h3,
 .senku-md h4 {
-  font-weight: 600;
-  color: #fafafa;
-  margin: 1.1em 0 0.5em;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: #fdfcfa;
+  margin: 1.35em 0 0.5em;
   line-height: 1.3;
 }
 .senku-md h1 {
   font-size: 1.35em;
 }
 .senku-md h2 {
-  font-size: 1.2em;
+  font-size: 1.26em;
 }
 .senku-md h3 {
   font-size: 1.08em;
 }
+/* the brand enters the reading surface: a golden eureka spark —
+   a tiny rotated amber diamond — leads every section header */
+.senku-md h2::before,
+.senku-md h3::before {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.5em;
+  vertical-align: 0.08em;
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #fde68a, #f59e0b);
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.35);
+}
+.senku-md h3::before {
+  width: 0.4em;
+  height: 0.4em;
+  margin-right: 0.45em;
+  opacity: 0.75;
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.25);
+}
 .senku-md ul,
 .senku-md ol {
-  margin: 0.6em 0;
-  padding-left: 1.4em;
+  margin: 0.65em 0;
+  padding-left: 1.45em;
 }
 .senku-md ul {
   list-style: disc;
@@ -855,30 +892,53 @@
   list-style: decimal;
 }
 .senku-md li {
-  margin: 0.25em 0;
+  margin: 0.32em 0;
+  text-wrap: pretty;
+}
+/* amber markers — quieter than the section sparks (the diamonds are
+   THE accent moment; the bullets only carry the rhythm) */
+.senku-md li::marker {
+  color: #b08a3e;
+  font-weight: 600;
+}
+.senku-md ul ul li::marker {
+  color: #7d6430;
+}
+/* definition lead-ins — models write `**Term** — detail` bullets
+   constantly; the leading strong reads as the term being defined */
+.senku-md strong {
+  color: #fbf8f2;
+  font-weight: 640;
+}
+.senku-md li > strong:first-child {
+  color: #f3ead2;
 }
 .senku-md a {
-  color: #c4b5fd;
+  color: #fcd34d;
   text-decoration: underline;
+  text-decoration-color: rgba(252, 211, 77, 0.3);
   text-underline-offset: 2px;
 }
 .senku-md a:hover {
-  color: #ddd6fe;
+  color: #fde68a;
 }
+/* pull-quote — an amber rule and a candle-lit panel */
 .senku-md blockquote {
-  border-left: 3px solid #3f3f46;
-  padding-left: 0.9em;
-  margin: 0.7em 0;
-  color: #a1a1aa;
+  border-left: 3px solid rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.045);
+  border-radius: 0 10px 10px 0;
+  padding: 0.55em 0.95em;
+  margin: 0.85em 0;
+  color: #d6d6da;
 }
 .senku-md .senku-inline-code {
   font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 0.86em;
-  background: #26262a;
-  border: 1px solid #3f3f46;
+  background: #2a2721;
+  border: 1px solid #453f2e;
   border-radius: 5px;
   padding: 0.12em 0.35em;
-  color: #e4e4e7;
+  color: #eee1c4;
 }
 /* fenced blocks are rendered by the Markdown component (syntax
    highlighted) — .senku-code owns the chrome, tokens own the color */
@@ -900,14 +960,14 @@
 }
 .senku-md table {
   border-collapse: collapse;
-  margin: 0.8em 0;
+  margin: 0.85em 0;
   width: 100%;
   font-size: 0.92em;
 }
 .senku-md th,
 .senku-md td {
   border: 1px solid #2f2f33;
-  padding: 0.45em 0.7em;
+  padding: 0.55em 0.85em;
   text-align: left;
 }
 .senku-md th {
@@ -916,12 +976,114 @@
 }
 .senku-md hr {
   border: none;
-  border-top: 1px solid #2f2f33;
-  margin: 1em 0;
+  height: 1px;
+  margin: 1.5em 0;
+  background: linear-gradient(
+    to right,
+    transparent,
+    #34343a 18%,
+    #34343a 82%,
+    transparent
+  );
+}
+
+/* Run 30 — touch devices get a scroll cue on wide tables: a sticky
+   right-edge fade sentinel (flex pattern) that hints "swipe" and
+   rides the scroll edge; it collapses onto the table's tail once
+   fully scrolled. Desktop (pointer:fine) shows scrollbars on hover
+   already and stays clean. */
+@media (pointer: coarse) {
+  .senku-md .overflow-x-auto {
+    display: flex;
+    -webkit-overflow-scrolling: touch;
+  }
+  .senku-md .overflow-x-auto > table {
+    flex: none;
+  }
+  .senku-md .overflow-x-auto::after {
+    content: "";
+    flex: none;
+    position: sticky;
+    right: 0;
+    top: 0;
+    width: 24px;
+    pointer-events: none;
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(24, 24, 27, 0.8)
+    );
+  }
 }
 
 /* thinking mark = our white sparkle logo, animated by
    .senku-thinking-sparkle (see the keyframes above) */
+
+/* Run 30 — reading cues on the timeline: a top fade that appears
+   only when the conversation is scrolled (proof there's more above),
+   and a jump-to-latest pill that floats in from the bottom edge
+   the moment the reader drifts away from the newest message. */
+.senku-timeline {
+  position: relative;
+}
+.senku-tl-fade {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 44px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(24, 24, 27, 0.96), transparent);
+  opacity: 0;
+  transition: opacity 220ms ease;
+  z-index: 5;
+}
+.senku-tl-fade[data-on="1"] {
+  opacity: 1;
+}
+.senku-jump {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translate(-50%, 10px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(63, 63, 70, 0.9);
+  background: rgba(32, 32, 36, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #d4d4d8;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 8px 28px -8px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+  z-index: 6;
+}
+.senku-jump[data-on="1"] {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.senku-jump:hover {
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fde68a;
+}
+.senku-jump:focus-visible {
+  outline: 2px solid rgba(251, 191, 36, 0.6);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .senku-tl-fade,
+  .senku-jump {
+    transition: none;
+  }
+}
 
 /* pro code blocks: .senku-code chrome, tokens own the color */
 

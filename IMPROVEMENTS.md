@@ -2927,3 +2927,77 @@ visitor's first pixel. That became the target.
   "TypeScript Debounce Function" — both timestamped inside this run's window) were deleted
   via the API; the identically-titled older chats in the list predate this run and were left
   untouched.
+
+## Run 30 — 2026-11-03: THE GILDED ANSWER — a typographic system for the reading surface
+
+**Directive (verbatim):** "very good job, again look at the site first, then innovate. Think
+about the user experience and think outside the box. Make one bold change that improves
+conversions or the look and feel, not a small tweak. Use any tool you have. You must cook and
+ship a change every time." + standing guardrails (no redundancy, no downgrades).
+
+**Observe first.** Run 29 rebuilt the welcome screen — the first pixel. This run pointed the same
+VLM critic at where every pixel AFTER the first one lives: **the conversation view**, the surface
+users spend ~95% of their time on. The audit was brutal: **5.5/10 — "an unstyled markdown preview
+wearing a premium app's chrome."** Named defects: hierarchy "flat and monotone" (in a brand whose
+identity is gold, the reading surface used *literally zero* amber), section headers distinguishable
+from body only by weight, "two markdown renderers stitched together" (the bold-lead-in bullet
+illusion), cramped table cells + a ghost double-edge at the table bottom, drifting line lengths,
+copy/regenerate actions "nearly invisible" at 24px sub-20% opacity, and zero reading cues (a long
+answer cut mid-paragraph at the top with no affordance). That became the target: one coherent
+typographic system, the same scale of boldness as Run 29 but on the retention surface.
+
+**The change — THE GILDED ANSWER (`.senku-md` rebuilt + timeline chrome):**
+
+- **The brand finally enters the reading surface.** Every h2/h3 now leads with a golden eureka
+  spark — a rotated amber-gradient diamond with a soft glow (h3's smaller and dimmer). One quiet
+  glyph per section; the single loudest fix for "monotone".
+- **An editorial lede.** An answer's opening paragraph renders one step larger and brighter
+  (1.075em standfirst) — answers now open like authored documents, not text dumps.
+- **A real rhythm.** Body 15.25px/1.78, tuned paragraph margins, `text-wrap: pretty`; amber-tinted
+  list markers (calibrated DOWNER than the sparks after the follow-up audit called v1
+  "over-seeded" — the diamonds are THE accent moment, the bullets only carry the rhythm);
+  `**Term** — detail` bullets render the lead-in as a warm-cream definition term; `strong` gets
+  640-weight warm white; blockquote becomes a branded pull-quote (amber rule + candle-lit panel);
+  inline code gets a parchment tint; links corrected from legacy violet to amber; hr becomes a
+  centered gradient hairline.
+- **Tables that breathe.** Rebuilt in Markdown.tsx: an outer wrapper that owns the rounded border
+  and clips (overflow-hidden), an inner div that scrolls — killing the ghost-corner artifact —
+  with cell padding up (px-3.5/py-2.5), a calmer 11.5px tracked header, quieter zebra, and a
+  scan-friendly row hover. On touch devices (pointer: coarse), a **sticky right-edge fade
+  sentinel** (flex pattern, 24px) hints "swipe" and rides the scroll edge — desktop stays clean.
+- **Actions you can actually see.** Copy/edit/regenerate/read-aloud/variant-nav upsized from 24px
+  hit targets with 14px icons to **28px targets with 16px icons**, resting color raised from
+  zinc-500 to zinc-400/80; the provenance line lifted from zinc-600 to zinc-500.
+- **The user bubble gets a warm cast** — hairline white/7% border, a zinc→warm gradient, and a
+  soft shadow (was a flat #2f2f30 rectangle).
+- **Reading cues (the audit's "no way to know what's above/below"):** a **top fade** that appears
+  only when the timeline is scrolled (proof there's content above) and a **"Latest" jump pill**
+  that floats in once the reader drifts >240px from the newest message — one passive scroll
+  listener drives both; the pill smooth-scrolls home and both fade under reduced-motion. Turn
+  rhythm loosened to space-y-7.
+
+**Verified (all real, through the live UI):**
+- **Iterated with the same VLM critic:** 5.5/10 → post-redesign **8/10** ("defect-by-defect:
+  flat hierarchy FIXED, invisible actions FIXED, no authored identity FIXED, no reading cues
+  FIXED; tables partially verifiable in-frame") → after calibration (quieter bullets, h2 up to
+  1.26em) and a dedicated table-edge screenshot: **"bottom edge is a single clean rounded border,
+  no ghost artifact; cell paddings comfortable; header distinct"** — final gate **8.5/10**,
+  "nothing broken or misaligned in a blocking way".
+- **Geometry, measured:** reading cues — at scroll-top the jump pill shows (opacity 1) and the
+  fade correctly stays off; clicking "Latest" lands `atBottom: true` (scrollTop 599 = max), pill
+  off, fade on. Table — wrapper bottom 456 ≥ table bottom 443 (fully contained), radius 14px,
+  last row flush. Mobile 390×844 — zero horizontal overflow, table wrapper scrollable
+  (scrollWidth 440 > client 316); the touch scroll-cue sentinel tested by injecting the exact
+  rules live: scrollW 464 = table 440 + sentinel 24, maxScroll 148, sticky live.
+- **False alarms, disproven with measurements before touching code:** "TopBar pills overlap the
+  heading" (header bottom 48 = scroller top 48, zero h2s under header), "∞ clipped in the Tokens
+  pill" (childOverflow 0, paddingRight 12px), "benefit labels break mid-word" (the unscrolled
+  edge of a scrollable table, not a layout bug).
+- **Golden path regression:** a real streamed answer (SSE → typewriter) rendered h2-with-spark,
+  ordered list, blockquote, link and inline code through the live stream; copy button exercised
+  (clicked, no errors); "New chat" → welcome screen fully intact (sparkle field, lockup, 4
+  cards); the two pre-existing older chats untouched.
+- **Hygiene:** lint 0 errors (2 pre-existing warnings); tsc 8 errors — all pre-existing
+  (examples/ ×2, skills/ ×1, attachments.ts ×3, gateway.ts ×2), zero new; console clean through
+  cold start, streaming, scrolling and every interaction; dev.log healthy. The run's test chat
+  ("Reverse Proxy API Pool", created during verification) was deleted via the API — zero orphans.
