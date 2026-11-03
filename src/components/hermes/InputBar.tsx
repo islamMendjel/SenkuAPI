@@ -6,7 +6,8 @@
 // phones it also hosts Search / Image / Duel, keeping the deck a
 // single row), Search toggle pill, effort dial, model selector chip
 // (pretty name + tier badge + caret, grouped provider dropdown),
-// server-backed voice dictation with a live waveform, send/stop.
+// server-backed voice messages with a live waveform — stopping the
+// recording transcribes and SENDS hands-free (Run 33).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -285,6 +286,10 @@ export function InputBar() {
   const recorder = useVoiceRecorder();
   const waveBarsRef = useRef<(HTMLDivElement | null)[]>([]);
   const waveLevelsRef = useRef<number[]>(new Array(WAVE_BARS).fill(4));
+  // true while finishDictation owns the stop → transcribe → send
+  // pipeline; lets the cap-rescue effect below tell a user-initiated
+  // stop apart from the hook's own 60s auto-stop
+  const stoppingRef = useRef(false);
 
   const providerName = limiter?.providerName ?? "";
   const extractingAttachments = pendingAttachments.some(
@@ -345,8 +350,13 @@ export function InputBar() {
     }
   };
 
-  // stop → transcribe (server ASR) → land the text in the input
+  // stop → transcribe (server ASR) → send it, hands-free (Run 33).
+  // If a reply is still streaming or an attachment is still being
+  // read (the send guard would drop the message), the transcript
+  // lands in the composer instead — nothing is ever lost.
   const finishDictation = async () => {
+    if (stoppingRef.current) return; // already finishing (cap + click)
+    stoppingRef.current = true;
     recorder.stop();
     setTranscribing(true);
     try {
@@ -367,14 +377,29 @@ export function InputBar() {
         toast({ description: "Didn't catch that — try speaking a bit louder." });
         return;
       }
-      setValue((v) => (v ? `${v} ${text}` : text));
-      requestAnimationFrame(() => {
-        const el = textareaRef.current;
-        if (el) {
-          el.focus();
-          el.setSelectionRange(el.value.length, el.value.length);
-        }
-      });
+      // anything already typed rides along with the dictation — read
+      // from the DOM so text typed WHILE transcribing isn't dropped
+      const typed = (textareaRef.current?.value ?? value).trim();
+      const merged = typed ? `${typed} ${text}` : text;
+      // fresh store state — the ASR round-trip took a few seconds
+      const s = useHermes.getState();
+      const blocked =
+        s.streaming || s.pendingAttachments.some((p) => p.status === "extracting");
+      if (blocked) {
+        setValue(merged);
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (el) {
+            el.focus();
+            el.setSelectionRange(el.value.length, el.value.length);
+          }
+        });
+        toast({ description: "Transcribed — send it when the current reply finishes." });
+        return;
+      }
+      setValue("");
+      if (s.imageMode) void s.sendImage(merged);
+      else void s.sendMessage(merged);
     } catch (e) {
       toast({
         description: (e as Error).message || "Transcription failed.",
@@ -382,8 +407,19 @@ export function InputBar() {
       });
     } finally {
       setTranscribing(false);
+      stoppingRef.current = false;
     }
   };
+
+  // Run 33 — the 60s hard cap stops the recorder inside the hook;
+  // that used to strand the bar on the "Transcribing" spinner with
+  // no way out. Ride the exact same pipeline as the stop button:
+  // transcribe, then auto-send.
+  useEffect(() => {
+    if (recorder.state === "processing" && !stoppingRef.current) {
+      void finishDictation();
+    }
+  }, [recorder.state]);
 
   const onMicClick = () => {
     if (recorder.state === "recording") {
@@ -1248,7 +1284,7 @@ export function InputBar() {
               </PopoverContent>
             </Popover>
 
-            {/* voice — record → server ASR → text in the input */}
+            {/* voice — record → server ASR → auto-send */}
             {isRecording ? (
               <>
                 <button
@@ -1261,9 +1297,9 @@ export function InputBar() {
                 </button>
                 <button
                   onClick={() => void finishDictation()}
-                  aria-label="Stop and transcribe"
+                  aria-label="Stop and send"
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500 text-white shadow-[0_0_0_4px_rgba(239,68,68,0.18)] transition-transform hover:scale-105"
-                  title="Stop & transcribe"
+                  title="Stop & send — transcribes and sends your message"
                 >
                   <Square className="h-3 w-3 fill-white" />
                 </button>
@@ -1271,7 +1307,7 @@ export function InputBar() {
             ) : isProcessing ? (
               <span
                 className="flex h-8 w-8 shrink-0 items-center justify-center text-zinc-400"
-                aria-label="Transcribing"
+                aria-label="Transcribing and sending"
               >
                 <Loader2 className="h-[18px] w-[18px] animate-spin" />
               </span>
@@ -1279,9 +1315,9 @@ export function InputBar() {
               <>
                 <button
                   onClick={onMicClick}
-                  aria-label="Start voice dictation"
+                  aria-label="Start voice message"
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-200"
-                  title="Voice dictation — recorded audio is transcribed in the cloud"
+                  title="Voice message — stop recording to transcribe and send it"
                 >
                   <Mic className="h-[18px] w-[18px]" />
                 </button>

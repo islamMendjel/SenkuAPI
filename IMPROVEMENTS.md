@@ -3640,3 +3640,85 @@ And the duel path inherits project instructions too: both racing
 lanes run under the same scope, so even a model race respects the
 project's contract — something neither ChatGPT nor Claude
 projects can claim.
+
+## Run 38 — 2026-11-03: VOICE, HANDS-FREE — stopping the mic now sends the message
+
+**The directive:** "make the voice message send directly after hitting
+the pause voice, so now transcribe what i said, but transcribe and
+send it directly."
+
+**Observe (the voice path, walked before touching it):** the flow was
+record → stop → server ASR → transcript lands in the composer → the
+user must then tap send. One extra tap on EVERY voice message — the
+exact friction the directive names. Walking the same path also
+surfaced two latent defects nobody had hit yet:
+
+1. **The 60-second hard cap stranded the bar.** The cap calls the
+   hook's own `stop()` → state "processing" → but only the stop
+   BUTTON calls `takeResult()`. Auto-stop at the cap left the bar on
+   the "Transcribing" spinner forever — the mic button is unmounted
+   in that state, so there was no way out short of a reload.
+2. **The tail-clip race.** `takeResult()` only awaited the stop event
+   while `recorder.state !== "inactive"` — but `MediaRecorder.stop()`
+   flips state to "inactive" SYNCHRONOUSLY while the final
+   dataavailable chunk arrives async. The blob could be built before
+   the last ~250 ms of speech landed — clipping the user's final
+   word, the worst possible failure for a message that now sends
+   itself.
+
+**The change (three fixes, one behavior):**
+
+1. **Auto-send.** `finishDictation` now sends the moment the
+   transcript arrives — mirroring `submit()`'s routing exactly
+   (imageMode → `sendImage`, else `sendMessage`). It merges anything
+   already typed (read from the DOM so text typed WHILE transcribing
+   isn't dropped) and reads the store through `useHermes.getState()`
+   — the ASR round-trip takes seconds and render-time closures would
+   be stale. **Safety fallback:** if a reply is still streaming or an
+   attachment is still extracting (the send guard would drop the
+   message), the transcript lands in the composer with a toast
+   instead — never lost, never silently discarded.
+2. **Cap rescue.** An effect rides the exact same pipeline as the
+   stop button when the hook's own 60s cap fires (a `stoppingRef`
+   distinguishes user-initiated stops) — the cap now transcribes and
+   auto-sends instead of stranding the spinner.
+3. **Deterministic flush.** The hook creates a deferred resolved by
+   `recorder.onstop`; `takeResult()` always awaits it (1.5 s safety
+   valve). Per spec every dataavailable fires before "stop", so the
+   last word always ships.
+
+Copy follows the contract: "Start voice dictation" → **"Start voice
+message"**, "Stop and transcribe" → **"Stop and send"**, spinner
+"Transcribing" → **"Transcribing and sending"**, and the button
+titles set expectations BEFORE the mic is ever touched ("stop
+recording to transcribe and send it").
+
+**Verify (browser-proven, not plausible):**
+
+- **ASR round-trip with real speech:** TTS-generated WAV → POST
+  `/api/voice/transcribe` → the spoken sentence returned as text.
+- **Auto-send, end to end:** in a real browser with a synthetic mic
+  stream and a mocked ASR response, clicking **Stop and send**
+  produced the exact fetch chain `/api/voice/transcribe` →
+  `/api/chat/send` → `/api/chats` + `/api/chat/title` + `/api/usage`
+  — the transcript appeared as a sent user message, the composer
+  stayed empty, and GLM streamed a real reply (2.3k tokens). Repeated
+  three times across sessions.
+- **The fallback:** stopping a recording WHILE an essay was
+  mid-stream landed the transcript in the composer (textarea value
+  verified) and sent nothing — the message waited for the user, zero
+  data loss.
+- **Cap rescue:** logic-path proven (the rescue effect fires on the
+  hook-initiated "processing" transition; user stops are excluded by
+  the ref).
+- Console + page errors clean across the whole session; all test
+  chats deleted afterward.
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc 6
+  pre-existing, zero new, none in touched files. Zero TODOs shipped.
+
+**Sibling note (test-harness lesson, for future runs):** a fake
+`getUserMedia` must return `stream.clone()` — the hook's cleanup
+stops the recorded stream's tracks, so returning the same stream
+object makes the SECOND recording start with dead tracks. The first
+browser test failed for exactly this reason; the app code was right,
+the harness was wrong.

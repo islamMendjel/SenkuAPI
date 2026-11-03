@@ -5,6 +5,12 @@
 // back a 16 kHz mono WAV base64 (see lib/voice/audio.ts) ready for the
 // /api/voice/transcribe endpoint. Works in every modern browser —
 // no Web Speech API dependency.
+//
+// Run 33 — the flush is deterministic: a deferred resolved by the
+// recorder's own "stop" event guarantees the FINAL dataavailable
+// chunk (the tail of the last utterance) has landed before the blob
+// is built. MediaRecorder.stop() flips .state to "inactive"
+// synchronously, so waiting on the state alone races the last chunk.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -39,6 +45,9 @@ export function useVoiceRecorder(): VoiceRecorder {
   const startedAtRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cancelledRef = useRef(false);
+  // resolved by recorder.onstop — awaited by takeResult so the final
+  // dataavailable chunk is always in chunksRef before the blob is built
+  const stopFlushedRef = useRef<Promise<void> | null>(null);
 
   const cleanup = useCallback(() => {
     if (rafRef.current !== null) {
@@ -57,6 +66,7 @@ export function useVoiceRecorder(): VoiceRecorder {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     recorderRef.current = null;
+    stopFlushedRef.current = null;
     void audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     levelRef.current = 0;
@@ -115,6 +125,9 @@ export function useVoiceRecorder(): VoiceRecorder {
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
+      stopFlushedRef.current = new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+      });
       recorder.start(250);
       recorderRef.current = recorder;
       startedAtRef.current = Date.now();
@@ -165,16 +178,18 @@ export function useVoiceRecorder(): VoiceRecorder {
 
   const takeResult = useCallback(async (): Promise<string | null> => {
     if (cancelledRef.current) return null;
-    // wait for the recorder to flush its final data
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      await new Promise<void>((resolve) => {
-        const done = () => resolve();
-        recorder.addEventListener("stop", done, { once: true });
-        setTimeout(done, 1500); // safety valve
-      });
+    // wait for the recorder to flush its final data — per spec every
+    // dataavailable fires before "stop", so once this resolves the
+    // tail of the recording is in chunksRef (1.5s safety valve)
+    if (stopFlushedRef.current) {
+      await Promise.race([
+        stopFlushedRef.current,
+        new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+      ]);
     }
-    const blob = new Blob(chunksRef.current, { type: recorder?.mimeType || "audio/webm" });
+    const blob = new Blob(chunksRef.current, {
+      type: recorderRef.current?.mimeType || "audio/webm",
+    });
     cleanup();
     setElapsedMs(0);
     setState("idle");
