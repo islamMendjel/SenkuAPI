@@ -57,6 +57,9 @@ function messagesTokens(msgs: ChatMessageData[]): number {
  * Outcome of one provider attempt — failures are TYPED so the
  * dispatcher can decide whether another key is worth trying:
  *   auth        → the key credential was rejected (401/403)
+ *   checkin     → the key is valid but billing-blocked (402) — the
+ *                 account needs its daily dashboard check-in before
+ *                 free models serve again (Run 41)
  *   unreachable → endpoint down / network cut / non-ok response
  *   empty       → stream finished but produced no content
  *   aborted     → the CLIENT disconnected mid-stream; `partial`
@@ -70,7 +73,7 @@ export type ProviderAttempt =
   | { ok: true; result: ExecResult }
   | {
       ok: false;
-      reason: "auth" | "unreachable" | "empty";
+      reason: "auth" | "checkin" | "unreachable" | "empty";
       emitted: boolean;
       /** bounded Retry-After hint (ms) parsed from 429/503 */
       retryAfterMs?: number;
@@ -198,6 +201,14 @@ export async function tryProviderStream(
 
     if (res.status === 401 || res.status === 403) {
       return { ok: false, reason: "auth", emitted: false };
+    }
+    // 402 — the credential WORKS but the account is billing-blocked
+    // (APInex: "Daily check-in required to use free models"). A
+    // distinct kind: retrying cannot heal it, the breaker must
+    // quarantine it under its own name so the UI can tell the
+    // owner exactly what to do (Run 41).
+    if (res.status === 402) {
+      return { ok: false, reason: "checkin", emitted: false };
     }
     if (!res.ok || !res.body) {
       // 429/503 may carry a bounded Retry-After for the dispatcher.

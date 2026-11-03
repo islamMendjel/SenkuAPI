@@ -98,7 +98,12 @@ export type KeyAttempt<T> =
   | { ok: true; value: T }
   /** A typed upstream failure BEFORE any payload reached the client
    *  — the loop breaker-marks the key and tries the next one. */
-  | { ok: false; retry: true; reason: "auth" | "transient"; status?: number }
+  | {
+      ok: false;
+      retry: true;
+      reason: "auth" | "transient" | "checkin";
+      status?: number;
+    }
   /** Terminal (client gone / non-retryable): stop the loop. */
   | { ok: false; retry: false; reason: string };
 
@@ -168,12 +173,17 @@ export async function withKeyFailover<T>(
 /** Status → typed failure for the pre-stream breaker. */
 export function classifyStatus(status: number): {
   retry: true;
-  reason: "auth" | "transient";
+  reason: "auth" | "transient" | "checkin";
   status: number;
 } {
   return {
     retry: true,
-    reason: status === 401 || status === 403 ? "auth" : "transient",
+    reason:
+      status === 401 || status === 403
+        ? "auth"
+        : status === 402
+          ? "checkin"
+          : "transient",
     status,
   };
 }

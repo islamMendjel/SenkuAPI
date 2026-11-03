@@ -142,7 +142,17 @@ export async function dispatchCompletion(
       };
     }
 
-    noteKeyFailure(key.id, attempt.reason === "auth" ? "auth" : "transient");
+    // The failure kind decides the breaker's cooldown shape:
+    // auth/checkin quarantine immediately (10 min), transient needs
+    // 2 strikes. A check-in-blocked key never heals by retrying.
+    noteKeyFailure(
+      key.id,
+      attempt.reason === "auth"
+        ? "auth"
+        : attempt.reason === "checkin"
+          ? "checkin"
+          : "transient"
+    );
 
     // 429/503 with a Retry-After hint: wait it out (bounded ≤3 s by
     // the executor's parser) before hammering the pool again — but

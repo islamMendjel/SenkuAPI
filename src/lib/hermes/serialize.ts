@@ -3,6 +3,7 @@
 import { db } from "@/lib/db";
 import { keyHealthSnapshot } from "./keyhealth";
 import { limiterStatus, keyWindowUsage } from "./limiter";
+import { poolKeyRecords } from "./pool";
 import {
   BURST_5H_LIMIT,
   DAILY_PACE_TARGET,
@@ -55,12 +56,30 @@ export async function providerView(provider: {
   if (provider.isActive) {
     rotationCursor = provider.rotationCursor ?? 0;
     const health = keyHealthSnapshot();
+    const pool = poolKeyRecords();
     const monthlyLimit =
       provider.tokenLimitPerKey || MONTHLY_POOL_PER_KEY;
     await Promise.all(
       keys.map(async (k, i) => {
         keyViews[i].seat = i;
-        keyViews[i].coolingUntil = health[k.id]?.coolingUntil ?? null;
+        const breaker = health[k.id];
+        keyViews[i].coolingUntil = breaker?.coolingUntil ?? null;
+        // Run 41 — THE LIVING POOL: the key's live state merges the
+        // prober's records (probe truth, serves, latency) with the
+        // breaker's verdict — one honest state per seat.
+        const rec = pool[k.id];
+        keyViews[i].live = {
+          state: breaker
+            ? breaker.kind === "checkin"
+              ? "checkin"
+              : "cooling"
+            : rec?.state ?? "unproven",
+          serves: rec?.serves ?? 0,
+          lastProbeAt: rec?.lastProbeAt?.toISOString() ?? null,
+          lastLatencyMs: rec?.lastLatencyMs ?? null,
+          lastProbeStatus: rec?.lastProbeStatus ?? null,
+          lastError: rec?.lastError ?? null,
+        };
         if (!provider.hasTokenLimit || !k.isActive) {
           keyViews[i].blockedTier = null;
           return;

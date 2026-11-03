@@ -200,7 +200,7 @@ export async function POST(req: NextRequest) {
           key: BridgeKey
         ): Promise<
           | { ok: true; value: UpstreamOk }
-          | { ok: false; retry: true; reason: "auth" | "transient"; status?: number }
+          | { ok: false; retry: true; reason: "auth" | "transient" | "checkin"; status?: number }
         > => {
           const withUsage = !streamUsageRejected.has(baseUrl);
           const payload = withUsage

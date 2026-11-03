@@ -279,6 +279,7 @@ export function HermesApp() {
               <WelcomeScreen
                 onOpenMemory={() => setMemoryOpen(true)}
                 onOpenLimiter={() => setLimiterOpen(true)}
+                onOpenProviders={() => setProvidersOpen(true)}
               />
             ) : (
               <ChatTimeline />

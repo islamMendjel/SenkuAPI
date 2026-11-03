@@ -440,6 +440,9 @@ export async function arbitrateDecision(input: ArbitrateInput): Promise<Arbitrat
   );
 }
 
-function noteFailure(keyId: string, kind: "auth" | "transient"): void {
+function noteFailure(
+  keyId: string,
+  kind: "auth" | "transient" | "checkin"
+): void {
   noteKeyFailure(keyId, kind);
 }

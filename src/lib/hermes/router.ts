@@ -38,6 +38,28 @@ import { checkKey, type KeyCheck } from "./limiter";
 // forget. Single-process personal gateway: the cache is coherent.
 const cursorCache = new Map<string, number>();
 
+// ── Run 41: the pick lock — atomic seat reservation ──────────
+// The pick critical section (read cursor → scan → advance) must be
+// ATOMIC per provider: concurrent stream starts (chat + bridge +
+// agent at once) previously could all read the same cursor and
+// double-serve the same seat, warping the ring exactly when
+// traffic is heaviest. A promise-chain mutex serializes picks:
+// each waiter chains onto the previous one's completion, so every
+// request reserves a DISTINCT seat, whatever the concurrency.
+const pickLocks = new Map<string, Promise<unknown>>();
+
+function withPickLock<T>(
+  providerId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const prev = pickLocks.get(providerId) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  // The lock tracks settlement, not success — a failed pick never
+  // wedges the ring for everyone behind it.
+  pickLocks.set(providerId, next.catch(() => undefined));
+  return next;
+}
+
 /** Cursor for a provider — cache first, DB on miss. */
 async function readCursor(providerId: string): Promise<number> {
   const cached = cursorCache.get(providerId);
@@ -86,10 +108,26 @@ export interface PickResult {
  * quarantined by the health circuit breaker are skipped when
  * alternatives exist.
  *
+ * The whole pick runs under the per-provider pick lock (Run 41):
+ * concurrent callers serialize, each reserving a distinct seat.
+ *
  * `excludeIds` lists keys already attempted in the current turn:
  * the dispatcher retries with a DIFFERENT key, never the same one.
  */
 export async function pickKey(
+  provider: {
+    id: string;
+    name: string;
+    hasTokenLimit: boolean;
+    tokenLimitPerKey: number;
+    rotationCursor?: number;
+  },
+  excludeIds?: ReadonlySet<string>
+): Promise<PickResult> {
+  return withPickLock(provider.id, () => pickKeyLocked(provider, excludeIds));
+}
+
+async function pickKeyLocked(
   provider: {
     id: string;
     name: string;

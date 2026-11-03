@@ -141,6 +141,10 @@ export interface LimiterStatus {
   /** Effective tokens across every provider, all time — never resets. */
   allTimeTokens: number;
   activeKeys: number;
+  /** Run 41 — THE LIVING POOL: active keys probe-verified live
+   *  right now. Null before the first background probe pass — the
+   *  UI shows the pool size without claiming a serving count. */
+  servingKeys: number | null;
 }
 
 export interface KeyView {
@@ -157,6 +161,16 @@ export interface KeyView {
   coolingUntil?: string | null;
   /** Which pacing tier currently blocks this key (null = allowed). */
   blockedTier?: "monthly" | "daily" | "burst5h" | null;
+  /** Run 41 — THE LIVING POOL (ACTIVE provider only): the key's
+   *  live state as the prober + breaker see it right now. */
+  live?: {
+    state: "serving" | "unproven" | "cooling" | "checkin" | "down";
+    serves: number;
+    lastProbeAt: string | null;
+    lastLatencyMs: number | null;
+    lastProbeStatus: number | null;
+    lastError: string | null;
+  } | null;
 }
 
 export interface ProviderView {

@@ -13,6 +13,7 @@ import {
   HIGH_PACE_THRESHOLD,
   MONTHLY_POOL_PER_KEY,
 } from "./constants";
+import { servingCount } from "./pool";
 import type { LimiterStatus, PaceStatus, TierInfo } from "./types";
 
 // ── Usage day (Run 14) ─────────────────────────────────────
@@ -303,5 +304,8 @@ export async function limiterStatus(provider: {
     dailyResetsAt,
     allTimeTokens,
     activeKeys: keys.length,
+    // Run 41 — THE LIVING POOL: probe-verified serving count (null
+    // before the first background probe pass — honesty over speed).
+    servingKeys: servingCount(keys.map((k) => k.id)),
   };
 }

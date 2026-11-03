@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
           key: BridgeKey
         ): Promise<
           | { ok: true; value: Response }
-          | { ok: false; retry: true; reason: "auth" | "transient"; status?: number }
+          | { ok: false; retry: true; reason: "auth" | "transient" | "checkin"; status?: number }
         > => {
           const res = await fetch(`${baseUrl}/chat/completions`, {
             method: "POST",

@@ -66,6 +66,69 @@ function greetingLockup(name: string): { hello: string; who: string } {
   return { hello: "Swift as thought, still awake,", who: `${who}?` };
 }
 
+/** Run 41 — THE LIVING POOL: seat dot tone for a key's live state.
+ *  Emerald = probe-verified live; amber = needs the daily dashboard
+ *  check-in; rose = breaker-held / not responding; zinc = unproven. */
+function seatTone(state: string): string {
+  switch (state) {
+    case "serving":
+      return "border-emerald-300/70 bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]";
+    case "checkin":
+      return "border-amber-300/80 bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.7)]";
+    case "cooling":
+      return "border-rose-300/60 bg-rose-400";
+    case "down":
+      return "border-rose-400/50 bg-rose-500/70";
+    default:
+      return "border-zinc-500/60 bg-zinc-600";
+  }
+}
+
+function seatText(k: {
+  label: string;
+  live?: { state: string; lastLatencyMs: number | null } | null;
+}): string {
+  const s = k.live?.state ?? "unproven";
+  const base =
+    s === "serving"
+      ? `serving${k.live?.lastLatencyMs ? ` · ${k.live.lastLatencyMs}ms probe` : ""}`
+      : s === "checkin"
+        ? "needs a daily check-in"
+        : s === "cooling"
+          ? "cooling down"
+          : s === "down"
+            ? "not responding"
+            : "probing…";
+  return `${k.label} — ${base}`;
+}
+
+/** The pulse line's pool segment — honest counts only: when the
+ *  prober has not spoken yet, the UI says "pooled", never "live". */
+function PoolCount({ limiter }: { limiter: LimiterStatus }) {
+  const serving = limiter.servingKeys;
+  const label =
+    serving === null
+      ? `key${limiter.activeKeys === 1 ? "" : "s"} pooled`
+      : `of ${limiter.activeKeys} key${limiter.activeKeys === 1 ? "" : "s"} serving`;
+  const detail =
+    serving === null
+      ? `${limiter.activeKeys} active key${limiter.activeKeys === 1 ? "" : "s"} in the ${limiter.providerName} pool`
+      : `${serving} of ${limiter.activeKeys} ${limiter.providerName} keys probe-verified live right now`;
+  return (
+    <span title={detail}>
+      <span className="font-semibold text-zinc-200">
+        {serving ?? limiter.activeKeys}
+      </span>{" "}
+      {serving !== null && (
+        <span className="text-zinc-600" aria-hidden>
+          /
+        </span>{" "}
+      )}
+      {label}
+    </span>
+  );
+}
+
 /** The gateway's pulse — live clock + real stats as ONE typographic
  *  line (Run 29: replaces the old separate clock paragraph and the
  *  three-chip stat strip). The stats portion is a button into the
@@ -82,7 +145,11 @@ function PulseLine({
   const today = useCountUp(limiter?.dailyTokens ?? null);
   const allTime = useCountUp(limiter?.allTimeTokens ?? null);
 
-  const warn = Boolean(limiter?.warning);
+  // Run 41 — a partially-dead pool is a warning tone, not a green dot:
+  // the ring's emerald promise is only kept when every pooled key serves.
+  const warn =
+    Boolean(limiter?.warning) ||
+    (limiter?.servingKeys != null && limiter.servingKeys < limiter.activeKeys);
 
   // Reserve the line's height before the clock mounts — no shift.
   if (!now) return <div className="mt-3.5 h-4" aria-hidden />;
@@ -143,14 +210,7 @@ function PulseLine({
               all-time
             </span>
             {sep}
-            <span
-              title={`${limiter.activeKeys} active key${limiter.activeKeys === 1 ? "" : "s"} in the ${limiter.providerName} pool${warn ? " · the limiter raised a warning" : ""}`}
-            >
-              <span className="font-semibold text-zinc-200">
-                {limiter.activeKeys}
-              </span>{" "}
-              key{limiter.activeKeys === 1 ? "" : "s"} live
-            </span>
+            <PoolCount limiter={limiter} />
             <span className="text-zinc-600" aria-hidden>
               {" "}
               · {limiter.providerName}
@@ -196,11 +256,14 @@ const STARTERS = [
 export function WelcomeScreen({
   onOpenMemory,
   onOpenLimiter,
+  onOpenProviders,
 }: {
   onOpenMemory: () => void;
   onOpenLimiter: () => void;
+  onOpenProviders: () => void;
 }) {
-  const { user, sendMessage, setSearchEnabled, limiter, memories } = useHermes();
+  const { user, sendMessage, setSearchEnabled, limiter, memories, providers } =
+    useHermes();
 
   // The bottom fade only earns its place when the content actually
   // overflows (short viewports) — when everything fits, the last
@@ -236,7 +299,18 @@ export function WelcomeScreen({
 
   // The gateway's real pulse — drives the health ring tone.
   const pulse = limiter;
-  const warn = Boolean(pulse?.warning);
+  // Run 41 — the tone is honest: amber when ANY pooled key is not
+  // probe-verified live (or the limiter raised a warning).
+  const warn =
+    Boolean(pulse?.warning) ||
+    (pulse?.servingKeys != null && pulse.servingKeys < pulse.activeKeys);
+
+  // THE LIVING MEDALLION — the active pool's seats orbit the mark
+  // itself, each dot the key's real color right now. The homepage
+  // stops asserting health and starts SHOWING it; one click opens
+  // the full orrery.
+  const activeProvider = providers.find((p) => p.isActive);
+  const ringKeys = (activeProvider?.keys ?? []).filter((k) => k.isActive);
 
   return (
     <div className="hermes-welcome relative flex min-h-0 flex-1 flex-col">
@@ -271,19 +345,24 @@ export function WelcomeScreen({
               the quiet emerald state). Everything is inset-relative,
               so the compact-mode media queries shrink the whole
               emblem proportionally. */}
-          <div
-            className={`hermes-w-logo-wrap hermes-bloom relative mb-5 ${
+          {/* THE LIVING MEDALLION (Run 41) — a button: the seats ARE
+              the pool. Hover warms the ring; click opens the orrery. */}
+          <button
+            type="button"
+            onClick={onOpenProviders}
+            aria-label={`Key pool: ${ringKeys.length ? `${ringKeys.filter((k) => k.live?.state === "serving").length} of ${ringKeys.length} keys serving — open Manage Providers` : "open Manage Providers"}`}
+            className={`hermes-w-logo-wrap hermes-bloom group relative mb-5 cursor-pointer transition-transform duration-300 hover:scale-[1.04] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-amber-400/60 ${
               warn ? "hermes-warn" : ""
             }`}
           >
             {/* halo — a real glow: amber light falling off into the dark
                 (replaces the old blur blob that read as a smudge) */}
-            <div
+            <span
               aria-hidden
               className="hermes-medallion-glow absolute -inset-10 -z-20 rounded-full"
             />
             {/* the plate — a defined stage for the mark, not a void */}
-            <div
+            <span
               aria-hidden
               className="hermes-medallion-plate absolute -inset-2.5 -z-10 rounded-full border border-white/[0.08]"
             />
@@ -303,15 +382,47 @@ export function WelcomeScreen({
                 />
               </>
             )}
+            {/* the orbiting seats — one per ACTIVE key, riding the
+                pulse-ring track at radius 48px. The layer turns at
+                80s/rev; reduced-motion holds it still. */}
+            {ringKeys.length > 0 && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute -inset-4 motion-reduce:!animate-none"
+                style={{ animation: "hermes-spin-slow 80s linear infinite" }}
+              >
+                {ringKeys.map((k, i) => {
+                  const angle =
+                    (-90 + (i * 360) / ringKeys.length) * (Math.PI / 180);
+                  const left = 50 + 50 * Math.cos(angle);
+                  const top = 50 + 50 * Math.sin(angle);
+                  const state = k.live?.state ?? "unproven";
+                  return (
+                    <span
+                      key={k.id}
+                      title={seatText(k)}
+                      className="absolute flex h-3 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+                      style={{ left: `${left}%`, top: `${top}%` }}
+                    >
+                      <span
+                        className={`h-2.5 w-2.5 rounded-full border transition-[filter] duration-300 group-hover:brightness-125 ${seatTone(state)} ${
+                          state === "checkin" ? "animate-pulse" : ""
+                        }`}
+                      />
+                    </span>
+                  );
+                })}
+              </span>
+            )}
             <Image
               src="/hermes-mark.png"
-              alt="Hermes logo"
+              alt="Hermes logo — open the key pool"
               width={875}
               height={1124}
               className="hermes-w-logo hermes-float h-16 w-16 object-contain object-center drop-shadow-[0_0_24px_rgba(251,191,36,0.3)]"
               priority
             />
-          </div>
+          </button>
 
           {/* the headline lockup — quiet greeting, then the name at
               display scale in brand gold */}
