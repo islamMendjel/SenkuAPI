@@ -1,14 +1,13 @@
-// Hermes — web search with strict token discipline.
-// Strategy (cloud-only, regex/string parsing — no local models):
-//   1. DuckDuckGo HTML endpoint  (duckduckgo-search equivalent)
-//   2. DuckDuckGo Lite endpoint  (different rate-limit bucket)
-//   3. Z.ai cloud web_search     (up to 2 attempts, fully cloud)
+// Senku — web search with strict token discipline.
+// Strategy (cloud-only, regex/string parsing — zero local compute):
+//   1. DuckDuckGo HTML endpoint  (with modern browser spoofing)
+//   2. DuckDuckGo HTML mirror    (alternate endpoint)
+//   3. Wikipedia Knowledge API   (reliable public factual fallback)
 // Plus a 30-minute in-memory memo so edit/regenerate turns and
 // rapid repeats never re-hit the network.
 // Discipline on ALL paths: max 3 results, 300 chars per snippet,
 // HTML tags stripped to prevent token bloating.
 
-import ZAI from "z-ai-web-dev-sdk";
 import {
   DEEP_SEARCH_MAX_QUERIES,
   DEEP_SEARCH_MAX_SOURCES,
@@ -21,9 +20,9 @@ import { extractDateHint } from "./grounding";
 import type { SearchSource } from "./types";
 
 const UAS = [
-  "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
 ];
 
 /** Strip HTML tags and decode the common entities (regex only). */
@@ -90,24 +89,38 @@ async function fetchWithTimeout(
   }
 }
 
-/** Primary: DuckDuckGo HTML search (lightweight regex parsing). */
+/** Primary: DuckDuckGo HTML search with realistic browser headers. */
 async function duckDuckGoHtmlSearch(query: string): Promise<SearchSource[]> {
-  const res = await fetchWithTimeout("https://html.duckduckgo.com/html/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": UAS[Date.now() % UAS.length],
-      "Accept-Language": "en-US,en;q=0.9",
+  const ua = UAS[Math.floor(Math.random() * UAS.length)];
+  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        "User-Agent": ua,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://duckduckgo.com/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Ch-Ua":
+          '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Linux"',
+      },
     },
-    body: `q=${encodeURIComponent(query)}&kl=wt-wt`,
-  }, 6000);
+    6000
+  );
   if (!res || !res.ok) return [];
   const html = await res.text().catch(() => "");
   if (!html || /anomaly|challenge|captcha/i.test(html.slice(0, 4000))) return [];
 
   const results: SearchSource[] = [];
   const blockRe =
-    /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>(?=[\s\S]{0,4000}?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>)/g;
+    /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
   let m: RegExpExecArray | null;
   while ((m = blockRe.exec(html)) !== null) {
     if (results.length >= SEARCH_MAX_RESULTS) break;
@@ -125,33 +138,41 @@ async function duckDuckGoHtmlSearch(query: string): Promise<SearchSource[]> {
   return results;
 }
 
-/** Secondary: DuckDuckGo Lite (separate endpoint, separate rate bucket). */
+/** Secondary: DuckDuckGo HTML mirror. */
 async function duckDuckGoLiteSearch(query: string): Promise<SearchSource[]> {
-  const res = await fetchWithTimeout("https://lite.duckduckgo.com/lite/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": UAS[(Date.now() + 1) % UAS.length],
-      "Accept-Language": "en-US,en;q=0.9",
+  const ua = UAS[Math.floor(Math.random() * UAS.length)];
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        "User-Agent": ua,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://duckduckgo.com/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+      },
     },
-    body: `q=${encodeURIComponent(query)}&kl=wt-wt`,
-  }, 6000);
+    6000
+  );
   if (!res || !res.ok) return [];
   const html = await res.text().catch(() => "");
   if (!html || /anomaly|challenge|captcha/i.test(html.slice(0, 4000))) return [];
 
-  // Lite page: rows of <a class="result-link" href="…">title</a> …
-  // followed by a <td class="result-snippet">…</td>
   const results: SearchSource[] = [];
-  const linkRe =
-    /<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>([\s\S]{0,3000}?<td[^>]*class="[^"]*result-snippet[^"]*"[^>]*>([\s\S]*?)<\/td>)?/g;
+  const blockRe =
+    /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
   let m: RegExpExecArray | null;
-  while ((m = linkRe.exec(html)) !== null) {
+  while ((m = blockRe.exec(html)) !== null) {
     if (results.length >= SEARCH_MAX_RESULTS) break;
     const url = unwrapDdgHref(m[1]);
     if (!isHttpUrl(url)) continue;
     const title = clampTitle(m[2]);
-    const snippet = clampSnippet(m[4] ?? "");
+    const snippet = clampSnippet(m[3] ?? "");
     results.push({
       title,
       url,
@@ -162,78 +183,49 @@ async function duckDuckGoLiteSearch(query: string): Promise<SearchSource[]> {
   return results;
 }
 
-/** Tertiary: Z.ai cloud web_search (server-side only, retried). */
-async function zaiCloudSearchOnce(query: string): Promise<SearchSource[]> {
+/** Tertiary: Wikipedia Knowledge API (reliable public factual fallback). */
+async function wikipediaSearch(query: string): Promise<SearchSource[]> {
   try {
-    const zai = await ZAI.create();
-    const items = await zai.functions.invoke("web_search", {
-      query,
-      num: SEARCH_MAX_RESULTS,
-    });
+    const url = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+      query
+    )}&utf8=&format=json`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          "User-Agent": UAS[0],
+          Accept: "application/json",
+        },
+      },
+      5000
+    );
+    if (!res || !res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const items = data?.query?.search;
     if (!Array.isArray(items)) return [];
-    return items
-      .slice(0, SEARCH_MAX_RESULTS)
-      .map((it: {
-        name?: string;
-        url?: string;
-        snippet?: string;
-        date?: string;
-      }) => {
-        const title = clampTitle(it.name ?? "");
-        const snippet = clampSnippet(it.snippet ?? "");
-        // Prefer the engine's own date field; fall back to the first
-        // date the title/snippet text states. Both are publication
-        // signals, never release dates.
-        const engineDate = typeof it.date === "string" ? it.date.trim() : "";
-        return {
-          title,
-          url: it.url ?? "",
-          snippet,
-          dateHint:
-            engineDate ||
-            extractDateHint(`${title} ${snippet}`) ||
-            undefined,
-        };
-      })
-      .filter((r) => isHttpUrl(r.url));
+
+    const results: SearchSource[] = [];
+    for (const it of items) {
+      if (results.length >= SEARCH_MAX_RESULTS) break;
+      const title = clampTitle(it.title ?? "");
+      const snippet = clampSnippet(it.snippet ?? "");
+      const dateHint =
+        typeof it.timestamp === "string"
+          ? it.timestamp.slice(0, 10)
+          : extractDateHint(`${title} ${snippet}`) ?? undefined;
+      results.push({
+        title,
+        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(
+          (it.title ?? "").replace(/ /g, "_")
+        )}`,
+        snippet,
+        dateHint,
+      });
+    }
+    return results;
   } catch {
     return [];
   }
-}
-
-async function zaiCloudSearch(query: string): Promise<SearchSource[]> {
-  // Two attempts with a short backoff — the cloud path is the
-  // last line of defense, so it must absorb transient failures.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 450));
-    const results = await zaiCloudSearchOnce(query);
-    if (results.length > 0) return results;
-  }
-  return [];
-}
-
-/** Resolve with the FIRST non-empty result list; [] once all settle empty. */
-function firstNonEmpty(promises: Promise<SearchSource[]>[]): Promise<SearchSource[]> {
-  return new Promise((resolve) => {
-    let pending = promises.length;
-    let done = false;
-    for (const p of promises) {
-      p.then((r) => {
-        if (!done && r.length > 0) {
-          done = true;
-          resolve(r);
-        }
-      })
-        .catch(() => {})
-        .finally(() => {
-          pending -= 1;
-          if (pending === 0 && !done) {
-            done = true;
-            resolve([]);
-          }
-        });
-    }
-  });
 }
 
 // ── 30-minute in-memory memo ─────────────────────────────────
@@ -243,7 +235,7 @@ const MEMO_MAX = 64;
 
 export interface WebSearchOutcome {
   results: SearchSource[];
-  source: "ddg-html" | "ddg-lite" | "zai-cloud" | "memo" | "none";
+  source: "ddg-html" | "ddg-lite" | "wikipedia" | "memo" | "none";
 }
 
 /** Web search with capped results and layered failover. */
@@ -259,16 +251,18 @@ export async function webSearchDetailed(
     return { results: hit.results, source: "memo" };
   }
 
-  // Layered failover: both DDG endpoints race in parallel (first
-  // non-empty wins), then the Z.ai cloud as a retried last resort.
-  let results = await firstNonEmpty([
-    duckDuckGoHtmlSearch(q),
-    duckDuckGoLiteSearch(q),
-  ]);
+  // Layered failover: Primary DDG HTML -> Secondary DDG HTML mirror -> Tertiary Wikipedia API
+  let results = await duckDuckGoHtmlSearch(q);
   let source: WebSearchOutcome["source"] = "ddg-html";
+
   if (results.length === 0) {
-    results = await zaiCloudSearch(q);
-    source = results.length ? "zai-cloud" : "none";
+    results = await duckDuckGoLiteSearch(q);
+    source = results.length ? "ddg-lite" : "none";
+  }
+
+  if (results.length === 0) {
+    results = await wikipediaSearch(q);
+    source = results.length ? "wikipedia" : "none";
   }
 
   if (results.length) {

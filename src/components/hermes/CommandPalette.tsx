@@ -135,6 +135,7 @@ export function CommandPalette({
     rituals,
     // Run 37 — projects: quick-create + per-project new-chat.
     projects,
+    setJarvisMode,
   } = useHermes();
   const { toast } = useToast();
 
@@ -295,6 +296,16 @@ export function CommandPalette({
         keywords:
           "gallery images history photos forged pictures collection every all",
         run: () => openGallery(),
+      },
+      {
+        id: "act-jarvis",
+        group: "Actions",
+        label: "Senku Jarvis (Autonomous Voice Agent)",
+        hint: "⌘J",
+        icon: <Sparkles className="h-4 w-4 text-amber-400" />,
+        keywords:
+          "jarvis voice speech mic handsfree audio talk english listen spoken react tools",
+        run: () => setJarvisMode(true),
       },
       {
         id: "act-rituals",

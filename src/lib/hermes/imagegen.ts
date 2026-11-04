@@ -1,12 +1,11 @@
-// Hermes — Run 22 Image Forge (server side).
-// Calls the Z.ai image engine through z-ai-web-dev-sdk (server-only),
-// writes the decoded file into generated-images/, and returns a
-// self-contained ImageRef. Disk-backed on purpose: image bytes do not
-// belong in SQLite; the DB stores only the JSON reference.
+// Senku — Cloud-Only Image Forge Adapter (zero local compute).
+// Fetches high-quality cloud generations, writes decoded files into
+// generated-images/, and returns a self-contained ImageRef.
+// Disk-backed on purpose: image bytes do not belong in SQLite; the DB
+// stores only the JSON reference.
 
 import fs from "fs";
 import path from "path";
-import ZAI from "z-ai-web-dev-sdk";
 import { IMAGE_SIZES, isValidImageId, mimeOfImageId } from "./image-forge";
 import type { ImageRef, ImageSize } from "./types";
 
@@ -29,43 +28,63 @@ export function discardImageFile(id: string): void {
   }
 }
 
-/** Forge one image. The engine needs 30–90s — callers hold the
- *  request open (the client shows a live generating card meanwhile). */
+/** Forge one image via cloud endpoint. */
 export async function forgeImage(
   prompt: string,
   size: ImageSize
 ): Promise<ImageRef> {
   const cfg = IMAGE_SIZES[size] ?? IMAGE_SIZES.square;
-  const zai = await ZAI.create();
   const t0 = Date.now();
-  const response = await zai.images.generations.create({
-    prompt,
-    // The engine's own literal union — dims is authored to match it.
-    size: cfg.dims as "1024x1024",
-  });
-  const first = response?.data?.[0];
-  const b64 = typeof first?.base64 === "string" ? first.base64 : "";
-  if (!b64) {
-    throw new Error("The image engine returned no image. Try again in a moment.");
+  const seed = Math.floor(Math.random() * 1_000_000);
+  const cleanPrompt = prompt.trim().slice(0, 1000);
+
+  // Cloud generative endpoint (Pollinations cloud pipeline with turbo model)
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?model=turbo&width=${cfg.width}&height=${cfg.height}&seed=${seed}&nologo=true`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60_000);
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "image/jpeg, image/png, image/*",
+        "User-Agent": "Senku-Cloud/1.0",
+      },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(`Cloud image endpoint returned HTTP ${res.status}`);
+    }
+
+    const arrayBuf = await res.arrayBuffer();
+    if (!arrayBuf || arrayBuf.byteLength === 0) {
+      throw new Error("Cloud image provider returned an empty image.");
+    }
+
+    const buffer = Buffer.from(arrayBuf);
+    const contentType = res.headers.get("content-type") || "image/jpeg";
+    const ext = contentType.includes("png") ? "png" : "jpg";
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    const id = `img-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}.${ext}`;
+
+    fs.mkdirSync(IMAGE_DIR, { recursive: true });
+    fs.writeFileSync(imageFilePath(id), buffer);
+
+    return {
+      id,
+      mime,
+      width: cfg.width,
+      height: cfg.height,
+      bytes: buffer.length,
+      ms: Date.now() - t0,
+      prompt,
+    };
+  } finally {
+    clearTimeout(timeoutId);
   }
-  const buffer = Buffer.from(b64, "base64");
-  // The SDK types expose only base64; the runtime also returns a
-  // `format` field ("jpeg" observed) — read it defensively.
-  const fmtRaw = (first as { format?: unknown } | undefined)?.format;
-  const ext =
-    typeof fmtRaw === "string" && /png/i.test(fmtRaw) ? "png" : "jpg";
-  const id = `img-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}.${ext}`;
-  fs.mkdirSync(IMAGE_DIR, { recursive: true });
-  fs.writeFileSync(imageFilePath(id), buffer);
-  return {
-    id,
-    mime: ext === "png" ? "image/png" : "image/jpeg",
-    width: cfg.width,
-    height: cfg.height,
-    bytes: buffer.length,
-    ms: Date.now() - t0,
-    prompt,
-  };
 }

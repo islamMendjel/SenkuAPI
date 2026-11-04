@@ -36,10 +36,10 @@ export function RightRail({
       <button
         title={
           hasSource
-            ? "Hermes Canvas — sandboxed code preview"
-            : "Hermes Canvas — opens when you preview a code block"
+            ? "Senku Canvas — sandboxed code preview"
+            : "Senku Canvas — opens when you preview a code block"
         }
-        aria-label="Toggle Hermes Canvas"
+        aria-label="Toggle Senku Canvas"
         aria-pressed={canvasOpen}
         onClick={() => setCanvasOpen(!canvasOpen)}
         className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${

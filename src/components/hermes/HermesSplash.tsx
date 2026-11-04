@@ -47,17 +47,18 @@ export function HermesSplash() {
         fading ? "pointer-events-none opacity-0" : "opacity-100"
       }`}
     >
-      {/* same chatbot logo the app wears everywhere — with the same
-          gentle breathing pulse the welcome screen uses */}
+      {/* Senku logo with gentle breathing pulse */}
       <img
-        src="/hermes-mark.png"
-        alt=""
-        className="hermes-pulse h-20 w-20 select-none object-contain object-center"
+        src="/senku-sparkle.png"
+        alt="Senku"
+        className="hermes-pulse h-20 w-20 select-none object-contain object-center drop-shadow-[0_0_24px_rgba(251,191,36,0.35)]"
         draggable={false}
       />
-      <p className="text-[12px] font-medium uppercase tracking-[0.35em] text-zinc-500">
-        Hermes
-      </p>
+      <div className="flex flex-col items-center">
+        <p className="text-[14px] font-semibold tracking-[0.25em] text-white">
+          SENKU
+        </p>
+      </div>
     </div>
   );
 }

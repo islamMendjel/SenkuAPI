@@ -16,24 +16,55 @@
 // transition instead of popping in.
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useHermes, type ProjectItem } from "@/lib/store";
 import { Sidebar } from "@/components/hermes/Sidebar";
 import { RightRail } from "@/components/hermes/RightRail";
-import { CanvasPanel } from "@/components/hermes/CanvasPanel";
 import { TopBar } from "@/components/hermes/TopBar";
 import { WelcomeScreen } from "@/components/hermes/WelcomeScreen";
 import { ChatTimeline, TemporaryBanner } from "@/components/hermes/ChatTimeline";
-import { ImageGallery } from "@/components/hermes/ImageGallery";
 import { InputBar } from "@/components/hermes/InputBar";
-import { TokenLimiterDialog } from "@/components/hermes/TokenLimiterDialog";
-import { ProvidersDialog } from "@/components/hermes/ProvidersDialog";
 import { CommandPalette } from "@/components/hermes/CommandPalette";
 import { PWARegistrar } from "@/components/hermes/PWARegistrar";
 import { HermesSplash } from "@/components/hermes/HermesSplash";
-import { VoiceInterface } from "@/components/hermes/VoiceInterface";
-import { MemoryDialog } from "@/components/hermes/MemoryDialog";
-import { RitualsDialog } from "@/components/hermes/RitualsDialog";
-import { ProjectsDialog } from "@/components/hermes/ProjectsDialog";
+
+// Deferred dynamic imports for heavy overlays, dialogs, and secondary panels
+const CanvasPanel = dynamic(
+  () => import("@/components/hermes/CanvasPanel").then((m) => m.CanvasPanel),
+  { ssr: false }
+);
+const ImageGallery = dynamic(
+  () => import("@/components/hermes/ImageGallery").then((m) => m.ImageGallery),
+  { ssr: false }
+);
+const JarvisCore = dynamic(
+  () => import("@/components/hermes/JarvisCore").then((m) => m.JarvisCore),
+  { ssr: false }
+);
+const VoiceInterface = dynamic(
+  () => import("@/components/hermes/VoiceInterface").then((m) => m.VoiceInterface),
+  { ssr: false }
+);
+const TokenLimiterDialog = dynamic(
+  () => import("@/components/hermes/TokenLimiterDialog").then((m) => m.TokenLimiterDialog),
+  { ssr: false }
+);
+const ProvidersDialog = dynamic(
+  () => import("@/components/hermes/ProvidersDialog").then((m) => m.ProvidersDialog),
+  { ssr: false }
+);
+const MemoryDialog = dynamic(
+  () => import("@/components/hermes/MemoryDialog").then((m) => m.MemoryDialog),
+  { ssr: false }
+);
+const RitualsDialog = dynamic(
+  () => import("@/components/hermes/RitualsDialog").then((m) => m.RitualsDialog),
+  { ssr: false }
+);
+const ProjectsDialog = dynamic(
+  () => import("@/components/hermes/ProjectsDialog").then((m) => m.ProjectsDialog),
+  { ssr: false }
+);
 
 /** Hover-peek timings (Run 13).
  * OPEN — how long the cursor must rest on the toggle before the
@@ -69,6 +100,8 @@ export function HermesApp() {
     streaming,
     // Run 40 — the voice conversation overlay
     voiceMode,
+    jarvisMode,
+    setJarvisMode,
   } = useHermes();
   const [limiterOpen, setLimiterOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
@@ -170,17 +203,21 @@ export function HermesApp() {
     setSidebarOpen(false);
   };
 
-  // Global ⌘K / Ctrl+K hotkey for the command palette
+  // Global ⌘K / Ctrl+K hotkey for the command palette & ⌘J for Jarvis
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setJarvisMode(!useHermes.getState().jarvisMode);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [setJarvisMode]);
 
   return (
     <div className="hermes-root flex h-dvh w-full overflow-hidden">
@@ -332,6 +369,9 @@ export function HermesApp() {
           overlay (talk → send → spoken replies). Mounted last so it
           covers every dialog; ESC / ✕ close it cleanly. */}
       {voiceMode && <VoiceInterface />}
+
+      {/* Autonomous Voice Core: Hands-Free Senku Jarvis */}
+      {jarvisMode && <JarvisCore />}
 
       {/* Run 27 — PWA plumbing: service-worker registration +
           beforeinstallprompt capture (renders nothing), and the

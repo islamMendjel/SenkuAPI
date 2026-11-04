@@ -691,8 +691,8 @@ function AssistantMessage({
             exact scale curve measured from the Claude Code reference
             GIF — same motion, our colors — beside a shimmering label. */}
         <Image
-          src="/hermes-mark.png"
-          alt="Hermes"
+          src="/senku-sparkle.png"
+          alt="Senku"
           width={28}
           height={28}
           className={`mt-0.5 h-7 w-7 shrink-0 object-contain object-center${

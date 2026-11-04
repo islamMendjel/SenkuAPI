@@ -1,71 +1,98 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from "@prisma/client";
+import path from "path";
 
-// ── Self-healing SQLite pool ──────────────────────────────────────
-// The database file is RUNTIME STATE that git can replace under the
-// running server (session-snapshot automation, stash/checkout/reset
-// rewrite the tracked file). Prisma connections opened against a
-// since-replaced or briefly-unwritable file keep failing every write
-// with SqliteError "attempt to write a readonly database" (extended
-// code 8 when the file was unwritable at open, 1032 when the file
-// was swapped under a live connection) — FOREVER, even after the
-// file on disk is writable again, because a read-only SQLite
-// connection never upgrades.
-//
-// The heal is exact: drop the pool; the next query reopens the file
-// BY PATH and picks up whatever is on disk now. Retrying is safe
-// because a read-only write was rejected without side effects —
-// unlike connection-closed errors, which are ambiguous (the write
-// may have landed) and must surface, never retry.
+// ── Database URL Resolution ───────────────────────────────────────
+// Resolves relative SQLite paths against process.cwd() so the application
+// is completely agnostic to host directory hierarchies and machine users.
+function resolveDatabaseUrl(): string {
+  const envUrl = process.env.DATABASE_URL;
+  if (!envUrl) {
+    return `file:${path.resolve(process.cwd(), "db/custom.db")}`;
+  }
+  if (envUrl.startsWith("file:")) {
+    const rawPath = envUrl.slice(5);
+    if (!path.isAbsolute(rawPath)) {
+      const cleanPath = rawPath.replace(/^(\.\/|\.\.\/)+/, "");
+      return `file:${path.resolve(process.cwd(), cleanPath)}`;
+    }
+  }
+  return envUrl;
+}
+
+// ── Zero-Lock SQLite Optimization Pragmas ──────────────────────────
+// WAL mode allows concurrent readers and writers without lock contention.
+// synchronous=NORMAL reduces fsync stalls while preserving durability,
+// and busy_timeout=5000 eliminates immediate locked errors.
+async function applyPragmas(client: PrismaClient) {
+  try {
+    await client.$queryRawUnsafe("PRAGMA journal_mode = WAL;");
+    await client.$queryRawUnsafe("PRAGMA synchronous = NORMAL;");
+    await client.$queryRawUnsafe("PRAGMA busy_timeout = 5000;");
+  } catch (err) {
+    console.warn("[db] Failed to apply SQLite optimization pragmas:", err);
+  }
+}
+
+// ── Self-Healing SQLite Pool ──────────────────────────────────────
 function createDb() {
+  const resolvedUrl = resolveDatabaseUrl();
   const base = new PrismaClient({
-    log: ['query'],
-  })
+    datasources: {
+      db: {
+        url: resolvedUrl,
+      },
+    },
+    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+  });
 
-  let recovery: Promise<void> | null = null
+  // Apply pragmas on initialization
+  void applyPragmas(base);
+
+  let recovery: Promise<void> | null = null;
   const healPool = (): Promise<void> => {
     if (!recovery) {
       recovery = base
         .$disconnect()
         .catch(() => {})
+        .then(() => applyPragmas(base))
         .finally(() => {
-          // Re-arm shortly after so a future file swap can heal too.
           setTimeout(() => {
-            recovery = null
-          }, 250)
-        })
+            recovery = null;
+          }, 250);
+        });
     }
-    return recovery
-  }
+    return recovery;
+  };
 
   const isReadOnlySqlite = (e: unknown): boolean =>
-    String((e as Error)?.message ?? '').includes(
-      'attempt to write a readonly database'
-    )
+    String((e as Error)?.message ?? "").includes(
+      "attempt to write a readonly database"
+    );
 
   return base.$extends({
     query: {
       $allModels: {
         $allOperations: async ({ args, query }) => {
           try {
-            return await query(args)
+            return await query(args);
           } catch (e) {
-            if (!isReadOnlySqlite(e)) throw e
+            if (!isReadOnlySqlite(e)) throw e;
             console.warn(
-              '[db] stale SQLite connection detected (database file was replaced or briefly unwritable) — reconnecting and retrying once'
-            )
-            await healPool()
-            return await query(args)
+              "[db] Stale SQLite connection detected — reconnecting and retrying once"
+            );
+            await healPool();
+            return await query(args);
           }
         },
       },
     },
-  })
+  });
 }
 
 const globalForPrisma = globalThis as unknown as {
-  prisma: ReturnType<typeof createDb> | undefined
-}
+  prisma: ReturnType<typeof createDb> | undefined;
+};
 
-export const db = globalForPrisma.prisma ?? createDb()
-
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+// Enforce singleton Prisma client instantiation across hot reloads in development and production
+export const db = globalForPrisma.prisma ?? createDb();
+globalForPrisma.prisma = db;

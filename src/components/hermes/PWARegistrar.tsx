@@ -59,7 +59,7 @@ export function PWARegistrar() {
     const onInstalled = () => {
       setInstallPrompt(null);
       setPwaStandalone(true);
-      toast({ description: "Hermes was installed. See you on the home screen." });
+      toast({ description: "Senku was installed. See you on the home screen." });
     };
     window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
     window.addEventListener("appinstalled", onInstalled);

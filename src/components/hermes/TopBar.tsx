@@ -16,7 +16,8 @@
 // to a project (or the next one will — draft mode), an amber folder
 // chip names it, so scope is always visible where you type.
 
-import { Clock, EyeOff, Folder, PanelLeft, Search } from "lucide-react";
+import Image from "next/image";
+import { Clock, EyeOff, Folder, PanelLeft, Search, Sparkles } from "lucide-react";
 import { useHermes } from "@/lib/store";
 import { formatCompact, pillLabel } from "@/lib/hermes/format";
 import {
@@ -66,8 +67,18 @@ export function TopBar({
   onOpenLimiter: () => void;
   onOpenPalette: () => void;
 }) {
-  const { temporary, toggleTemporary, limiter, booted, chats, currentChatId, draftProjectId, projects } =
-    useHermes();
+  const {
+    temporary,
+    toggleTemporary,
+    limiter,
+    booted,
+    chats,
+    currentChatId,
+    draftProjectId,
+    projects,
+    jarvisMode,
+    setJarvisMode,
+  } = useHermes();
 
   // Run 37 — the project whose scope the composer is writing in:
   // the CURRENT chat's own project, or the draft project for a
@@ -118,6 +129,18 @@ export function TopBar({
         >
           <PanelLeft className="h-[18px] w-[18px]" />
         </button>
+        <div className="flex items-center gap-1.5 pl-0.5 pr-1">
+          <Image
+            src="/senku-sparkle.png"
+            alt="Senku logo"
+            width={22}
+            height={22}
+            className="h-[22px] w-[22px] object-contain drop-shadow-[0_0_6px_rgba(251,191,36,0.3)]"
+          />
+          <span className="hidden text-[13.5px] font-semibold tracking-wide text-zinc-200 sm:inline">
+            Senku
+          </span>
+        </div>
         <button
           onClick={onOpenPalette}
           aria-label="Open command palette"
@@ -198,6 +221,21 @@ export function TopBar({
               : "Start a temporary chat — messages won't be saved to history. Your current conversation stays in the sidebar."}
           </TooltipContent>
         </Tooltip>
+
+        {/* Senku Jarvis Autonomous Voice Button */}
+        <button
+          onClick={() => setJarvisMode(!jarvisMode)}
+          aria-label="Toggle Senku Jarvis Voice"
+          title="Senku Jarvis Voice (⌘J)"
+          className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[13px] transition-colors sm:px-3 ${
+            jarvisMode
+              ? "border-amber-400 bg-amber-400/20 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.25)]"
+              : "border-zinc-700 text-zinc-300 hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200"
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+          <span className="hidden sm:inline">Jarvis</span>
+        </button>
 
         {booted ? (
           <button

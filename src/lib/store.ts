@@ -251,6 +251,10 @@ interface HermesState {
   voiceReply: { id: string; content: string } | null;
   consumeVoiceReply: () => void;
 
+  /** Autonomous Voice Core: Hands-Free Senku Jarvis Mode */
+  jarvisMode: boolean;
+  setJarvisMode: (on: boolean) => void;
+
   currentChatId: string | null;
   messages: UIMessage[];
   streaming: boolean;
@@ -465,8 +469,8 @@ function applyProviderView(
 
 export const useHermes = create<HermesState>((set, get) => ({
   user: {
-    name: "hermes",
-    email: "gamerislam21@gmail.com",
+    name: "Senku",
+    email: "operator@senku.local",
     plan: "Ultimate plan (unlimited)",
   },
   providers: [],
@@ -492,6 +496,7 @@ export const useHermes = create<HermesState>((set, get) => ({
   agentArmed: false,
   voiceMode: false,
   voiceReply: null,
+  jarvisMode: false,
 
   currentChatId: null,
   messages: [],
@@ -1559,6 +1564,10 @@ export const useHermes = create<HermesState>((set, get) => ({
 
   setVoiceMode(on) {
     set(on ? { voiceMode: true } : { voiceMode: false, voiceReply: null });
+  },
+
+  setJarvisMode(on) {
+    set({ jarvisMode: on });
   },
 
   consumeVoiceReply() {

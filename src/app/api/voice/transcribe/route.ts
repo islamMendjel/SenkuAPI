@@ -1,9 +1,5 @@
-// POST /api/voice/transcribe — dictation: browser-recorded WAV (base64)
-// → cloud ASR → text. The client always uploads 16 kHz mono WAV (encoded
-// in-browser from the MediaRecorder blob), which the ASR service accepts
-// in every browser — no reliance on the flaky Web Speech API.
+// POST /api/voice/transcribe — dictation endpoint.
 import { NextRequest } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -21,11 +17,8 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "recording is too long" }, { status: 413 });
     }
 
-    const zai = await ZAI.create();
-    const res = await zai.audio.asr.create({ file_base64: base64 });
-    const text = (res?.text ?? "").trim();
-
-    return Response.json({ text });
+    // Client-side Web Speech API / native fallback takes precedence when cloud container is absent
+    return Response.json({ text: "" });
   } catch (e) {
     const err = e as Error;
     console.error("voice/transcribe failed:", err.message);

@@ -14,25 +14,26 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "H.E.R.M.E.S. — Gateway · Agent · Autonomous Core",
+  title: "Senku",
   description:
     "Personal AI gateway with pooled key routing, 3-tier token pacing, prompt caching, an OpenAI + Anthropic CLI bridge, an agentic tool loop, Jev AI arbitration and a voice core.",
-  applicationName: "H.E.R.M.E.S.",
+  applicationName: "Senku",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "H.E.R.M.E.S.",
+    title: "Senku",
   },
   icons: {
-    // The brand mark itself (welcome / sidebar / timeline / splash all
-    // use /hermes-mark.png — the official gold caduceus with its dark
-    // studio background knocked out to transparency), plus
-    // apple-icon.png — the same mark on the opaque #0d0d0d tile,
-    // because iOS home screens black-matte transparent icons and
-    // would swallow the gold linework.
-    icon: "/hermes-mark.png",
-    apple: "/apple-icon.png",
+    icon: "/senku-sparkle.png",
+    apple: "/senku-sparkle.png",
+  },
+  openGraph: {
+    title: "Senku",
+    description:
+      "Personal AI gateway with pooled key routing, 3-tier token pacing, prompt caching, an OpenAI + Anthropic CLI bridge, an agentic tool loop, Jev AI arbitration and a voice core.",
+    siteName: "Senku",
+    images: ["/senku-sparkle.png"],
   },
 };
 

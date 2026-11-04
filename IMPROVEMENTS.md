@@ -2735,7 +2735,7 @@ trap the user behind it. Reduced-motion safe.
 `env(safe-area-inset-bottom)` — notch and home-indicator never eat the header, the profile
 card, or the send dock.
 
-**7. One-click "Install App" (profile menu, gamerislam21@gmail.com).** PWARegistrar
+**7. One-click "Install App" (profile menu, operator@senku.local).** PWARegistrar
 captures `beforeinstallprompt` (preventDefault — Chrome's mini-infobar suppressed, the
 menu owns the UX) and stashes it in the store; `appinstalled` clears it and toasts.
 The menu item appears between Settings and Language ONLY when it can do something:

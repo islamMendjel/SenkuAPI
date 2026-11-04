@@ -412,11 +412,11 @@ export function WelcomeScreen({
               </span>
             )}
             <Image
-              src="/hermes-mark.png"
-              alt="Hermes logo — open the key pool"
-              width={875}
-              height={1124}
-              className="hermes-w-logo hermes-float h-16 w-16 object-contain object-center drop-shadow-[0_0_24px_rgba(251,191,36,0.3)]"
+              src="/senku-sparkle.png"
+              alt="Senku logo — open the key pool"
+              width={562}
+              height={563}
+              className="hermes-w-logo hermes-float h-16 w-16 object-contain object-center drop-shadow-[0_0_24px_rgba(251,191,36,0.45)]"
               priority
             />
           </button>
@@ -434,8 +434,7 @@ export function WelcomeScreen({
             </span>
           </h1>
           <p className="hermes-w-sub hermes-fade-up mt-3 max-w-lg text-[13.5px] leading-relaxed text-zinc-500 [animation-delay:120ms]">
-            Pooled routing, prompt caching, web search — one gateway,
-            every model.
+            Pooled routing, prompt caching, web search, every model.
           </p>
 
           <PulseLine limiter={limiter} onOpenLimiter={onOpenLimiter} />
@@ -446,7 +445,7 @@ export function WelcomeScreen({
           {memories.length > 0 && (
             <button
               onClick={onOpenMemory}
-              title="What Hermes always remembers about you — click to edit"
+              title="What Senku always remembers about you — click to edit"
               className="hermes-w-mem hermes-fade-up mt-2.5 flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-400/[0.07] px-3.5 py-1.5 text-[12px] text-amber-200/90 transition-colors hover:border-amber-400/45 hover:bg-amber-400/[0.12] [animation-delay:180ms]"
             >
               <Brain className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />

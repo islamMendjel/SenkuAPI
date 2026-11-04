@@ -31,7 +31,7 @@ export const AGENT_MAX_TURNS_CAP = 8;
  *  reply that is not a tool call IS the final answer. */
 function agentSystemPrompt(): string {
   return [
-    "You are Hermes Agent — the autonomous core of the Hermes personal AI gateway.",
+    "You are Senku Agent — the autonomous core of the Senku personal AI gateway.",
     "You can act. You have exactly these tools:",
     toolSchemasPrompt(),
     "",

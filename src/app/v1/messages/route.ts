@@ -1,7 +1,7 @@
 // POST /v1/messages — THE EXOCORE (Run 40): the Anthropic Messages
 // API endpoint. This is the URL that makes Claude Code work:
 //
-//   export ANTHROPIC_BASE_URL="https://hermesapi.space-z.ai"
+//   export ANTHROPIC_BASE_URL="http://localhost:3000"
 //   export ANTHROPIC_AUTH_TOKEN="…"        # optional bridge token
 //   claude
 //

@@ -777,9 +777,9 @@ export function InputBar() {
             placeholder={
               imageMode
                 ? "Describe the image to forge… (/ for commands)"
-                : "Message Hermes... (/ for commands)"
+                : "Message Senku... (/ for commands)"
             }
-            aria-label="Message Hermes"
+            aria-label="Message Senku"
             aria-controls={slashOpen ? "hermes-slash-menu" : undefined}
             aria-activedescendant={
               slashOpen && slashActive
@@ -1355,7 +1355,7 @@ export function InputBar() {
                 <button
                   onClick={() => setVoiceMode(true)}
                   aria-label="Open voice conversation"
-                  title="H.E.R.M.E.S. Voice — talk hands-free, hear the replies spoken aloud"
+                  title="Senku Voice — talk hands-free, hear the replies spoken aloud"
                   className="group flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105"
                 >
                   <span
@@ -1396,7 +1396,7 @@ export function InputBar() {
       </div>
 
       <p className="pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 text-center text-[11px] text-zinc-600">
-        Hermes can make mistakes. Verify important information.
+        Senku can make mistakes. Verify important information.
       </p>
     </div>
   );

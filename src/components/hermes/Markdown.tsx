@@ -136,7 +136,7 @@ const StaticCodeBlock = memo(function StaticCodeBlock({
             <button
               onClick={() => openCanvas({ language: previewLang, code })}
               aria-label={`Preview this ${previewLang} block in the Tools panel`}
-              title="Open in the Hermes Canvas (sandboxed preview)"
+              title="Open in the Senku Canvas (sandboxed preview)"
               className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:bg-white/5 hover:text-zinc-100"
             >
               <PanelRight className="h-3.5 w-3.5" aria-hidden />

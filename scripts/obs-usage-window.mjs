@@ -7,7 +7,8 @@ const fmt = (d) => d.toISOString();
 let pass = 0, fail = 0;
 function check(name, actual, expected) {
   const ok = actual === expected;
-  ok ? pass++ : fail++;
+  if (ok) pass++;
+  else fail++;
   console.log(`${ok ? "✓" : "✗"} ${name}`);
   if (!ok) console.log(`   actual:   ${actual}\n   expected: ${expected}`);
 }

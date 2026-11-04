@@ -31,7 +31,11 @@ const grouped = await db.usageEvent.groupBy({ by: ["providerId"], _sum: { totalT
 const expectedAllTime = grouped.reduce((a, g) => a + Math.round((g._sum.totalTokens ?? 0) * (multByProvider.get(g.providerId) ?? 1)), 0);
 
 let pass = 0, fail = 0;
-const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? "✓" : "✗"} ${name}${detail ? " — " + detail : ""}`); };
+const check = (name, ok, detail) => {
+  if (ok) pass++;
+  else fail++;
+  console.log(`${ok ? "✓" : "✗"} ${name}${detail ? " — " + detail : ""}`);
+};
 
 check("served dailyTokens matches DB window sum × multiplier",
   limiter.dailyTokens === expectedDaily,

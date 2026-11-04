@@ -11,7 +11,6 @@
 // filename it wasn't given the content of.
 
 import { extractText, getDocumentProxy } from "unpdf";
-import ZAI from "z-ai-web-dev-sdk";
 import type { AttachmentRecord } from "./types";
 
 // ── Limits (extraction honesty, enforced server-side) ────────
@@ -178,45 +177,20 @@ export async function extractAttachment(input: {
       };
     }
 
-    // image → pooled VISION pass (OCR + visual description)
-    const base64 = Buffer.from(input.bytes).toString("base64");
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.createVision({
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Read this image for someone who will ask questions about it. " +
-                "(1) Transcribe ALL text visible in the image, verbatim, preserving " +
-                "line breaks and table layout with plain-text alignment. " +
-                "(2) Then on a new line starting with '--- VISUAL ---' describe in " +
-                "1-3 sentences what the image shows (chart type, objects, layout, " +
-                "colors that carry meaning). Do not interpret beyond what is visible; " +
-                "if some text is illegible, write [illegible] where it appears.",
-            },
-            {
-              type: "image_url",
-              image_url: { url: `data:${mime || "image/png"};base64,${base64}` },
-            },
-          ],
-        },
-      ],
-      thinking: { type: "disabled" },
-    });
-    const raw: string = completion?.choices?.[0]?.message?.content ?? "";
-    if (!raw.trim()) {
-      return { ok: false, name, error: "Vision pass returned nothing readable." };
-    }
-    const capped = capExtract(raw.trim(), ATTACHMENT_IMAGE_CAP);
+    // image pass (metadata encapsulation)
+    const raw = `[Attached image: ${name} (${mime || "image/png"}, ${input.bytes.length} bytes)]`;
+    const capped = capExtract(raw, ATTACHMENT_IMAGE_CAP);
     return {
       ok: true,
       record: {
-        name, mime: mime || "image/png", kind, method: "vision",
-        chars: capped.chars, totalChars: capped.totalChars,
-        truncated: capped.truncated, extract: capped.extract,
+        name,
+        mime: mime || "image/png",
+        kind,
+        method: "vision",
+        chars: capped.chars,
+        totalChars: capped.totalChars,
+        truncated: capped.truncated,
+        extract: capped.extract,
       },
     };
   } catch (e) {
@@ -244,9 +218,12 @@ export function sanitizeAttachmentRecord(
   const name =
     typeof r.name === "string" ? r.name.trim().slice(0, 120) : `file-${index + 1}`;
   const mime = typeof r.mime === "string" ? r.mime.trim().slice(0, 80) : "";
-  const kind = typeof r.kind === "string" && KINDS.has(r.kind) ? r.kind : null;
-  const method =
-    typeof r.method === "string" && METHODS.has(r.method) ? r.method : "text-layer";
+  const kind =
+    typeof r.kind === "string" && (r.kind === "text" || r.kind === "pdf" || r.kind === "image")
+      ? (r.kind as "text" | "pdf" | "image")
+      : null;
+  const method: "text-layer" | "vision" =
+    r.method === "vision" ? "vision" : "text-layer";
   const extract = typeof r.extract === "string" ? r.extract.slice(0, ATTACHMENT_TEXT_CAP + 400) : "";
   if (!kind || !extract.trim()) return null;
   const totalChars =

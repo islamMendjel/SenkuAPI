@@ -141,7 +141,7 @@ function RitualRow({
           rows={Math.min(5, Math.max(2, Math.ceil(promptDraft.length / 52)))}
           aria-label="Ritual prompt"
           className="w-full resize-none rounded-lg border border-zinc-700/70 bg-[#18181b] px-2.5 py-1.5 text-[12.5px] leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 focus-visible:border-amber-400/40"
-          placeholder="What should Hermes do?"
+          placeholder="What should Senku do?"
         />
         <div className="flex items-center justify-between">
           <span className="text-[10.5px] tabular-nums text-zinc-600">
@@ -603,7 +603,7 @@ export function RitualsDialog({
             </span>
           </DialogTitle>
           <DialogDescription className="text-[12.5px] leading-snug text-zinc-500">
-            Scheduled prompts Hermes runs on its own clock — each fire lands
+            Scheduled prompts Senku runs on its own clock — each fire lands
             in its own chat, grounded and billed like a turn you typed.
           </DialogDescription>
         </DialogHeader>
@@ -612,7 +612,7 @@ export function RitualsDialog({
           {rituals.length === 0 ? (
             <div className="rounded-xl border border-dashed border-zinc-700/80 p-4">
               <p className="text-[13px] leading-relaxed text-zinc-400">
-                Nothing scheduled yet. Hermes can brief you every morning,
+                Nothing scheduled yet. Senku can brief you every morning,
                 pulse-check your week, or watch a topic — while you sleep:
               </p>
               <div className="mt-3 space-y-1.5">
@@ -685,7 +685,7 @@ export function RitualsDialog({
             onChange={(e) => setPrompt(e.target.value.slice(0, RITUAL_MAX_PROMPT_CHARS))}
             rows={3}
             aria-label="Ritual prompt"
-            placeholder="What should Hermes do at that time? Be specific — it runs unattended."
+            placeholder="What should Senku do at that time? Be specific — it runs unattended."
             disabled={full}
             className="w-full resize-none rounded-lg border border-zinc-700/70 bg-[#18181b] px-2.5 py-1.5 text-[12.5px] leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 focus-visible:border-amber-400/40 disabled:cursor-not-allowed"
           />

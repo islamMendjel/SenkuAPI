@@ -140,7 +140,7 @@ export function Sidebar({
         toast({
           description:
             outcome === "accepted"
-              ? "Installing Hermes — it will land on your home screen / desktop."
+              ? "Installing Senku — it will land on your home screen / desktop."
               : "Install dismissed — you can install any time from this menu.",
         });
       } catch {
@@ -514,24 +514,19 @@ export function Sidebar({
       className="flex h-full w-[264px] shrink-0 flex-col bg-[#212121]"
       aria-label="Sidebar"
     >
-      {/* Brand row — Run 40: the unified ecosystem identity. The
-          mark, the full name, and what the system IS now: a gateway,
-          an agent, an autonomous core. */}
+      {/* Brand row — Senku identity */}
       <div className="flex h-12 items-center gap-2 px-3">
         <Image
-          src="/hermes-mark.png"
-          alt="H.E.R.M.E.S. logo"
-          width={875}
-          height={1124}
-          className="h-[26px] w-[26px] shrink-0 object-contain object-center"
+          src="/senku-sparkle.png"
+          alt="Senku logo"
+          width={562}
+          height={563}
+          className="h-[28px] w-[28px] shrink-0 object-contain object-center drop-shadow-[0_0_8px_rgba(251,191,36,0.35)]"
           priority
         />
-        <div className="min-w-0 leading-tight">
-          <div className="truncate text-[14px] font-semibold tracking-[0.08em] text-white">
-            H.E.R.M.E.S.
-          </div>
-          <div className="truncate text-[8.5px] font-medium uppercase tracking-[0.18em] text-zinc-500">
-            Gateway · Agent · Autonomous Core
+        <div className="min-w-0">
+          <div className="truncate text-[15px] font-semibold tracking-[0.06em] text-white">
+            Senku
           </div>
         </div>
         <div className="ml-auto flex items-center gap-0.5">

@@ -156,7 +156,7 @@ export function useJsRunner(code: string) {
     <iframe
       key={frame.seq}
       ref={frameRef}
-      title="Hermes JavaScript sandbox"
+      title="Senku JavaScript sandbox"
       sandbox="allow-scripts"
       srcDoc={frame.doc}
       aria-hidden
@@ -297,7 +297,7 @@ export function RunConsole({
 
       {showIntro && (
         <p className="shrink-0 px-3 pt-2.5 text-[11.5px] leading-relaxed text-zinc-500">
-          Hermes executes this block in a sandboxed iframe — opaque origin,
+          Senku executes this block in a sandboxed iframe — opaque origin,
           no network, hard 5 s cap. <span className="text-zinc-400">console.log</span>{" "}
           streams here; <span className="text-zinc-400">alert</span> becomes a
           log line.

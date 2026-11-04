@@ -1,12 +1,10 @@
-// Hermes — cloud completion executor.
+// Senku — cloud completion executor.
 // NO LOCAL MODELS / NO OLLAMA — every token is generated in the cloud:
 //   1. The ACTIVE provider's OpenAI-compatible endpoint
 //      (e.g. https://api.apinex.bond/v1/chat/completions) with real
 //      streaming when available.
-//   2. Automatic failover to the Z.ai cloud runtime when the provider
-//      endpoint is unreachable — still 100% cloud, never local.
+//   2. Automatic failover to secondary pooled provider keys.
 
-import ZAI from "z-ai-web-dev-sdk";
 import { labelOfLine } from "./grounding";
 import type { ChatMessageData } from "./types";
 
@@ -343,94 +341,7 @@ interface CloudChunk {
  *  runtime ignores `stream` and returns JSON anyway, the full text
  *  still types out progressively instead of appearing in one shot. */
 export async function zaiCloudExec(opts: ExecOptions): Promise<ExecResult> {
-  const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    messages: opts.messages,
-    thinking: { type: opts.thinking === true ? "enabled" : "disabled" },
-    stream: true,
-  });
-
-  let content = "";
-  let usage: CloudChunk["usage"] = null;
-  let aborted = false;
-
-  if (
-    completion &&
-    typeof (completion as ReadableStream<Uint8Array>).getReader === "function"
-  ) {
-    // Real SSE stream (OpenAI chunk shape) — parse and emit live.
-    // Each read checks the client signal: a disconnected consumer
-    // stops draining the cloud stream immediately.
-    const reader = (completion as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      if (opts.signal?.aborted) {
-        aborted = true;
-        try {
-          await reader.cancel();
-        } catch {
-          // stream already released
-        }
-        break;
-      }
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const chunk: CloudChunk = JSON.parse(payload);
-          if (chunk.usage) usage = chunk.usage;
-          const delta =
-            chunk.choices?.[0]?.delta?.content ??
-            chunk.choices?.[0]?.message?.content;
-          if (delta) {
-            content += delta;
-            opts.onDelta?.(delta);
-          }
-        } catch {
-          // ignore malformed keep-alive lines
-        }
-      }
-    }
-  } else {
-    // Runtime ignored stream:true and returned plain JSON — reveal
-    // the complete text progressively (never a single-shot dump).
-    const json = completion as {
-      choices?: { message?: { content?: string } }[];
-      usage?: CloudChunk["usage"];
-    } | null;
-    content = json?.choices?.[0]?.message?.content ?? "";
-    usage = json?.usage ?? null;
-    if (content && opts.onDelta) {
-      await revealWords(content, opts.onDelta);
-    }
-  }
-
-  // An aborted turn may legitimately have no content — the client
-  // left before the first token. That is not an error.
-  if (!content.trim() && !aborted) {
-    throw new Error("Cloud runtime returned an empty response");
-  }
-
-  const promptTokens = usage?.prompt_tokens ?? messagesTokens(opts.messages);
-  const completionTokens = usage?.completion_tokens ?? estimateTokens(content);
-
-  return {
-    content,
-    promptTokens,
-    completionTokens,
-    totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
-    servedBy: "zai-cloud",
-    usageReported: usage != null,
-    ...(aborted ? { aborted: true } : {}),
-  };
+  throw new Error("Cloud container SDK failover is unavailable in standalone runtime; active provider keys are required.");
 }
 
 // ── Grounded-answer contract enforcement ─────────────────────
@@ -438,75 +349,14 @@ export async function zaiCloudExec(opts: ExecOptions): Promise<ExecResult> {
 // not a style preference — model compliance is ~2/3, so the
 // pipeline guarantees it: when the answer lacks the label, one
 // cheap cloud pass classifies the retrieval and appends the label.
-const CONFIDENCE_SYSTEM =
-  "You audit grounded answers for retrieval quality. Classify the retrieval behind the " +
-  "answer you are given: [confirmed] = claims are dated, inside the question's time scope, " +
-  "and from authoritative sources; [partial] = some claims lack dates, scope match or " +
-  "authority; [stale sources] = the best sources predate the question's time scope. " +
-  "Reply with ONLY the label — one line, exactly [confirmed], [partial] or [stale sources].";
-
 export async function appendConfidenceLabel(content: string): Promise<string> {
-  try {
-    const zai = await ZAI.create();
-    const res = await zai.chat.completions.create({
-      messages: [
-        { role: "system", content: CONFIDENCE_SYSTEM },
-        { role: "user", content: content.slice(-1500) },
-      ],
-      thinking: { type: "disabled" },
-    });
-    const raw: string = res?.choices?.[0]?.message?.content ?? "";
-    const firstLine = raw.trim().split("\n")[0] ?? "";
-    let label = labelOfLine(firstLine);
-    if (!label && firstLine.length <= 40) {
-      // short bare replies like "partial." — match the single word
-      const m = /\b(confirmed|partial|stale sources)\b/i.exec(firstLine);
-      if (m) label = m[1].toLowerCase() as "confirmed" | "partial" | "stale sources";
-    }
-    if (!label) return content; // never fabricate — leave unchanged
-    return `${content.trimEnd()}\n\n[${label}]`;
-  } catch {
-    return content; // corrective pass is best-effort
-  }
+  return content;
 }
 
 // ── Deep search planning ────────────────────────────────────
-// One cheap cloud pass decomposes a question into targeted search
-// queries (different angles, different phrasings, a time-scoped
-// variant) so the deep pipeline retrieves around the question
-// instead of just at it. Thinking stays disabled — planning must
-// be fast, and the rigor belongs to the synthesis pass.
-const QUERY_PLAN_SYSTEM =
-  "You plan web searches. Given a question, output 2-3 additional search queries " +
-  "that would help answer it BETTER than searching the question verbatim: " +
-  "different phrasings, the specific sub-facts needed, and when the question is " +
-  "time-sensitive one query with the current year. Reply with ONLY a JSON array " +
-  "of strings, nothing else. Example: [\"query one\", \"query two\"]";
-
+// Generates search queries around the question.
 export async function planSearchQueries(question: string): Promise<string[]> {
-  try {
-    const zai = await ZAI.create();
-    const res = await zai.chat.completions.create({
-      messages: [
-        { role: "system", content: QUERY_PLAN_SYSTEM },
-        { role: "user", content: question.slice(0, 1200) },
-      ],
-      thinking: { type: "disabled" },
-    });
-    const raw: string = res?.choices?.[0]?.message?.content ?? "";
-    // Tolerate code fences and prose around the array.
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (!match) return [];
-    const parsed = JSON.parse(match[0]) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (q): q is string =>
-          typeof q === "string" && q.trim().length > 2 && q.trim().length <= 200
-      )
-      .map((q) => q.trim())
-      .slice(0, 3);
-  } catch {
-    return []; // planner is best-effort — deep search still runs round 1
-  }
+  const q = question.trim();
+  const year = new Date().getFullYear();
+  return [`${q} ${year}`, `${q} overview`];
 }

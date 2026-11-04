@@ -1,7 +1,7 @@
 {
-  "name": "H.E.R.M.E.S. \u2014 Gateway \u00b7 Agent \u00b7 Autonomous Core",
-  "short_name": "H.E.R.M.E.S.",
-  "description": "Pooled key routing, an OpenAI + Anthropic CLI bridge, an agentic tool loop, Jev AI arbitration and a voice core.",
+  "name": "Senku",
+  "short_name": "Senku",
+  "description": "Personal AI gateway with pooled key routing, an OpenAI + Anthropic CLI bridge, an agentic tool loop, Jev AI arbitration and a voice core.",
   "start_url": "/",
   "scope": "/",
   "id": "/",

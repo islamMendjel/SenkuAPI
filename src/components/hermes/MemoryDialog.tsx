@@ -105,7 +105,7 @@ function MemoryRow({ entry }: { entry: MemoryItem }) {
           }}
           rows={Math.min(4, Math.max(2, Math.ceil(draft.length / 46)))}
           className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-600"
-          placeholder="What should Hermes remember?"
+          placeholder="What should Senku remember?"
         />
         <div className="mt-1.5 flex items-center justify-between">
           <span className="text-[10.5px] tabular-nums text-zinc-600">
@@ -222,7 +222,7 @@ export function MemoryDialog({
             </span>
           </DialogTitle>
           <DialogDescription className="text-[12.5px] leading-snug text-zinc-500">
-            What Hermes always remembers about you — durable facts and
+            What Senku always remembers about you — durable facts and
             preferences, injected into every conversation from now on.
           </DialogDescription>
         </DialogHeader>

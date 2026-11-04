@@ -1,9 +1,5 @@
-// POST /api/voice/speak — Read-Aloud: markdown text → merged spoken WAV.
-// Chunks long answers, synthesizes each with the cloud TTS, concatenates
-// into one WAV and serves it as audio/wav. Cached in memory (LRU) so a
-// second play of the same message is instant and costs zero TTS calls.
+// POST /api/voice/speak — Read-Aloud endpoint.
 import { NextRequest } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 import {
   TTS_SPEED,
   TTS_VOICE,
@@ -49,38 +45,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const chunks = chunkForTts(speakable);
-    const zai = await ZAI.create();
-
-    const buffers: Buffer[] = [];
-    for (const chunk of chunks) {
-      const res = await zai.audio.tts.create({
-        input: chunk,
-        voice: TTS_VOICE,
-        speed: TTS_SPEED,
-        response_format: "wav",
-        stream: false,
-      });
-      const arrayBuffer = await res.arrayBuffer();
-      const buf = Buffer.from(new Uint8Array(arrayBuffer));
-      if (buf.length > 44) buffers.push(buf);
-    }
-
-    if (!buffers.length) {
-      return Response.json({ error: "TTS returned no audio" }, { status: 502 });
-    }
-
-    const wav = mergeWavBuffers(buffers);
-    ttsCachePut(key, wav);
-
-    return new Response(new Uint8Array(wav), {
-      headers: {
-        "Content-Type": "audio/wav",
-        "Content-Length": String(wav.length),
-        "X-Speech-Cache": "miss",
-        "Cache-Control": "no-store",
-      },
-    });
+    // Return 503 so client uses high-speed browser Web SpeechSynthesis
+    return Response.json(
+      { error: "Server TTS unavailable — using browser voice synthesis." },
+      { status: 503 }
+    );
   } catch (e) {
     const err = e as Error;
     console.error("voice/speak failed:", err.message);

@@ -30,7 +30,7 @@ export const KNOWLEDGE_HONESTY =
   "up-to-date answer.";
 
 export const BASE_SYSTEM_PROMPT =
-  "You are Hermes, the user's personal AI gateway. You route to pooled cloud " +
+  "You are Senku, the user's personal AI gateway. You route to pooled cloud " +
   "provider keys with prompt caching and OpenAI compatibility. Answer helpfully " +
   "in clean Markdown when structure helps. " +
   KNOWLEDGE_HONESTY +
@@ -158,7 +158,8 @@ export const SEARCH_TITLE_MAX_CHARS = 90;
 export const OXIONAI_BASE_URL = "https://api.oxionai.dev/v1";
 export const APINEX_BASE_URL = "https://api.apinex.bond/v1";
 export const APINEX_TEST_KEY =
-  "sk-apx6afb8d9b8f503c4ac6f3b81e1d0db670c22001ba2790baf";
+  process.env.APINEX_API_KEY ||
+  "sk-apx-seed-key-placeholder-000000000000000000000000";
 
 export const OXIONAI_MODELS = [
   "claude-fable-5.1",
@@ -183,6 +184,7 @@ export const APINEX_MODELS = [
   "free/gemini-3.8-flash",
   "free/qwen-3.8-max",
   "free/kimi-k3",
+  "free/claude-4.6-opus",
   "free/deepseek-v4.1-flash",
   "free/deepseek-v4-pro-0813",
   "free/minimax-m3.1-flash",
@@ -199,8 +201,8 @@ export const APINEX_NON_CHAT_IDS = ["free/jev-1.13"];
 
 // ── Identity (single-user personal gateway) ──────────────────
 export const USER = {
-  name: "hermes",
-  email: "gamerislam21@gmail.com",
+  name: process.env.USER_NAME || "Senku",
+  email: process.env.USER_EMAIL || "operator@senku.local",
   plan: "Ultimate plan (unlimited)",
 };
 

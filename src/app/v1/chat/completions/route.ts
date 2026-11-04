@@ -2,8 +2,8 @@
 // OpenAI-compatible gateway endpoint. This is the URL external CLIs
 // point at:
 //
-//   export OPENAI_BASE_URL="https://hermesapi.space-z.ai/v1"
-//   curl -X POST https://hermesapi.space-z.ai/v1/chat/completions \
+//   export OPENAI_BASE_URL="http://localhost:3000/v1"
+//   curl -X POST http://localhost:3000/v1/chat/completions \
 //     -H "Content-Type: application/json" \
 //     -d '{"model":"free/glm-5.3","messages":[{"role":"user","content":"hi"}]}'
 //

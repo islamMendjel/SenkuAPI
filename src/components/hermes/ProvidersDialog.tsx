@@ -272,11 +272,11 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
             beats gold on gold: no amber wash, the mark carries itself */}
         <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
           <Image
-            src="/hermes-mark.png"
-            alt=""
-            width={875}
-            height={1124}
-            className="hermes-pulse h-14 w-14 object-contain object-center drop-shadow-[0_0_10px_rgba(252,211,77,0.25)]"
+            src="/senku-sparkle.png"
+            alt="Senku"
+            width={562}
+            height={563}
+            className="hermes-pulse h-14 w-14 object-contain object-center drop-shadow-[0_0_10px_rgba(252,211,77,0.35)]"
             priority
           />
           <p className="mt-1 max-w-[130px] truncate text-center text-[10.5px] font-medium text-amber-200/90">

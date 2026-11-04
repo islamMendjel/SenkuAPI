@@ -222,7 +222,7 @@ export function CanvasPanel() {
       />
       <aside
         role="complementary"
-        aria-label="Hermes Canvas — code preview"
+        aria-label="Senku Canvas — code preview"
         className="hermes-canvas-in fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-zinc-800/70 bg-[#141416] shadow-2xl lg:static lg:z-auto lg:h-auto lg:w-[420px] lg:max-w-none lg:shrink-0 lg:shadow-none"
       >
         {/* header: title · language badge · tabs · close */}

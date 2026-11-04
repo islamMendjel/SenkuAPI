@@ -58,13 +58,64 @@ export function VoiceInterface() {
   const mutedRef = useRef(false);
   const phaseRef = useRef<VoicePhase>("listening");
   const orbRef = useRef<HTMLDivElement>(null);
+  // Browser SpeechRecognition fallback ref
+  const recognitionRef = useRef<any>(null);
+  const browserTranscriptRef = useRef<string>("");
 
   phaseRef.current = phase;
   mutedRef.current = muted;
 
+  const startBrowserRecognition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const SpeechRec =
+      (window as unknown as { SpeechRecognition?: any }).SpeechRecognition ||
+      (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition;
+    if (!SpeechRec) return;
+    try {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {
+          // ignore
+        }
+      }
+      const rec = new SpeechRec();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US";
+      rec.onresult = (e: any) => {
+        let transcript = "";
+        for (let i = 0; i < e.results.length; i++) {
+          transcript += e.results[i][0].transcript;
+        }
+        browserTranscriptRef.current = transcript.trim();
+      };
+      rec.onerror = () => {
+        // non-fatal fallback
+      };
+      recognitionRef.current = rec;
+      rec.start();
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  const stopBrowserRecognition = useCallback(() => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
   // ── audio playback hygiene ──
   const stopAudio = useCallback(() => {
     tokenRef.current += 1;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.removeAttribute("src");
@@ -77,22 +128,27 @@ export function VoiceInterface() {
 
   const backToListening = useCallback(() => {
     setPhase("listening");
+    browserTranscriptRef.current = "";
     void start();
-  }, [start]);
+    startBrowserRecognition();
+  }, [start, startBrowserRecognition]);
 
   const close = useCallback(() => {
     stopAudio();
+    stopBrowserRecognition();
     cancel();
     setVoiceMode(false);
-  }, [cancel, setVoiceMode, stopAudio]);
+  }, [cancel, setVoiceMode, stopAudio, stopBrowserRecognition]);
 
   // ── open → listen immediately; close → clean everything ──
   useEffect(() => {
     void start();
+    startBrowserRecognition();
     return () => {
       stopAudio();
+      stopBrowserRecognition();
     };
-  }, [start, stopAudio]);
+  }, [start, startBrowserRecognition, stopAudio, stopBrowserRecognition]);
 
   // ESC always exits voice mode
   useEffect(() => {
@@ -121,22 +177,37 @@ export function VoiceInterface() {
 
     // listening → stop + transcribe + send (Run 38's direct pipeline)
     stop();
+    stopBrowserRecognition();
     setPhase("transcribing");
     try {
       const wav = await takeResult();
-      if (!wav) {
-        // too short / empty — never a phantom send
-        backToListening();
-        return;
+      let text = "";
+
+      // 1. Try server transcription
+      if (wav) {
+        try {
+          const res = await fetch("/api/voice/transcribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ audio: wav }),
+          });
+          if (res.ok) {
+            const data = (await res.json().catch(() => ({}))) as {
+              text?: string;
+            };
+            text = (data.text ?? "").trim();
+          }
+        } catch {
+          // server transcribe failed — fall through to browser fallback
+        }
       }
-      const res = await fetch("/api/voice/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio: wav }),
-      });
-      const data = (await res.json().catch(() => ({}))) as { text?: string };
-      const text = (data.text ?? "").trim();
-      if (!res.ok || !text) {
+
+      // 2. Native browser SpeechRecognition fallback
+      if (!text && browserTranscriptRef.current) {
+        text = browserTranscriptRef.current;
+      }
+
+      if (!text) {
         toast({ description: "Didn't catch that — try again." });
         backToListening();
         return;
@@ -156,7 +227,15 @@ export function VoiceInterface() {
       }
       backToListening();
     }
-  }, [backToListening, recorderState, stop, stopAudio, takeResult, toast]);
+  }, [
+    backToListening,
+    recorderState,
+    stop,
+    stopAudio,
+    stopBrowserRecognition,
+    takeResult,
+    toast,
+  ]);
 
   // ── speak the reply the moment it lands ──
   useEffect(() => {
@@ -177,8 +256,7 @@ export function VoiceInterface() {
           body: JSON.stringify({ text: voiceReply.content }),
         });
         if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(data.error || "Read-aloud is unavailable right now.");
+          throw new Error("Server voice synthesis unavailable.");
         }
         if (cancelled || token !== tokenRef.current) return;
         const blob = await res.blob();
@@ -201,14 +279,38 @@ export function VoiceInterface() {
         await audio.play();
         if (token !== tokenRef.current || cancelled) return;
         consumeVoiceReply(); // playback started — the queue is clear
-      } catch (e) {
+      } catch {
+        // Fallback to client-side browser Web Speech Synthesis
         if (!cancelled && token === tokenRef.current) {
-          if ((e as Error).name !== "NotAllowedError") {
-            toast({
-              description: "Voice output unavailable — continuing muted.",
-              variant: "destructive",
-            });
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            const cleanText = voiceReply.content
+              .replace(/```[\s\S]*?```/g, "Code snippet omitted.")
+              .replace(/[#*`_~[\]()]/g, "")
+              .trim();
+            if (cleanText) {
+              const utterance = new SpeechSynthesisUtterance(cleanText);
+              utterance.onend = () => {
+                if (token === tokenRef.current && !cancelled) {
+                  consumeVoiceReply();
+                  backToListening();
+                }
+              };
+              utterance.onerror = () => {
+                if (token === tokenRef.current && !cancelled) {
+                  consumeVoiceReply();
+                  backToListening();
+                }
+              };
+              window.speechSynthesis.speak(utterance);
+              consumeVoiceReply();
+              return;
+            }
           }
+
+          toast({
+            description: "Voice output unavailable — continuing muted.",
+            variant: "destructive",
+          });
           consumeVoiceReply();
           backToListening();
         }
@@ -266,7 +368,7 @@ export function VoiceInterface() {
       className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/80 backdrop-blur-xl"
       role="dialog"
       aria-modal="true"
-      aria-label="H.E.R.M.E.S. voice conversation"
+      aria-label="Senku voice conversation"
     >
       {/* close */}
       <button
@@ -292,7 +394,7 @@ export function VoiceInterface() {
       {/* brand lockup */}
       <div className="mb-10 text-center">
         <p className="text-[13px] font-semibold uppercase tracking-[0.42em] text-amber-200/90">
-          H.E.R.M.E.S.
+          Senku
         </p>
         <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.3em] text-zinc-500">
           Voice Core
