@@ -1,0 +1,711 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→// Hermes — Manage Providers dialog:
+     4→     4→// exactly ONE provider active at a time; switching sets the selected
+     5→     5→// provider active and all others false; round-robin runs on the
+     6→     6→// active provider's keys. Keys can be added, toggled and removed.
+     7→     7→//
+     8→     8→// Run 35 — THE ORRERY: the active provider's key pool renders as a
+     9→     9→// live radial cockpit. Every key is a seat on the ring; the golden
+    10→    10→// cursor glow marks the seat that serves NEXT, cooldowns count down
+    11→    11→// in real time, capped keys dim with their blocking tier, and a
+    12→    12→// fairness readout proves the rotation stays even. The dialog polls
+    13→    13→// /api/usage while open, so the ring visibly advances turn by turn
+    14→    14→// as the gateway serves traffic.
+    15→    15→
+    16→    16→import { useEffect, useMemo, useState } from "react";
+    17→    17→import Image from "next/image";
+    18→    18→import { Check, Loader2, Plus, ShieldCheck, Trash2, Zap } from "lucide-react";
+    19→    19→import { useHermes } from "@/lib/store";
+    20→    20→import { formatCompact, formatFull } from "@/lib/hermes/format";
+    21→    21→import {
+    22→    22→  Dialog,
+    23→    23→  DialogContent,
+    24→    24→  DialogDescription,
+    25→    25→  DialogHeader,
+    26→    26→  DialogTitle,
+    27→    27→} from "@/components/ui/dialog";
+    28→    28→import { Input } from "@/components/ui/input";
+    29→    29→import { Switch } from "@/components/ui/switch";
+    30→    30→import { useToast } from "@/hooks/use-toast";
+    31→    31→import type { KeyView, ProviderView } from "@/lib/hermes/types";
+    32→    32→
+    33→    33→// ── The Orrery ────────────────────────────────────────────────
+    34→    34→
+    35→    35→function cooldownLeft(coolingUntil: string | null | undefined, now: number) {
+    36→    36→  if (!coolingUntil) return null;
+    37→    37→  const ms = new Date(coolingUntil).getTime() - now;
+    38→    38→  return ms > 0 ? ms : null;
+    39→    39→}
+    40→    40→
+    41→    41→function fmtCountdown(ms: number) {
+    42→    42→  const s = Math.ceil(ms / 1000);
+    43→    43→  if (s >= 3600) return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+    44→    44→  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    45→    45→}
+    46→    46→
+    47→    47→// Run 41 — THE LIVING POOL: one honest phrase per key, built from
+    48→    48→// the prober's own records. Spoken by tooltips and screen readers
+    49→    49→// alike — the state, the evidence (latency / error), and the
+    50→    50→// per-boot serve ledger.
+    51→    51→function livePhrase(k: KeyView): string {
+    52→    52→  const live = k.live;
+    53→    53→  if (!live) return "";
+    54→    54→  const s =
+    55→    55→    live.state === "serving"
+    56→    56→      ? `probe-verified live${live.lastLatencyMs != null ? ` · ${live.lastLatencyMs}ms probe` : ""}`
+    57→    57→      : live.state === "checkin"
+    58→    58→        ? "needs its daily dashboard check-in (402) — it rejoins the pool automatically once checked in"
+    59→    59→        : live.state === "cooling"
+    60→    60→          ? live.lastProbeStatus === 401 || live.lastProbeStatus === 403
+    61→    61→            ? "credential rejected (suspended or rotated) — replace the key; auto re-probed every 10 min"
+    62→    62→            : "breaker cooldown"
+    63→    63→          : live.state === "down"
+    64→    64→            ? `not responding${live.lastError ? ` (${live.lastError})` : ""}`
+    65→    65→            : "awaiting first probe";
+    66→    66→  const serves =
+    67→    67→    live.serves > 0
+    68→    68→      ? ` · ${live.serves} serve${live.serves === 1 ? "" : "s"} this boot`
+    69→    69→      : "";
+    70→    70→  return ` · ${s}${serves}`;
+    71→    71→}
+    72→    72→
+    73→    73→const TIER_TAG: Record<string, string> = {
+    74→    74→  monthly: "mo cap",
+    75→    75→  daily: "day cap",
+    76→    76→  burst5h: "5h cap",
+    77→    77→};
+    78→    78→
+    79→    79→/** Run 42 — verdict of one manual liveness probe. */
+    80→    80→interface ProbeVerdict {
+    81→    81→  ok: boolean;
+    82→    82→  status: number;
+    83→    83→  latencyMs: number;
+    84→    84→  error: string | null;
+    85→    85→}
+    86→    86→
+    87→    87→/** True when no active key has any month-to-date spend yet — the
+    88→    88→ *  fairness readout's honest "nothing to weigh" state. */
+    89→    89→function maxSpendIsZero(keys: KeyView[]): boolean {
+    90→    90→  return !keys.some((k) => k.isActive && k.tokensUsedThisMonth > 0);
+    91→    91→}
+    92→    92→
+    93→    93→function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
+    94→    94→  const keys = provider.keys;
+    95→    95→  const n = keys.length;
+    96→    96→
+    97→    97→  // Run 42 — the "next" badge is SERVER TRUTH: predictedNextId is
+    98→    98→  // computed by the serialize layer from the same inputs pickKey
+    99→    99→  // uses (key-anchored cursor, breaker, pacing tiers, drift-repair
+   100→   100→  // bias). The UI marks the seat and invents nothing — prediction
+   101→   101→  // and dispatch can never disagree.
+   102→   102→  const predictedNextId = provider.predictedNextId ?? null;
+   103→   103→  const predictedNext = predictedNextId
+   104→   104→    ? (keys.find((k) => k.id === predictedNextId) ?? null)
+   105→   105→    : null;
+   106→   106→  const predictedNextSeat = predictedNext?.seat ?? null;
+   107→   107→
+   108→   108→  if (n === 0) {
+   109→   109→    return (
+   110→   110→      <p className="mt-3 rounded-xl border border-dashed border-zinc-800 px-3 py-4 text-center text-[12px] text-zinc-500">
+   111→   111→        The pool is empty — add a key below to start the rotation.
+   112→   112→      </p>
+   113→   113→    );
+   114→   114→  }
+   115→   115→
+   116→   116→  const size = 232;
+   117→   117→  // Node orbit radius MUST match the ring track: inset-[13%] →
+   118→   118→  // track radius = (100 − 26) / 2 = 37% of the container. Seats
+   119→   119→  // sit exactly ON the arc the eye traces.
+   120→   120→  const radius = 37; // % of container
+   121→   121→
+   122→   122→  return (
+   123→   123→    <div className="mt-8" aria-label="Round-robin key pool ring">
+   124→   124→      <div
+   125→   125→        className="relative mx-auto"
+   126→   126→        style={{ width: size, maxWidth: "100%", aspectRatio: "1 / 1" }}
+   127→   127→      >
+   128→   128→        {/* static ring track — visible at every angle so the orbit
+   129→   129→            reads as a full circle even where the golden sweep is
+   130→   130→            between passes */}
+   131→   131→        <div className="absolute inset-[13%] rounded-full border border-zinc-500/60" />
+   132→   132→        {/* rotating golden sweep — the pool is alive */}
+   133→   133→        <div className="pointer-events-none absolute inset-[13%] rounded-full opacity-70 hermes-pulse-ring" />
+   134→   134→
+   135→   135→        {/* the medallion at the center of the ring — gold on dark
+   136→   136→            beats gold on gold: no amber wash, the mark carries itself */}
+   137→   137→        <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+   138→   138→          <Image
+   139→   139→            src="/hermes-mark.png"
+   140→   140→            alt=""
+   141→   141→            width={875}
+   142→   142→            height={1124}
+   143→   143→            className="hermes-pulse h-14 w-14 object-contain object-center drop-shadow-[0_0_10px_rgba(252,211,77,0.25)]"
+   144→   144→            priority
+   145→   145→          />
+   146→   146→          <p className="mt-1 max-w-[130px] truncate text-center text-[10.5px] font-medium text-amber-200/90">
+   147→   147→            {predictedNext
+   148→   148→              ? `next · ${predictedNext.label}`
+   149→   149→              : "pool idle"}
+   150→   150→          </p>
+   151→   151→        </div>
+   152→   152→
+   153→   153→        {/* seats */}
+   154→   154→        {keys.map((k) => {
+   155→   155→          const seat = k.seat ?? keys.indexOf(k);
+   156→   156→          const angle = (-90 + (seat * 360) / n) * (Math.PI / 180);
+   157→   157→          const left = 50 + radius * Math.cos(angle);
+   158→   158→          const top = 50 + radius * Math.sin(angle);
+   159→   159→          const isNext = predictedNextId === k.id;
+   160→   160→          const cooling = cooldownLeft(k.coolingUntil, now);
+   161→   161→          const blocked = k.blockedTier ?? null;
+   162→   162→          const live = k.live ?? null;
+   163→   163→
+   164→   164→          // Run 41 — the seat tells the key's REAL story: amber pulse
+   165→   165→          // = waiting on the owner's daily check-in (it self-heals
+   166→   166→          // the moment the dashboard check-in lands — the prober
+   167→   167→          // revives it, no restart needed); rose = breaker/down;
+   168→   168→          // emerald = probe-verified live right now.
+   169→   169→          let ringCls = "border-zinc-600 bg-[#232326] text-zinc-300";
+   170→   170→          let tag: { text: string; cls: string } | null = null;
+   171→   171→          let pulseSeat = false;
+   172→   172→          if (!k.isActive) {
+   173→   173→            ringCls = "border-zinc-700/60 bg-[#1a1a1c] text-zinc-600";
+   174→   174→            tag = { text: "off", cls: "text-zinc-500" };
+   175→   175→          } else if (live?.state === "checkin") {
+   176→   176→            ringCls =
+   177→   177→              "border-amber-400/70 bg-amber-400/10 text-amber-200";
+   178→   178→            tag = { text: "check-in", cls: "text-amber-300/90" };
+   179→   179→            pulseSeat = true;
+   180→   180→          } else if (cooling !== null) {
+   181→   181→            // A credential rejection (401/403 — suspended or rotated)
+   182→   182→            // is NOT a cooldown the key will outlive: the tag says
+   183→   183→            // "rejected" instead of a countdown that implies return.
+   184→   184→            if (live?.lastProbeStatus === 401 || live?.lastProbeStatus === 403) {
+   185→   185→              ringCls =
+   186→   186→                "border-rose-500/50 bg-rose-500/[0.08] text-rose-300";
+   187→   187→              tag = { text: "rejected", cls: "text-rose-300/90" };
+   188→   188→            } else {
+   189→   189→              ringCls =
+   190→   190→                "border-rose-400/60 bg-rose-400/10 text-rose-300";
+   191→   191→              tag = { text: fmtCountdown(cooling), cls: "text-rose-300/90" };
+   192→   192→            }
+   193→   193→          } else if (live?.state === "down") {
+   194→   194→            ringCls =
+   195→   195→              "border-rose-500/40 bg-rose-500/[0.07] text-rose-300/90";
+   196→   196→            tag = { text: "down", cls: "text-rose-300/80" };
+   197→   197→          } else if (blocked) {
+   198→   198→            ringCls =
+   199→   199→              "border-amber-400/40 bg-amber-400/[0.07] text-amber-200/80";
+   200→   200→            tag = { text: TIER_TAG[blocked], cls: "text-amber-200/70" };
+   201→   201→          } else if (isNext) {
+   202→   202→            ringCls =
+   203→   203→              "border-amber-300 bg-amber-300/15 text-amber-100 shadow-[0_0_18px_rgba(252,211,77,0.35)]";
+   204→   204→            // NEXT on a probe-verified key keeps its evidence tag —
+   205→   205→            // the ring can say "next" AND "412ms live" at once.
+   206→   206→            if (live?.state === "serving" && live.lastLatencyMs != null) {
+   207→   207→              tag = { text: `${live.lastLatencyMs}ms`, cls: "text-emerald-300/80" };
+   208→   208→            }
+   209→   209→          } else if (live?.state === "serving") {
+   210→   210→            ringCls =
+   211→   211→              "border-emerald-500/45 bg-emerald-500/[0.07] text-emerald-200";
+   212→   212→            tag =
+   213→   213→              live.lastLatencyMs != null
+   214→   214→                ? { text: `${live.lastLatencyMs}ms`, cls: "text-emerald-300/80" }
+   215→   215→                : { text: "live", cls: "text-emerald-300/80" };
+   216→   216→          } else if (live?.state === "unproven") {
+   217→   217→            tag = { text: "probing…", cls: "text-zinc-500" };
+   218→   218→          }
+   219→   219→
+   220→   220→          return (
+   221→   221→            <div
+   222→   222→              key={k.id}
+   223→   223→              className="absolute flex flex-col items-center"
+   224→   224→              style={{
+   225→   225→                left: `${left}%`,
+   226→   226→                top: `${top}%`,
+   227→   227→                transform: "translate(-50%, -50%)",
+   228→   228→              }}
+   229→   229→              title={`${k.label} · ${k.masked}${livePhrase(k)}${k.lastUsedAt ? ` · last served ${new Date(k.lastUsedAt).toLocaleDateString()}` : " · never served"}`}
+   230→   230→            >
+   231→   231→              <div
+   232→   232→                className={`flex h-9 w-9 items-center justify-center rounded-full border font-mono text-[12px] font-semibold transition-all duration-500 ${ringCls} ${
+   233→   233→                  isNext ? "scale-110" : ""
+   234→   234→                } ${pulseSeat ? "animate-pulse" : ""}`}
+   235→   235→              >
+   236→   236→                {seat + 1}
+   237→   237→              </div>
+   238→   238→              {isNext && (
+   239→   239→                <span className="absolute -top-[23px] rounded-full bg-amber-300 px-1.5 py-px text-[8.5px] font-bold uppercase tracking-wider text-black shadow-sm">
+   240→   240→                  next
+   241→   241→                </span>
+   242→   242→              )}
+   243→   243→              {tag && (
+   244→   244→                <span
+   245→   245→                  className={`mt-1 max-w-[64px] truncate text-center text-[9px] font-medium tabular-nums ${tag.cls}`}
+   246→   246→                >
+   247→   247→                  {tag.text}
+   248→   248→                </span>
+   249→   249→              )}
+   250→   250→            </div>
+   251→   251→          );
+   252→   252→        })}
+   253→   253→      </div>
+   254→   254→
+   255→   255→      {/* Run 41/42 — the pool line tells the SERVING truth and the
+   256→   256→          FAIRNESS truth: "2 of 4 keys serving · balancing ±18%" —
+   257→   257→          both numbers computed server-side from the same inputs the
+   258→   258→          gateway dispatches with. The dot pulses amber while drift
+   259→   259→          repair is actively steering the ring. */}
+   260→   260→      {(() => {
+   261→   261→        const activeCount = keys.filter((k) => k.isActive).length;
+   262→   262→        const serving = keys.filter(
+   263→   263→          (k) => k.isActive && k.live?.state === "serving"
+   264→   264→        ).length;
+   265→   265→        const allLive = activeCount > 0 && serving === activeCount;
+   266→   266→        const balancing = provider.balancing ?? false;
+   267→   267→        const driftPct = provider.driftPct ?? 0;
+   268→   268→        const fairnessLabel = balancing
+   269→   269→          ? `balancing · evening ±${Math.round(driftPct * 100)}% spend`
+   270→   270→          : maxSpendIsZero(keys)
+   271→   271→            ? "no spend yet"
+   272→   272→            : driftPct <= 0.15
+   273→   273→              ? "rotation even"
+   274→   274→              : `drift ±${Math.round(driftPct * 100)}%`;
+   275→   275→        return (
+   276→   276→          <p
+   277→   277→            className="mt-4 flex items-center justify-center gap-1.5 pb-1.5 text-[11px] text-zinc-500"
+   278→   278→            title={`${serving} of ${activeCount} active keys are probe-verified live right now (background prober, 30s cadence). Month-to-date spend spread across the ready pool — when it exceeds 12%, the ring starts each scan at the least-spent key until the pools are even again, so monthly capacity is never left stranded on a capped key.`}
+   279→   279→          >
+   280→   280→            <span
+   281→   281→              className={`h-1.5 w-1.5 rounded-full ${
+   282→   282→                balancing
+   283→   283→                  ? "bg-amber-400 animate-pulse"
+   284→   284→                  : allLive
+   285→   285→                    ? "bg-emerald-400"
+   286→   286→                    : "bg-amber-400"
+   287→   287→              }`}
+   288→   288→              aria-hidden
+   289→   289→            />
+   290→   290→            {serving} of {activeCount} keys serving ·{" "}
+   291→   291→            <span
+   292→   292→              className={
+   293→   293→                balancing
+   294→   294→                  ? "text-amber-300/90"
+   295→   295→                  : fairnessLabel === "rotation even" || fairnessLabel === "no spend yet"
+   296→   296→                    ? "text-emerald-300/90"
+   297→   297→                    : "text-amber-300/90"
+   298→   298→              }
+   299→   299→            >
+   300→   300→              {fairnessLabel}
+   301→   301→            </span>
+   302→   302→          </p>
+   303→   303→        );
+   304→   304→      })()}
+   305→   305→
+   306→   306→      {/* Run 42 — THE RING LEDGER: the ring's heartbeat. The last
+   307→   307→          confirmed serves replay here as real traffic flows, so the
+   308→   308→          rotation is something you SEE, not something you trust. */}
+   309→   309→      {provider.ringEvents && provider.ringEvents.length > 0 && (
+   310→   310→        <div className="mt-1 space-y-0.5">
+   311→   311→          {provider.ringEvents.slice(0, 3).map((e) => (
+   312→   312→            <p
+   313→   313→              key={`${e.at}-${e.keyId}`}
+   314→   314→              className="flex items-center justify-center gap-1.5 text-center font-mono text-[10px] tabular-nums text-zinc-600"
+   315→   315→            >
+   316→   316→              <span className="text-zinc-700">served</span>
+   317→   317→              <span className="text-zinc-500">№{e.seat + 1}</span>
+   318→   318→              <span className="max-w-[96px] truncate text-zinc-500">{e.label}</span>
+   319→   319→              <span>· {formatCompact(e.tokens)} tok</span>
+   320→   320→              <span>
+   321→   321→                ·{" "}
+   322→   322→                {new Date(e.at).toLocaleTimeString([], {
+   323→   323→                  hour: "2-digit",
+   324→   324→                  minute: "2-digit",
+   325→   325→                  second: "2-digit",
+   326→   326→                })}
+   327→   327→              </span>
+   328→   328→            </p>
+   329→   329→          ))}
+   330→   330→        </div>
+   331→   331→      )}
+   332→   332→      <span className="sr-only">
+   333→   333→        Round-robin ring: seat {(predictedNextSeat ?? 0) + 1} of {n} serves next
+   334→   334→        {provider.balancing
+   335→   335→          ? `, drift repair active (±${Math.round((provider.driftPct ?? 0) * 100)}% spend spread) — the least-spent key serves until pools are even`
+   336→   336→          : ""}
+   337→   337→        .
+   338→   338→        {keys
+   339→   339→          .map(
+   340→   340→            (k) =>
+   341→   341→              `Seat ${(k.seat ?? 0) + 1} ${k.label}: ${
+   342→   342→                k.isActive ? "active" : "off"
+   343→   343→              }${livePhrase(k)}${k.coolingUntil ? ", cooling down" : ""}${
+   344→   344→                k.blockedTier ? `, blocked by ${k.blockedTier} tier` : ""
+   345→   345→              }.`
+   346→   346→          )
+   347→   347→          .join(" ")}
+   348→   348→      </span>
+   349→   349→    </div>
+   350→   350→  );
+   351→   351→}
+   352→   352→
+   353→   353→// ── Provider card ─────────────────────────────────────────────
+   354→   354→
+   355→   355→function ProviderCard({
+   356→   356→  provider,
+   357→   357→  onSwitch,
+   358→   358→  now,
+   359→   359→}: {
+   360→   360→  provider: ProviderView;
+   361→   361→  onSwitch: (id: string) => Promise<void>;
+   362→   362→  now: number;
+   363→   363→}) {
+   364→   364→  const { addKey, deleteKey, toggleKey, probeKey } = useHermes();
+   365→   365→  const { toast } = useToast();
+   366→   366→  const [switching, setSwitching] = useState(false);
+   367→   367→  const [label, setLabel] = useState("");
+   368→   368→  const [key, setKey] = useState("");
+   369→   369→  const [adding, setAdding] = useState(false);
+   370→   370→
+   371→   371→  const doSwitch = async () => {
+   372→   372→    setSwitching(true);
+   373→   373→    try {
+   374→   374→      await onSwitch(provider.id);
+   375→   375→      toast({
+   376→   376→        description: `${provider.name} is now the active provider.`,
+   377→   377→      });
+   378→   378→    } catch (e) {
+   379→   379→      toast({ description: (e as Error).message, variant: "destructive" });
+   380→   380→    } finally {
+   381→   381→      setSwitching(false);
+   382→   382→    }
+   383→   383→  };
+   384→   384→
+   385→   385→  const doAddKey = async () => {
+   386→   386→    if (!key.trim()) return;
+   387→   387→    setAdding(true);
+   388→   388→    try {
+   389→   389→      await addKey(provider.id, label.trim(), key.trim());
+   390→   390→      setLabel("");
+   391→   391→      setKey("");
+   392→   392→      toast({ description: "Key added to the pool." });
+   393→   393→    } catch (e) {
+   394→   394→      toast({ description: (e as Error).message, variant: "destructive" });
+   395→   395→    } finally {
+   396→   396→      setAdding(false);
+   397→   397→    }
+   398→   398→  };
+   399→   399→
+   400→   400→  return (
+   401→   401→    <div
+   402→   402→      className={`min-w-0 rounded-xl border p-3.5 transition-colors ${
+   403→   403→        provider.isActive
+   404→   404→          ? "border-emerald-500/40 bg-emerald-500/[0.04]"
+   405→   405→          : "border-zinc-800 bg-[#1d1d20]"
+   406→   406→      }`}
+   407→   407→    >
+   408→   408→      <div className="flex flex-wrap items-center gap-2">
+   409→   409→        <span className="flex items-center gap-2 text-[14px] font-semibold text-white">
+   410→   410→          {provider.isActive && (
+   411→   411→            <span className="hermes-pulse h-2 w-2 rounded-full bg-emerald-400" />
+   412→   412→          )}
+   413→   413→          {provider.name}
+   414→   414→        </span>
+   415→   415→        <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[10.5px] font-medium text-zinc-300">
+   416→   416→          {provider.hasTokenLimit
+   417→   417→            ? `${formatCompact(provider.tokenLimitPerKey)} tokens / key / mo`
+   418→   418→            : "Unlimited"}
+   419→   419→        </span>
+   420→   420→        <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[10.5px] font-medium text-zinc-300">
+   421→   421→          ×{provider.tokenMultiplier.toFixed(1)} multiplier
+   422→   422→        </span>
+   423→   423→        <span className="ml-auto">
+   424→   424→          {provider.isActive ? (
+   425→   425→            <span className="flex items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-[12px] font-medium text-emerald-300">
+   426→   426→              <ShieldCheck className="h-3.5 w-3.5" />
+   427→   427→              Active
+   428→   428→            </span>
+   429→   429→          ) : (
+   430→   430→            <button
+   431→   431→              onClick={doSwitch}
+   432→   432→              disabled={switching}
+   433→   433→              className="flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1 text-[12px] font-medium text-black transition-colors hover:bg-zinc-200 disabled:opacity-60"
+   434→   434→            >
+   435→   435→              {switching ? (
+   436→   436→                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   437→   437→              ) : (
+   438→   438→                <Check className="h-3.5 w-3.5" />
+   439→   439→              )}
+   440→   440→              Switch
+   441→   441→            </button>
+   442→   442→          )}
+   443→   443→        </span>
+   444→   444→      </div>
+   445→   445→
+   446→   446→      <p className="mt-1.5 truncate font-mono text-[11px] text-zinc-500">
+   447→   447→        {provider.baseUrl ?? "no base URL"} · {provider.models.length} models ·{" "}
+   448→   448→        {formatFull(provider.totalTokens)} lifetime tokens
+   449→   449→      </p>
+   450→   450→
+   451→   451→      {/* Run 35 — the live ring: only the ACTIVE provider rotates. */}
+   452→   452→      {provider.isActive && <Orrery provider={provider} now={now} />}
+   453→   453→
+   454→   454→      {/* keys */}
+   455→   455→      <div className="mt-3 space-y-1.5">
+   456→   456→        {provider.keys.map((k) => (
+   457→   457→          <KeyRow
+   458→   458→            key={k.id}
+   459→   459→            k={k}
+   460→   460→            now={now}
+   461→   461→            onDelete={deleteKey}
+   462→   462→            onToggle={toggleKey}
+   463→   463→            onProbe={probeKey}
+   464→   464→          />
+   465→   465→        ))}
+   466→   466→
+   467→   467→        <div className="flex gap-2">
+   468→   468→          <Input
+   469→   469→            value={label}
+   470→   470→            onChange={(e) => setLabel(e.target.value)}
+   471→   471→            placeholder="Label (optional)"
+   472→   472→            className="h-8 w-28 shrink-0 rounded-lg border-zinc-800 bg-[#18181b] text-[12px] text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-zinc-600 sm:w-32"
+   473→   473→          />
+   474→   474→          <Input
+   475→   475→            value={key}
+   476→   476→            onChange={(e) => setKey(e.target.value)}
+   477→   477→            placeholder="Paste API key…"
+   478→   478→            className="h-8 min-w-0 flex-1 rounded-lg border-zinc-800 bg-[#18181b] font-mono text-[12px] text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-zinc-600"
+   479→   479→            onKeyDown={(e) => {
+   480→   480→              if (e.key === "Enter") void doAddKey();
+   481→   481→            }}
+   482→   482→          />
+   483→   483→          <button
+   484→   484→            onClick={doAddKey}
+   485→   485→            disabled={adding || !key.trim()}
+   486→   486→            aria-label="Add key"
+   487→   487→            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 transition-colors hover:bg-white/5 disabled:opacity-40"
+   488→   488→          >
+   489→   489→            {adding ? (
+   490→   490→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   491→   491→            ) : (
+   492→   492→              <Plus className="h-4 w-4" />
+   493→   493→            )}
+   494→   494→          </button>
+   495→   495→        </div>
+   496→   496→      </div>
+   497→   497→    </div>
+   498→   498→  );
+   499→   499→}
+   500→   500→
+   501→   501→function KeyRow({
+   502→   502→  k,
+   503→   503→  now,
+   504→   504→  onDelete,
+   505→   505→  onToggle,
+   506→   506→  onProbe,
+   507→   507→}: {
+   508→   508→  k: KeyView;
+   509→   509→  now: number;
+   510→   510→  onDelete: (id: string) => Promise<void>;
+   511→   511→  onToggle: (id: string, isActive: boolean) => Promise<void>;
+   512→   512→  onProbe: (id: string) => Promise<ProbeVerdict>;
+   513→   513→}) {
+   514→   514→  const { toast } = useToast();
+   515→   515→  const [probing, setProbing] = useState(false);
+   516→   516→  const cooling = cooldownLeft(k.coolingUntil, now);
+   517→   517→  const blocked = k.blockedTier ?? null;
+   518→   518→  const live = k.live ?? null;
+   519→   519→  // Run 41 — the row speaks the key's live truth, with a tone per
+   520→   520→  // verdict: amber = an owner ACTION (daily check-in), rose =
+   521→   521→  // cooling / not responding, emerald = probe-verified serving.
+   522→   522→  let state: string | null = null;
+   523→   523→  let stateCls = "";
+   524→   524→  if (!k.isActive) {
+   525→   525→    state = "off";
+   526→   526→  } else if (live?.state === "checkin") {
+   527→   527→    state = "needs daily check-in — self-heals once checked in";
+   528→   528→    stateCls = " text-amber-300/90";
+   529→   529→  } else if (cooling !== null) {
+   530→   530→    state =
+   531→   531→      live?.lastProbeStatus === 401 || live?.lastProbeStatus === 403
+   532→   532→        ? "credential rejected — replace the key"
+   533→   533→        : `cooling ${fmtCountdown(cooling)}`;
+   534→   534→    stateCls = " text-rose-300/80";
+   535→   535→  } else if (live?.state === "down") {
+   536→   536→    state = "not responding";
+   537→   537→    stateCls = " text-rose-300/80";
+   538→   538→  } else if (blocked) {
+   539→   539→    state = TIER_TAG[blocked];
+   540→   540→    stateCls = " text-amber-200/70";
+   541→   541→  } else if (live?.state === "serving") {
+   542→   542→    state = `serving${
+   543→   543→      live.lastLatencyMs != null ? ` · ${live.lastLatencyMs}ms probe` : ""
+   544→   544→    }${
+   545→   545→      live.serves > 0
+   546→   546→        ? ` · ${live.serves} serve${live.serves === 1 ? "" : "s"} this boot`
+   547→   547→        : ""
+   548→   548→    }`;
+   549→   549→    stateCls = " text-emerald-300/80";
+   550→   550→  } else if (live?.state === "unproven") {
+   551→   551→    state = "probing…";
+   552→   552→    stateCls = " text-zinc-500";
+   553→   553→  }
+   554→   554→
+   555→   555→  // Run 42 — the probe speaks its verdict out loud: live (with the
+   556→   556→  // latency it just measured), still check-in-blocked, credential
+   557→   557→  // rejected, or whatever the upstream actually said. No silent
+   558→   558→  // failures — every click lands somewhere the owner can act on.
+   559→   559→  const handleProbe = async () => {
+   560→   560→    setProbing(true);
+   561→   561→    try {
+   562→   562→      const r = await onProbe(k.id);
+   563→   563→      if (r.ok) {
+   564→   564→        toast({
+   565→   565→          description: `${k.label} verified live · ${r.latencyMs}ms probe`,
+   566→   566→        });
+   567→   567→      } else if (r.status === 402) {
+   568→   568→        toast({
+   569→   569→          description:
+   570→   570→            "Still demands its daily check-in (402). Complete it on the dashboard, then probe again.",
+   571→   571→          variant: "destructive",
+   572→   572→        });
+   573→   573→      } else if (r.status === 401 || r.status === 403) {
+   574→   574→        toast({
+   575→   575→          description: "Credential rejected (401/403) — replace the key.",
+   576→   576→          variant: "destructive",
+   577→   577→        });
+   578→   578→      } else {
+   579→   579→        toast({
+   580→   580→          description: `Probe failed · ${r.error || `status ${r.status}`}`,
+   581→   581→          variant: "destructive",
+   582→   582→        });
+   583→   583→      }
+   584→   584→    } catch (e) {
+   585→   585→      toast({ description: (e as Error).message, variant: "destructive" });
+   586→   586→    } finally {
+   587→   587→      setProbing(false);
+   588→   588→    }
+   589→   589→  };
+   590→   590→  return (
+   591→   591→    <div className="flex items-center gap-2.5 rounded-lg border border-zinc-800/80 bg-[#18181b] px-2.5 py-2">
+   592→   592→      <div className="min-w-0 flex-1">
+   593→   593→        <p className="truncate font-mono text-[12px] text-zinc-300">
+   594→   594→          {k.masked}
+   595→   595→        </p>
+   596→   596→        <p className="text-[10.5px] text-zinc-600">
+   597→   597→          {k.label} · {formatFull(k.tokensUsedThisMonth)} tokens this month
+   598→   598→          {k.lastUsedAt
+   599→   599→            ? ` · used ${new Date(k.lastUsedAt).toLocaleDateString()}`
+   600→   600→            : " · never used"}
+   601→   601→          {state && (
+   602→   602→            <span className={stateCls}> · {state}</span>
+   603→   603→          )}
+   604→   604→        </p>
+   605→   605→      </div>
+   606→   606→      {/* Run 42 — self-service healing: one liveness probe NOW.
+   607→   607→          After a dashboard check-in or a key swap, the owner clicks
+   608→   608→          and watches the seat flip emerald — no waiting for the
+   609→   609→          prober's tick or the breaker's cooldown. Amber-ring when
+   610→   610→          the key awaits its check-in: that's the "I checked in —
+   611→   611→          re-verify now" button. */}
+   612→   612→      <button
+   613→   613→        onClick={() => void handleProbe()}
+   614→   614→        disabled={probing || !k.isActive}
+   615→   615→        aria-label={`Probe ${k.label} now`}
+   616→   616→        title="Probe now — verify this key is live instantly"
+   617→   617→        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-40 ${
+   618→   618→          k.live?.state === "checkin"
+   619→   619→            ? "border border-amber-400/40 text-amber-300 hover:bg-amber-400/10"
+   620→   620→            : "text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
+   621→   621→        }`}
+   622→   622→      >
+   623→   623→        {probing ? (
+   624→   624→          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   625→   625→        ) : (
+   626→   626→          <Zap className="h-3.5 w-3.5" />
+   627→   627→        )}
+   628→   628→      </button>
+   629→   629→      <Switch
+   630→   630→        checked={k.isActive}
+   631→   631→        onCheckedChange={(v) => void onToggle(k.id, v)}
+   632→   632→        aria-label={`Toggle key ${k.label}`}
+   633→   633→      />
+   634→   634→      <button
+   635→   635→        onClick={() => void onDelete(k.id)}
+   636→   636→        aria-label={`Delete key ${k.label}`}
+   637→   637→        className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-red-400/10 hover:text-red-400"
+   638→   638→      >
+   639→   639→        <Trash2 className="h-3.5 w-3.5" />
+   640→   640→      </button>
+   641→   641→    </div>
+   642→   642→  );
+   643→   643→}
+   644→   644→
+   645→   645→// ── Dialog ────────────────────────────────────────────────────
+   646→   646→
+   647→   647→export function ProvidersDialog({
+   648→   648→  open,
+   649→   649→  onOpenChange,
+   650→   650→}: {
+   651→   651→  open: boolean;
+   652→   652→  onOpenChange: (v: boolean) => void;
+   653→   653→}) {
+   654→   654→  const { providers, switchProvider, refreshUsage } = useHermes();
+   655→   655→  // Live ring: while the dialog is open, poll the store's own
+   656→   656→  // /api/usage refresh so the orrery advances in real time as the
+   657→   657→  // gateway serves turns. User mutations (switch/add/toggle/delete)
+   658→   658→  // already write through the same store — one source of truth,
+   659→   659→  // zero staleness windows.
+   660→   660→  const [now, setNow] = useState(() => Date.now());
+   661→   661→
+   662→   662→  useEffect(() => {
+   663→   663→    if (!open) return;
+   664→   664→    let alive = true;
+   665→   665→    const tick = () => setNow(Date.now());
+   666→   666→    const poll = () => {
+   667→   667→      if (alive) void refreshUsage();
+   668→   668→    };
+   669→   669→    poll();
+   670→   670→    const poller = setInterval(poll, 4000);
+   671→   671→    const ticker = setInterval(tick, 1000);
+   672→   672→    return () => {
+   673→   673→      alive = false;
+   674→   674→      clearInterval(poller);
+   675→   675→      clearInterval(ticker);
+   676→   676→    };
+   677→   677→  }, [open, refreshUsage]);
+   678→   678→
+   679→   679→  return (
+   680→   680→    <Dialog open={open} onOpenChange={onOpenChange}>
+   681→   681→      <DialogContent className="max-h-[85vh] overflow-y-auto rounded-2xl border-zinc-800 bg-[#212121] p-5 text-zinc-200 sm:max-w-lg">
+   682→   682→        <DialogHeader>
+   683→   683→          <DialogTitle className="text-[15px] font-semibold text-white">
+   684→   684→            Manage Providers
+   685→   685→          </DialogTitle>
+   686→   686→          <DialogDescription className="text-[12.5px] leading-snug text-zinc-500">
+   687→   687→            Exactly one provider is active at a time. Switching activates the
+   688→   688→            selected provider and deactivates all others — rotation then runs
+   689→   689→            strictly on its keys, and spend-balanced drift repair keeps every
+   690→   690→            monthly pool even.
+   691→   691→          </DialogDescription>
+   692→   692→        </DialogHeader>
+   693→   693→        <div className="min-w-0 space-y-3 pt-1">
+   694→   694→          {/* Run 35 — the ACTIVE provider leads: its live ring is
+   695→   695→              the first thing the eye lands on when the dialog opens. */}
+   696→   696→          {[...providers]
+   697→   697→            .sort((a, b) => Number(b.isActive) - Number(a.isActive))
+   698→   698→            .map((p) => (
+   699→   699→              <ProviderCard
+   700→   700→                key={p.id}
+   701→   701→                provider={p}
+   702→   702→                onSwitch={switchProvider}
+   703→   703→                now={now}
+   704→   704→              />
+   705→   705→            ))}
+   706→   706→        </div>
+   707→   707→      </DialogContent>
+   708→   708→    </Dialog>
+   709→   709→  );
+   710→   710→}
+   711→   711→

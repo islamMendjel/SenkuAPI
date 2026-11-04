@@ -125,7 +125,12 @@ export async function dispatchCompletion(
     });
 
     if (attempt.ok) {
-      noteKeySuccess(key.id);
+      // Run 42 — the serve lands in the ring ledger with its token
+      // bill and model (seat/label were reserved at pick time).
+      noteKeySuccess(key.id, true, {
+        tokens: attempt.result.totalTokens,
+        model,
+      });
       return { exec: attempt.result, key, attempts: tried.size };
     }
 

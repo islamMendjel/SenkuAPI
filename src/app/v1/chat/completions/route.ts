@@ -335,7 +335,10 @@ async function noteSuccessAndCache(params: {
   usage: BridgeUsage;
   content: string;
 }) {
-  noteKeySuccess(params.key.id);
+  noteKeySuccess(params.key.id, true, {
+    tokens: params.usage.totalTokens,
+    model: params.model,
+  });
   void recordBridgeUsage({
     providerId: params.provider.id,
     keyId: params.key.id,

@@ -173,6 +173,47 @@ export interface KeyView {
   } | null;
 }
 
+/** Run 42 — THE RING LEDGER: one confirmed pooled serve, as the UI
+ *  replays it under the ring (freshest first). */
+export interface RingEvent {
+  keyId: string;
+  label: string;
+  seat: number;
+  tokens: number;
+  model: string;
+  at: string; // ISO instant
+}
+
+/** Run 43 — THE RING REHEARSAL: one candidate the dry-run pick
+ *  visited during its scan, with the verdict that kept or skipped
+ *  it. The UI replays this so "why didn't that seat serve?" has a
+ *  visible answer (cooling / capped tier). */
+export interface RehearsalVisit {
+  seat: number;
+  keyId: string;
+  label: string;
+  allowed: boolean;
+  blockedTier: "monthly" | "daily" | "burst5h" | null;
+  cooling: boolean;
+}
+
+/** One rehearsed turn: the walk trace plus who (would have) served. */
+export interface RehearsalStep {
+  turn: number;
+  served: { seat: number; keyId: string; label: string } | null;
+  walk: RehearsalVisit[];
+  reason: "ok" | "no-keys" | "exhausted" | "all-tried";
+}
+
+/** The whole dry run — cursor restored server-side before this
+ *  leaves the gateway; the live ring never moved. */
+export interface RehearsalResult {
+  steps: RehearsalStep[];
+  balanced: boolean;
+  drift: number;
+  startSeat: number;
+}
+
 export interface ProviderView {
   id: string;
   name: string;
@@ -189,6 +230,21 @@ export interface ProviderView {
    *  provider's ring seat that serves NEXT (absent on inactive
    *  providers, whose rotation is dormant by design). */
   rotationCursor?: number;
+  /** Run 42 — SERVER-TRUTH prediction: the key the gateway would
+   *  hand the next clean turn to (anchor + breaker + tiers + drift
+   *  bias, computed from the same inputs pickKey uses). Null when
+   *  the pool is empty. The UI marks this seat and nothing else. */
+  predictedNextId?: string | null;
+  /** Run 42 — true when drift repair is actively steering the ring
+   *  (month-to-date spend spread across the ready pool exceeds the
+   *  balance threshold; token-limited providers only). */
+  balancing?: boolean;
+  /** Run 42 — month-to-date spend spread across the ready pool,
+   *  0..1. 0 = even, 1 = one key carries all the spend. */
+  driftPct?: number;
+  /** Run 42 — THE RING LEDGER: the freshest confirmed serves on
+   *  this provider's keys (newest first, max 4). */
+  ringEvents?: RingEvent[];
 }
 
 export interface UsageSnapshot {

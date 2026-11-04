@@ -231,6 +231,84 @@ export function poolKeyRecords(): Record<string, PoolKeyRecord> {
   return Object.fromEntries(records);
 }
 
+// ── Run 42: the self-service probe ───────────────────────────
+// The background prober runs on its own 30 s cadence, and a
+// quarantined key only re-enters the ring when its cooldown
+// expires AND the next probe succeeds. After the owner completes
+// a daily check-in (or replaces a rejected key) that is dead time
+// they can feel. probeKeyNow runs ONE liveness probe immediately
+// — the exact same probe the tick loop uses — so the seat flips
+// the moment the fix actually landed. On success it clears the
+// breaker state (the key rejoins instantly); on failure it
+// re-trips the breaker under the right kind (honest verdict).
+
+export interface ProbeNowResult {
+  ok: boolean;
+  status: number;
+  latencyMs: number;
+  error: string | null;
+  /** "not-found": key missing or its provider has no base URL;
+   *  "inactive": the key is toggled off (nothing to heal). */
+  reason?: "not-found" | "inactive";
+}
+
+export async function probeKeyNow(keyId: string): Promise<ProbeNowResult> {
+  const key = await db.apiKey.findUnique({
+    where: { id: keyId },
+    include: { provider: true },
+  });
+  if (!key || !key.provider.baseUrl) {
+    return { ok: false, status: 0, latencyMs: 0, error: null, reason: "not-found" };
+  }
+  if (!key.isActive) {
+    return { ok: false, status: 0, latencyMs: 0, error: null, reason: "inactive" };
+  }
+
+  let models: string[] = [];
+  try {
+    models = JSON.parse(key.provider.models || "[]") as string[];
+  } catch {
+    models = [];
+  }
+  const model = models[0] ?? "free/glm-5.3";
+
+  const result = await probeKey(key.provider.baseUrl, key.keyValue, model);
+
+  const rec = recordFor(keyId);
+  rec.lastProbeAt = new Date();
+  rec.lastLatencyMs = result.latencyMs;
+  rec.lastProbeStatus = result.status;
+  rec.lastError = result.error;
+
+  if (result.status === 200) {
+    // Heals a quarantined key instantly (breaker state cleared) —
+    // zero waiting for the tick. Probes never inflate the serve
+    // ledger (countServe: false) and pass no ring meta.
+    noteKeySuccess(keyId, false);
+    rec.proven = true;
+    rec.state = "serving";
+  } else if (result.status === 402) {
+    rec.proven = false;
+    rec.state = "checkin";
+    noteKeyFailure(keyId, "checkin");
+  } else if (result.status === 401 || result.status === 403) {
+    rec.proven = false;
+    rec.state = "down";
+    noteKeyFailure(keyId, "auth");
+  } else {
+    // Transient / 5xx / network on the manual probe: telemetry for
+    // a proven key, unproven stays unproven — same rules as the tick.
+    rec.state = rec.proven ? "down" : "unproven";
+  }
+
+  return {
+    ok: result.status === 200,
+    status: result.status,
+    latencyMs: result.latencyMs,
+    error: result.error,
+  };
+}
+
 /** How many of the given active keys are believed live right now.
  *  Null until every active key has been seen by a tick (boot, or a
  *  key added moments ago) — callers must not claim a number they

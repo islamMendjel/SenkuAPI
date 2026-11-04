@@ -15,7 +15,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { Check, Loader2, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import {
+  Check,
+  Clapperboard,
+  Loader2,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { useHermes } from "@/lib/store";
 import { formatCompact, formatFull } from "@/lib/hermes/format";
 import {
@@ -28,7 +36,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import type { KeyView, ProviderView } from "@/lib/hermes/types";
+import type {
+  KeyView,
+  ProviderView,
+  RehearsalStep,
+} from "@/lib/hermes/types";
 
 // ── The Orrery ────────────────────────────────────────────────
 
@@ -76,49 +88,158 @@ const TIER_TAG: Record<string, string> = {
   burst5h: "5h cap",
 };
 
+/** Run 42 — verdict of one manual liveness probe. */
+interface ProbeVerdict {
+  ok: boolean;
+  status: number;
+  latencyMs: number;
+  error: string | null;
+}
+
+/** True when no active key has any month-to-date spend yet — the
+ *  fairness readout's honest "nothing to weigh" state. */
+function maxSpendIsZero(keys: KeyView[]): boolean {
+  return !keys.some((k) => k.isActive && k.tokensUsedThisMonth > 0);
+}
+
+// ── Run 43 — THE RING REHEARSAL (playback) ────────────────────
+// The server dry-ran the real pick logic N turns and restored the
+// cursor; what arrives here is a walk trace the ring REPLAYS:
+// every skipped seat flashes rose with its reason, every serve
+// lands amber. Fairness stops being a percentage and becomes
+// something you watch.
+interface RehEntry {
+  seat: number;
+  kind: "skip" | "serve";
+  turn: number;
+  label: string;
+  why: string; // skip reason — tier tag or "cooling"
+}
+
+interface RehPlayback {
+  timeline: RehEntry[];
+  turns: number; // turns actually walked (may stop early on a stall)
+  requested: number;
+  idx: number; // entry currently lit
+  done: boolean;
+  stalled: boolean;
+}
+
+function flattenRehearsal(steps: RehearsalStep[]): {
+  timeline: RehEntry[];
+  stalled: boolean;
+} {
+  const timeline: RehEntry[] = [];
+  let stalled = false;
+  for (const step of steps) {
+    for (const v of step.walk) {
+      timeline.push({
+        seat: v.seat,
+        kind: v.allowed ? "serve" : "skip",
+        turn: step.turn,
+        label: v.label,
+        why: !v.allowed
+          ? v.blockedTier
+            ? TIER_TAG[v.blockedTier]
+            : v.cooling
+              ? "cooling"
+              : "blocked"
+          : "",
+      });
+    }
+    if (!step.served) stalled = true;
+  }
+  return { timeline, stalled };
+}
+
 function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
   const keys = provider.keys;
-  const cursor =
-    provider.rotationCursor !== undefined
-      ? provider.rotationCursor
-      : 0;
   const n = keys.length;
+  const { rehearseRing } = useHermes();
+  const { toast } = useToast();
 
-  // Predict the seat that will actually serve next: walk the ring
-  // forward from the cursor, skipping off / cooling / capped keys
-  // (mirrors pickKey's scan, minus the DB re-checks).
-  const predicted = useMemo(() => {
-    if (n === 0) return null;
-    for (let i = 0; i < n; i++) {
-      const seat = (cursor + i) % n;
-      const k = keys.find((x) => x.seat === seat);
-      if (!k) continue;
-      if (!k.isActive) continue;
-      if (cooldownLeft(k.coolingUntil, now) !== null) continue;
-      if (k.blockedTier) continue;
-      return k;
+  // Run 43 — rehearsal playback: local to the dialog, mutating
+  // nothing. The stepper lights one timeline entry at a time —
+  // serves linger a beat longer than skips so the eye reads the
+  // rhythm of the ring.
+  const [reh, setReh] = useState<RehPlayback | null>(null);
+  const [rehBusy, setRehBusy] = useState(false);
+
+  useEffect(() => {
+    if (!reh || reh.done || reh.idx < 0) return;
+    if (reh.idx >= reh.timeline.length) {
+      const t = setTimeout(
+        () => setReh((r) => (r ? { ...r, done: true } : r)),
+        450
+      );
+      return () => clearTimeout(t);
     }
-    // Every seat blocked → the cursor seat is still "next" (the
-    // breaker probes it as a last resort).
-    return keys.find((x) => x.seat === cursor) ?? keys[0];
-  }, [keys, cursor, n, now]);
+    const cur = reh.timeline[reh.idx];
+    const t = setTimeout(
+      () => setReh((r) => (r ? { ...r, idx: r.idx + 1 } : r)),
+      cur?.kind === "serve" ? 700 : 430
+    );
+    return () => clearTimeout(t);
+  }, [reh]);
 
-  // Fairness: spread of month-to-date spend across active keys.
-  const fairness = useMemo(() => {
-    const active = keys.filter((k) => k.isActive);
-    const spends = active.map((k) => k.tokensUsedThisMonth);
-    const max = Math.max(...spends, 0);
-    const min = Math.min(...spends, 0);
-    if (max === 0) return { label: "no spend yet", even: true };
-    const spread = (max - min) / max;
-    return {
-      label:
-        spread <= 0.15
-          ? "rotation even"
-          : `drift ±${Math.round(spread * 100)}%`,
-      even: spread <= 0.15,
-    };
-  }, [keys]);
+  const doRehearse = async () => {
+    if (rehBusy || (reh !== null && !reh.done)) return;
+    setRehBusy(true);
+    setReh(null);
+    try {
+      const r = await rehearseRing(10);
+      const { timeline, stalled } = flattenRehearsal(r.steps);
+      setReh({
+        timeline,
+        turns: r.steps.length,
+        requested: 10,
+        idx: timeline.length ? 0 : -1,
+        done: timeline.length === 0,
+        stalled,
+      });
+    } catch (e) {
+      toast({
+        description:
+          (e as Error).message ||
+          "Rehearsal failed — the live ring is untouched.",
+        variant: "destructive",
+      });
+    } finally {
+      setRehBusy(false);
+    }
+  };
+
+  const rehPlaying = reh !== null && !reh.done && reh.idx >= 0;
+  const rehCur =
+    rehPlaying && reh.idx < reh.timeline.length
+      ? reh.timeline[reh.idx]
+      : null;
+  // The serves that have landed so far — the accumulating proof.
+  const rehServes = useMemo(() => {
+    if (!reh) return [];
+    const upto = reh.done ? reh.timeline.length : reh.idx + 1;
+    return reh.timeline.slice(0, upto).filter((e) => e.kind === "serve");
+  }, [reh]);
+  const rehCounts = useMemo(() => {
+    // Fairness counts per SEAT, not per label: labels are owner-
+    // chosen and can repeat (two "Pool key #3"s are different keys),
+    // but the ring's promise is seat-even. Chips above keep labels;
+    // this line is the arithmetic.
+    const m = new Map<number, number>();
+    for (const e of rehServes) m.set(e.seat, (m.get(e.seat) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  }, [rehServes]);
+
+  // Run 42 — the "next" badge is SERVER TRUTH: predictedNextId is
+  // computed by the serialize layer from the same inputs pickKey
+  // uses (key-anchored cursor, breaker, pacing tiers, drift-repair
+  // bias). The UI marks the seat and invents nothing — prediction
+  // and dispatch can never disagree.
+  const predictedNextId = provider.predictedNextId ?? null;
+  const predictedNext = predictedNextId
+    ? (keys.find((k) => k.id === predictedNextId) ?? null)
+    : null;
+  const predictedNextSeat = predictedNext?.seat ?? null;
 
   if (n === 0) {
     return (
@@ -158,8 +279,12 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
             className="hermes-pulse h-14 w-14 object-contain object-center drop-shadow-[0_0_10px_rgba(252,211,77,0.25)]"
             priority
           />
-          <p className="mt-1 max-w-[110px] truncate text-center text-[10.5px] font-medium text-amber-200/90">
-            {predicted ? `next · ${predicted.label}` : "pool idle"}
+          <p className="mt-1 max-w-[130px] truncate text-center text-[10.5px] font-medium text-amber-200/90">
+            {rehCur
+              ? `rehearsal · turn ${rehCur.turn}/${reh?.turns ?? 0}`
+              : predictedNext
+                ? `next · ${predictedNext.label}`
+                : "pool idle"}
           </p>
         </div>
 
@@ -169,7 +294,7 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
           const angle = (-90 + (seat * 360) / n) * (Math.PI / 180);
           const left = 50 + radius * Math.cos(angle);
           const top = 50 + radius * Math.sin(angle);
-          const isNext = predicted?.id === k.id;
+          const isNext = predictedNextId === k.id;
           const cooling = cooldownLeft(k.coolingUntil, now);
           const blocked = k.blockedTier ?? null;
           const live = k.live ?? null;
@@ -230,6 +355,19 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
             tag = { text: "probing…", cls: "text-zinc-500" };
           }
 
+          // Run 43 — the rehearsal ghost overrides the seat's look
+          // while it passes through: serves land amber and linger,
+          // skips flash rose with the reason they were passed over.
+          const rehHere = rehCur && rehCur.seat === seat ? rehCur : null;
+          if (rehHere?.kind === "serve") {
+            ringCls =
+              "border-amber-300 bg-amber-300/30 text-amber-50 shadow-[0_0_26px_rgba(252,211,77,0.6)]";
+            tag = { text: "serve", cls: "text-amber-200" };
+          } else if (rehHere) {
+            ringCls = "border-rose-400 bg-rose-400/25 text-rose-100";
+            tag = { text: rehHere.why || "skip", cls: "text-rose-200" };
+          }
+
           return (
             <div
               key={k.id}
@@ -265,36 +403,177 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
         })}
       </div>
 
-      {/* Run 41 — the pool line tells the SERVING truth, not the
-          inventory: "2 of 4 keys serving" while the prober holds
-          the dead seats. The dot's tone follows pool health; the
-          fairness readout keeps proving the rotation stays even. */}
+      {/* Run 41/42 — the pool line tells the SERVING truth and the
+          FAIRNESS truth: "2 of 4 keys serving · balancing ±18%" —
+          both numbers computed server-side from the same inputs the
+          gateway dispatches with. The dot pulses amber while drift
+          repair is actively steering the ring. */}
       {(() => {
         const activeCount = keys.filter((k) => k.isActive).length;
         const serving = keys.filter(
           (k) => k.isActive && k.live?.state === "serving"
         ).length;
         const allLive = activeCount > 0 && serving === activeCount;
+        const balancing = provider.balancing ?? false;
+        const driftPct = provider.driftPct ?? 0;
+        const fairnessLabel = balancing
+          ? `balancing · evening ±${Math.round(driftPct * 100)}% spend`
+          : maxSpendIsZero(keys)
+            ? "no spend yet"
+            : driftPct <= 0.15
+              ? "rotation even"
+              : `drift ±${Math.round(driftPct * 100)}%`;
         return (
           <p
             className="mt-4 flex items-center justify-center gap-1.5 pb-1.5 text-[11px] text-zinc-500"
-            title={`${serving} of ${activeCount} active keys are probe-verified live right now (background prober, 30s cadence). Spread of month-to-date spend across the pool's active keys — the perfected rotation advances one seat per served request, so this evens out as traffic flows.`}
+            title={`${serving} of ${activeCount} active keys are probe-verified live right now (background prober, 30s cadence). Month-to-date spend spread across the ready pool — when it exceeds 12%, the ring starts each scan at the least-spent key until the pools are even again, so monthly capacity is never left stranded on a capped key.`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                allLive ? "bg-emerald-400" : "bg-amber-400"
+                balancing
+                  ? "bg-amber-400 animate-pulse"
+                  : allLive
+                    ? "bg-emerald-400"
+                    : "bg-amber-400"
               }`}
               aria-hidden
             />
             {serving} of {activeCount} keys serving ·{" "}
-            <span className={fairness.even ? "text-emerald-300/90" : "text-amber-300/90"}>
-              {fairness.label}
+            <span
+              className={
+                balancing
+                  ? "text-amber-300/90"
+                  : fairnessLabel === "rotation even" || fairnessLabel === "no spend yet"
+                    ? "text-emerald-300/90"
+                    : "text-amber-300/90"
+              }
+            >
+              {fairnessLabel}
             </span>
           </p>
         );
       })()}
+
+      {/* Run 43 — THE RING REHEARSAL: dry-run the rotation 10 turns
+          into the future against the REAL pick logic — breaker,
+          pacing caps, drift repair — and watch it walk the ring.
+          The server restores the live cursor before responding, so
+          this is pure foresight: fairness you can SEE, and a debug
+          oracle for "why does that seat never serve?" */}
+      <div className="mt-2 flex items-center justify-center">
+        <button
+          onClick={() => void doRehearse()}
+          disabled={rehBusy || (reh !== null && !reh.done)}
+          title="Dry-run the next 10 picks against the real rotation logic — breaker skips, pacing caps, drift repair — without moving the live cursor."
+          className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-[#232326] px-3 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:bg-white/5 hover:text-white disabled:opacity-50"
+        >
+          {rehBusy ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Clapperboard className="h-3 w-3" />
+          )}
+          {rehBusy
+            ? "rehearsing…"
+            : reh?.done
+              ? "rehearse again"
+              : "rehearse 10 turns"}
+        </button>
+      </div>
+
+      {reh && (
+        <div
+          className="mt-2.5 rounded-xl border border-zinc-800/80 bg-[#18181b] px-3 py-2.5"
+          aria-live="polite"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              {reh.done ? "rehearsal · dry run" : "rehearsing…"}
+            </p>
+            <p className="font-mono text-[10px] tabular-nums text-zinc-600">
+              {reh.done
+                ? reh.stalled
+                  ? `stalled at turn ${reh.turns} of ${reh.requested}`
+                  : `${reh.turns} turns`
+                : `turn ${Math.min(rehCur?.turn ?? 1, reh.turns)}/${reh.turns}`}
+            </p>
+          </div>
+          {/* the walk, one chip per visit: amber lands, rose skips */}
+          <div className="mt-1.5 flex max-h-20 flex-wrap items-center gap-1 overflow-y-auto">
+            {(reh.done
+              ? reh.timeline
+              : reh.timeline.slice(0, reh.idx + 1)
+            ).map((e, i) =>
+              e.kind === "serve" ? (
+                <span
+                  key={i}
+                  className="rounded-md bg-amber-300/10 px-1.5 py-0.5 font-mono text-[9.5px] text-amber-200/90"
+                >
+                  №{e.seat + 1} {e.label}
+                </span>
+              ) : (
+                <span
+                  key={i}
+                  title={`seat ${e.seat + 1} skipped — ${e.why}`}
+                  className="rounded-md border border-rose-400/25 px-1 py-0.5 font-mono text-[9px] text-rose-300/60"
+                >
+                  ↷{e.why}
+                </span>
+              )
+            )}
+            {rehServes.length === 0 && (
+              <span className="text-[10px] text-zinc-600">—</span>
+            )}
+          </div>
+          <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+            {reh.done
+              ? reh.stalled
+                ? "Every seat is cooling or capped — nothing serves until a window resets. The live ring was never touched."
+                : `${rehCounts.map(([s, c]) => `№${s + 1} ×${c}`).join(" · ")} — live cursor untouched, next pick unchanged.`
+              : "dry run — the live cursor never moves"}
+          </p>
+          {reh.done && !reh.stalled && (
+            <span className="sr-only">
+              Rehearsal dry run complete: {reh.turns} turns rehearsed,
+              distribution{" "}
+              {rehCounts.map(([s, c]) => `seat ${s + 1} served ${c}`).join(", ")}. The
+              live rotation was not affected.
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Run 42 — THE RING LEDGER: the ring's heartbeat. The last
+          confirmed serves replay here as real traffic flows, so the
+          rotation is something you SEE, not something you trust. */}
+      {provider.ringEvents && provider.ringEvents.length > 0 && (
+        <div className="mt-1 space-y-0.5">
+          {provider.ringEvents.slice(0, 3).map((e) => (
+            <p
+              key={`${e.at}-${e.keyId}`}
+              className="flex items-center justify-center gap-1.5 text-center font-mono text-[10px] tabular-nums text-zinc-600"
+            >
+              <span className="text-zinc-700">served</span>
+              <span className="text-zinc-500">№{e.seat + 1}</span>
+              <span className="max-w-[96px] truncate text-zinc-500">{e.label}</span>
+              <span>· {formatCompact(e.tokens)} tok</span>
+              <span>
+                ·{" "}
+                {new Date(e.at).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
       <span className="sr-only">
-        Round-robin ring: seat {cursor + 1} of {n} serves next.
+        Round-robin ring: seat {(predictedNextSeat ?? 0) + 1} of {n} serves next
+        {provider.balancing
+          ? `, drift repair active (±${Math.round((provider.driftPct ?? 0) * 100)}% spend spread) — the least-spent key serves until pools are even`
+          : ""}
+        .
         {keys
           .map(
             (k) =>
@@ -321,7 +600,7 @@ function ProviderCard({
   onSwitch: (id: string) => Promise<void>;
   now: number;
 }) {
-  const { addKey, deleteKey, toggleKey } = useHermes();
+  const { addKey, deleteKey, toggleKey, probeKey } = useHermes();
   const { toast } = useToast();
   const [switching, setSwitching] = useState(false);
   const [label, setLabel] = useState("");
@@ -414,7 +693,14 @@ function ProviderCard({
       {/* keys */}
       <div className="mt-3 space-y-1.5">
         {provider.keys.map((k) => (
-          <KeyRow key={k.id} k={k} now={now} onDelete={deleteKey} onToggle={toggleKey} />
+          <KeyRow
+            key={k.id}
+            k={k}
+            now={now}
+            onDelete={deleteKey}
+            onToggle={toggleKey}
+            onProbe={probeKey}
+          />
         ))}
 
         <div className="flex gap-2">
@@ -456,12 +742,16 @@ function KeyRow({
   now,
   onDelete,
   onToggle,
+  onProbe,
 }: {
   k: KeyView;
   now: number;
   onDelete: (id: string) => Promise<void>;
   onToggle: (id: string, isActive: boolean) => Promise<void>;
+  onProbe: (id: string) => Promise<ProbeVerdict>;
 }) {
+  const { toast } = useToast();
+  const [probing, setProbing] = useState(false);
   const cooling = cooldownLeft(k.coolingUntil, now);
   const blocked = k.blockedTier ?? null;
   const live = k.live ?? null;
@@ -500,6 +790,42 @@ function KeyRow({
     state = "probing…";
     stateCls = " text-zinc-500";
   }
+
+  // Run 42 — the probe speaks its verdict out loud: live (with the
+  // latency it just measured), still check-in-blocked, credential
+  // rejected, or whatever the upstream actually said. No silent
+  // failures — every click lands somewhere the owner can act on.
+  const handleProbe = async () => {
+    setProbing(true);
+    try {
+      const r = await onProbe(k.id);
+      if (r.ok) {
+        toast({
+          description: `${k.label} verified live · ${r.latencyMs}ms probe`,
+        });
+      } else if (r.status === 402) {
+        toast({
+          description:
+            "Still demands its daily check-in (402). Complete it on the dashboard, then probe again.",
+          variant: "destructive",
+        });
+      } else if (r.status === 401 || r.status === 403) {
+        toast({
+          description: "Credential rejected (401/403) — replace the key.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          description: `Probe failed · ${r.error || `status ${r.status}`}`,
+          variant: "destructive",
+        });
+      }
+    } catch (e) {
+      toast({ description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setProbing(false);
+    }
+  };
   return (
     <div className="flex items-center gap-2.5 rounded-lg border border-zinc-800/80 bg-[#18181b] px-2.5 py-2">
       <div className="min-w-0 flex-1">
@@ -516,6 +842,29 @@ function KeyRow({
           )}
         </p>
       </div>
+      {/* Run 42 — self-service healing: one liveness probe NOW.
+          After a dashboard check-in or a key swap, the owner clicks
+          and watches the seat flip emerald — no waiting for the
+          prober's tick or the breaker's cooldown. Amber-ring when
+          the key awaits its check-in: that's the "I checked in —
+          re-verify now" button. */}
+      <button
+        onClick={() => void handleProbe()}
+        disabled={probing || !k.isActive}
+        aria-label={`Probe ${k.label} now`}
+        title="Probe now — verify this key is live instantly"
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-40 ${
+          k.live?.state === "checkin"
+            ? "border border-amber-400/40 text-amber-300 hover:bg-amber-400/10"
+            : "text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
+        }`}
+      >
+        {probing ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Zap className="h-3.5 w-3.5" />
+        )}
+      </button>
       <Switch
         checked={k.isActive}
         onCheckedChange={(v) => void onToggle(k.id, v)}
@@ -575,8 +924,9 @@ export function ProvidersDialog({
           </DialogTitle>
           <DialogDescription className="text-[12.5px] leading-snug text-zinc-500">
             Exactly one provider is active at a time. Switching activates the
-            selected provider and deactivates all others — round-robin key
-            rotation then runs strictly on its keys.
+            selected provider and deactivates all others — rotation then runs
+            strictly on its keys, and spend-balanced drift repair keeps every
+            monthly pool even.
           </DialogDescription>
         </DialogHeader>
         <div className="min-w-0 space-y-3 pt-1">

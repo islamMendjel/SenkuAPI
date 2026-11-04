@@ -21,6 +21,8 @@
 // either way, or the prober and the router would disagree about
 // which keys are quarantined (Run 41).
 
+import { recordRingEvent } from "./ring";
+
 export type FailureKind = "auth" | "transient" | "checkin";
 
 const AUTH_COOLDOWN_MS = 10 * 60_000;
@@ -92,10 +94,20 @@ export function noteKeyFailure(
   });
 }
 
-/** A successful call clears every strike and cooldown for the key. */
-export function noteKeySuccess(keyId: string, countServe = true): void {
+/** A successful call clears every strike and cooldown for the key.
+ *  `meta` (tokens + model) confirms a REAL serve and pins it into
+ *  the ring ledger (Run 42) — the seat was reserved at pick time;
+ *  probe successes pass no meta and never touch the ledger. */
+export function noteKeySuccess(
+  keyId: string,
+  countServe = true,
+  meta?: { tokens?: number; model?: string }
+): void {
   if (countServe) bumpServe(keyId);
   states.delete(keyId);
+  if (meta) {
+    recordRingEvent(keyId, meta.tokens ?? 0, meta.model ?? "");
+  }
 }
 
 /** True while the key is quarantined by a cooldown. */

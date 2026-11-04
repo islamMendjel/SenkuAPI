@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→// Hermes — client store (Zustand). Owns bootstrap data, chat state
+     4→// and the SSE streaming turn pipeline.
+     5→
+     6→import { create } from "zustand";
+     7→import { DEFAULT_MODEL } from "@/lib/hermes/constants";
+     8→import { sizeFromDims } from "@/lib/hermes/image-forge";
+     9→import { countLines } from "@/lib/hermes/format";
+    10→import { autoChallenger } from "@/lib/hermes/models";
+    11→import { StreamFlushScheduler } from "@/lib/hermes/raf-throttle";
+    12→import type {
+    13→  AttachmentRecord,
+    14→  ChatMessageData,
+    15→  EffortLevel,
+    16→  ImageRef,
+    17→  ImageSize,
+    18→  LimiterStatus,
+    19→  ProviderView,
+    20→  RitualView,
+    21→  SearchSource,
+    22→  TurnStyle,
+    23→} from "@/lib/hermes/types";
+    24→
+    25→/** One file being attached to the next message — extraction runs
+    26→ *  server-side the moment the file is picked, so the chip can show
+    27→ *  exactly what the gateway read BEFORE the user sends. */
+    28→export interface PendingAttachment {
+    29→  id: string;
+    30→  name: string;
+    31→  kindGuess: "text" | "pdf" | "image" | "unknown";
+    32→  status: "extracting" | "ready" | "error";
+    33→  error?: string;
+    34→  record?: AttachmentRecord;
+    35→}
+    36→
+    37→/** A code block staged into the Hermes Canvas (the Tools aside).
+    38→ *  Kept in the store so the preview survives close/reopen and chat
+    39→ *  navigation — closing the canvas never touches the conversation. */
+    40→export interface CanvasSource {
+    41→  /** canonical preview language: html | svg | mermaid | javascript | python */
+    42→  language: string;
+    43→  code: string;
+    44→}
+    45→
+    46→/** One racing model inside a duel turn. */
+    47→export interface DuelLane {
+    48→  id: "a" | "b";
+    49→  model: string;
+    50→  content: string;
+    51→  streaming: boolean;
+    52→  error: string | null;
+    53→  phase: "searching" | "thinking" | null;
+    54→  tokens: number;
+    55→  cached: boolean;
+    56→  servedBy: string | null;
+    57→  keyLabel: string | null;
+    58→}
+    59→
+    60→/** One previous answer of a regenerated turn. The ACTIVE answer
+    61→ *  always lives on the message itself (content/model/tokens/…) —
+    62→ *  `variants` holds every earlier one, full provenance included,
+    63→ *  so flipping back shows honest per-answer receipts. */
+    64→export interface AnswerVariant {
+    65→  content: string;
+    66→  model: string;
+    67→  tokens: number;
+    68→  cached: boolean;
+    69→  servedBy: string | null;
+    70→  keyLabel: string | null;
+    71→  effort: EffortLevel | null;
+    72→  /** Run 22 — image re-roll variants carry their ImageRef; text
+    73→   *  variants simply omit it. */
+    74→  image?: ImageRef | null;
+    75→}
+    76→
+    77→export interface UIMessage {
+    78→  id: string;
+    79→  role: "user" | "assistant";
+    80→  content: string;
+    81→  model?: string | null;
+    82→  provider?: string | null;
+    83→  keyLabel?: string | null;
+    84→  tokens?: number;
+    85→  cached?: boolean;
+    86→  /** true when the token count is a chars/4 estimate because the
+    87→   *  provider did not report usage (Run 17 honesty marker) */
+    88→  tokensEstimated?: boolean;
+    89→  servedBy?: string | null;
+    90→  sources?: SearchSource[] | null;
+    91→  /** files the gateway read and sent with this message */
+    92→  attachments?: AttachmentRecord[] | null;
+    93→  createdAt?: string;
+    94→  streaming?: boolean;
+    95→  error?: string | null;
+    96→  /** live phase while waiting for the first delta */
+    97→  phase?: "searching" | "thinking" | null;
+    98→  /** deep-research stage label while the search pipeline runs */
+    99→  searchDetail?: string | null;
+   100→  /** effort level that served (or is serving) this turn */
+   101→  effort?: EffortLevel | null;
+   102→  /** set when web search was requested but every engine failed */
+   103→  searchFailed?: boolean;
+   104→  /** present while a duel turn awaits the user's pick */
+   105→  duel?: { a: DuelLane; b: DuelLane } | null;
+   106→  /** which lane the user kept ("a" | "b"), once picked */
+   107→  duelPicked?: "a" | "b" | null;
+   108→  /** the losing lane, kept as a viewable reference after the pick */
+   109→  runnerUp?: { content: string; model: string } | null;
+   110→  /** earlier answers of this turn (regenerate history) — the
+   111→   *  active one lives in content/model above */
+   112→  variants?: AnswerVariant[] | null;
+   113→  /** index of the active answer inside `variants` */
+   114→  variantIndex?: number | null;
+   115→  /** Run 22 — the ACTIVE forged image (rendered as an image card
+   116→   *  instead of markdown). `content` keeps a text marker so search,
+   117→   *  export and model history stay meaningful. */
+   118→  image?: ImageRef | null;
+   119→  /** true while the Image Forge is generating this turn's image */
+   120→  imagePending?: boolean;
+   121→  /** set on USER bubbles sent through Image mode — drives the
+   122→   *  bubble badge and routes Retry back to the forge (client-only:
+   123→   *  failed turns are never persisted, so no column is needed) */
+   124→  imageRequest?: { size: ImageSize } | null;
+   125→  /** Run 34 — set on user messages a scheduled ritual fired (the
+   126→   *  scheduler stamps the persisted row). Drives the "Ritual ·
+   127→   *  <title>" badge on the bubble; the title resolves from the
+   128→   *  ritual list, falling back to "Ritual". */
+   129→  ritualId?: string | null;
+   130→  /** Run 39 — THE FORK: where this message sits in its sibling
+   131→   *  group (‹ k/N › switcher). Only fork-group members carry them;
+   132→   *  siblingCount 1 = no switcher. */
+   133→  branchIndex?: number;
+   134→  siblingCount?: number;
+   135→  siblingPosition?: number;
+   136→}
+   137→
+   138→export interface ChatListItem {
+   139→  id: string;
+   140→  title: string;
+   141→  model: string;
+   142→  provider: string;
+   143→  /** Run 37 — the project this chat belongs to (null = Recent). */
+   144→  projectId: string | null;
+   145→  createdAt: string;
+   146→  updatedAt: string;
+   147→}
+   148→
+   149→/** Run 37 — one project: a folder for chats WITH its own
+   150→ *  instructions, injected into every turn of every chat inside it
+   151→ *  (server-side, gateway → projectBlock). The sidebar section,
+   152→ *  the move submenu and the ⌘K palette read this list. */
+   153→export interface ProjectItem {
+   154→  id: string;
+   155→  name: string;
+   156→  instructions: string;
+   157→  chatCount: number;
+   158→  createdAt: string;
+   159→  updatedAt: string;
+   160→}
+   161→
+   162→/** Run 27 — Chrome's beforeinstallprompt event. Not in the standard
+   163→ *  DOM typings, so the PWA registrar and the profile menu share this
+   164→ *  minimal, honest shape. */
+   165→export interface BeforeInstallPromptEvent extends Event {
+   166→  prompt: () => Promise<void>;
+   167→  userChoice: Promise<{
+   168→    outcome: "accepted" | "dismissed";
+   169→    platform: string;
+   170→  }>;
+   171→}
+   172→
+   173→/** Run 28 — one persistent memory entry (durable fact or preference
+   174→ *  the user asked the gateway to remember; injected into every
+   175→ *  system prompt server-side). */
+   176→export interface MemoryItem {
+   177→  id: string;
+   178→  content: string;
+   179→}
+   180→
+   181→/** Run 34 — one scheduled prompt, as the dialog renders it. The
+   182→ * server owns the shape (RitualView in lib/hermes/types); this
+   183→ * alias keeps the MemoryItem convention for client components. */
+   184→export type RitualItem = RitualView;
+   185→
+   186→interface UserInfo {
+   187→  name: string;
+   188→  email: string;
+   189→  plan: string;
+   190→}
+   191→
+   192→interface HermesState {
+   193→  user: UserInfo;
+   194→  providers: ProviderView[];
+   195→  limiter: LimiterStatus | null;
+   196→  chats: ChatListItem[];
+   197→  models: string[];
+   198→
+   199→  sidebarOpen: boolean;
+   200→  searchOpen: boolean;
+   201→  searchFilter: string;
+   202→  searchEnabled: boolean;
+   203→  temporary: boolean;
+   204→  model: string;
+   205→  /** duel mode: next send races two models, user keeps the winner */
+   206→  duelEnabled: boolean;
+   207→  /** the lane-B model (null when the pool has no second model) */
+   208→  challenger: string | null;
+   209→  /** effort dial — fast / medium (default) / deep */
+   210→  effort: EffortLevel;
+   211→  /** Run 22 — Image Forge mode: the next message is forged into an
+   212→   *  image instead of streamed as text. Mutually exclusive with
+   213→   *  Search and Duel (different pipelines — arming one disarms the
+   214→   *  others, so a send can never be ambiguous). */
+   215→  imageMode: boolean;
+   216→  /** dimensions for the next forged image */
+   217→  imageSize: ImageSize;
+   218→  toggleImageMode: () => void;
+   219→  setImageSize: (s: ImageSize) => void;
+   220→  /** Forge an image from a prompt (Run 22). Mirrors sendMessage's
+   221→   *  lifecycle: optimistic bubbles, abortable via Stop, error card
+   222→   *  with retry, re-rolls arrive with variant snapshots attached. */
+   223→  sendImage: (
+   224→    prompt: string,
+   225→    opts?: {
+   226→      appendUserBubble?: boolean;
+   227→      persistUser?: boolean;
+   228→      size?: ImageSize;
+   229→      regenVariants?: AnswerVariant[];
+   230→    }
+   231→  ) => Promise<void>;
+   232→
+   233→  /** Run 40 — THE EXOCORE: /agent arms the NEXT message for the
+   234→   *  agentic pipeline (tools: web search, calculator, gateway status,
+   235→   *  Jev arbitration) instead of the plain gateway stream. One-shot —
+   236→   *  consumed by the send it arms. */
+   237→  agentArmed: boolean;
+   238→  armAgent: () => void;
+   239→  /** Run a task through the agent loop: live tool trace in the
+   240→   *  assistant bubble, persisted exactly like every normal turn
+   241→   *  (fork-safe tree, key-attributed usage, honest estimates). */
+   242→  runAgent: (content: string) => Promise<void>;
+   243→
+   244→  /** Run 40 — H.E.R.M.E.S. VOICE: the full-screen voice conversation
+   245→   *  overlay. While on, every completed non-duel reply is handed to
+   246→   *  the overlay through voiceReply so it is SPOKEN aloud; the
+   247→   *  overlay consumes the reply once playback starts. */
+   248→  voiceMode: boolean;
+   249→  setVoiceMode: (on: boolean) => void;
+   250→  voiceReply: { id: string; content: string } | null;
+   251→  consumeVoiceReply: () => void;
+   252→
+   253→  currentChatId: string | null;
+   254→  messages: UIMessage[];
+   255→  streaming: boolean;
+   256→  booted: boolean;
+   257→  /** Bumped on every conversation navigation (new chat, entering
+   258→   *      a chat, deleting the current chat) — the app shell keys the
+   259→   *      timeline view on it so each navigation plays the view-in
+   260→   *      transition exactly once (and never mid-stream). */
+   261→  viewEpoch: number;
+   262→  /** files staged for the NEXT message (extraction runs at pick time) */
+   263→  pendingAttachments: PendingAttachment[];
+   264→
+   265→  /** Run 17 — one-shot response style for the NEXT message, armed by
+   266→   *  the /code and /concise slash commands, shown as a removable pill. */
+   267→  turnStyle: TurnStyle | null;
+   268→  setTurnStyle: (s: TurnStyle | null) => void;
+   269→  /** Stage a >60-line pasted snippet as an attachment pill. The exact
+   270→   *  text stays client-side until the user SENDS (explicit action) —
+   271→   *  no upload, no persistence at paste time. */
+   272→  stagePastedSnippet: (text: string) => { ok: boolean; error?: string };
+   273→
+   274→  /** Run 17 — Hermes Canvas state (the Tools aside). The source is
+   275→   *  kept across close/reopen so the user never loses a preview. */
+   276→  canvasOpen: boolean;
+   277→  canvasSource: CanvasSource | null;
+   278→  openCanvas: (src: CanvasSource) => void;
+   279→  closeCanvas: () => void;
+   280→  setCanvasOpen: (open: boolean) => void;
+   281→
+   282→  /** Run 23 — the image Gallery view (sidebar → Images). Opening it
+   283→   *  swaps the timeline for a masonry of every forged image, from
+   284→   *  every saved chat. Any conversation navigation (new chat, enter
+   285→   *  chat, mode switch) or any send closes it again — the gallery is
+   286→   *  a destination, never a dead end. */
+   287→  galleryOpen: boolean;
+   288→  /** forged images across all saved chats (the sidebar badge;
+   289→   *  bootstrap-seeded, +1 per persisted forge, refreshed on delete) */
+   290→  imageCount: number;
+   291→  openGallery: () => void;
+   292→  closeGallery: () => void;
+   293→
+   294→  /** Run 26 — when set, the timeline scrolls this message into view
+   295→   *  and flashes it once (jump-to-message from ⌘K content search).
+   296→   *  The timeline clears it after the flash plays; every conversation
+   297→   *  navigation (newChat/selectChat) also clears it so a stale id
+   298→   *  from a previous chat can never flash in the wrong place. */
+   299→  highlightMessageId: string | null;
+   300→  flashMessage: (id: string | null) => void;
+   301→
+   302→  /** Run 27 — PWA install. `installPrompt` stashes Chrome's
+   303→   *  beforeinstallprompt event (fired once criteria — manifest, icons,
+   304→   *  service worker, HTTPS — are met) so the profile menu can offer a
+   305→   *  one-click "Install App". `pwaStandalone` is true when the app is
+   306→   *  already running installed (display-mode: standalone or iOS
+   307→   *  navigator.standalone) — the install entry hides itself then. */
+   308→  installPrompt: BeforeInstallPromptEvent | null;
+   309→  pwaStandalone: boolean;
+   310→  setInstallPrompt: (ev: BeforeInstallPromptEvent | null) => void;
+   311→  setPwaStandalone: (v: boolean) => void;
+   312→
+   313→  /** Run 28 — persistent personal memory: durable facts/preferences
+   314→   *  the user asked the gateway to remember. Injected into every
+   315→   *  system prompt by the gateway (see lib/hermes/memory.ts); the
+   316→   *  bootstrap seeds the list, the MemoryDialog owns the CRUD, and
+   317→   *  the welcome screen surfaces "remembers N things" when N > 0. */
+   318→  memories: MemoryItem[];
+   319→  addMemory: (content: string) => Promise<boolean>;
+   320→  updateMemory: (id: string, content: string) => Promise<boolean>;
+   321→  deleteMemory: (id: string) => Promise<boolean>;
+   322→
+   323→  /** Run 34 — scheduled prompts (Rituals): each fires server-side on
+   324→   *  its own clock and lands in its dedicated chat. The list drives
+   325→   *  the sidebar row badge + the management dialog; the dialog polls
+   326→   *  refreshRituals while open so countdowns/status stay live. */
+   327→  rituals: RitualItem[];
+   328→  refreshRituals: () => Promise<void>;
+   329→  createRitual: (input: {
+   330→    title: string;
+   331→    prompt: string;
+   332→    kind: "daily" | "weekly" | "interval";
+   333→    hour: number;
+   334→    minute: number;
+   335→    weekday: number;
+   336→    intervalMin: number;
+   337→    search: boolean;
+   338→  }) => Promise<{ ok: boolean; error?: string }>;
+   339→  toggleRitual: (id: string, isActive: boolean) => Promise<boolean>;
+   340→  editRitual: (
+   341→    id: string,
+   342→    patch: { title?: string; prompt?: string }
+   343→  ) => Promise<boolean>;
+   344→  deleteRitual: (id: string) => Promise<boolean>;
+   345→  runRitualNow: (
+   346→    id: string
+   347→  ) => Promise<{ ok: boolean; error?: string; status?: string }>;
+   348→
+   349→  /** Run 37 — THE PROJECTS: chats that live in folders, folders
+   350→   *  that carry their own instructions. `draftProjectId` names the
+   351→   *  project the NEXT new chat is born into (set by newChat(id) /
+   352→   *  the project row's plus button; cleared by any navigation).
+   353→   *  The current chat's project is derived from its row — server
+   354→   *  truth on every turn. */
+   355→  projects: ProjectItem[];
+   356→  draftProjectId: string | null;
+   357→  refreshProjects: () => Promise<void>;
+   358→  createProject: (
+   359→    name: string,
+   360→    instructions: string
+   361→  ) => Promise<{ ok: boolean; error?: string; id?: string }>;
+   362→  updateProject: (
+   363→    id: string,
+   364→    patch: { name?: string; instructions?: string }
+   365→  ) => Promise<{ ok: boolean; error?: string }>;
+   366→  deleteProject: (id: string) => Promise<{ ok: boolean; releasedChats?: number }>;
+   367→  /** Move a chat into a project (or back to Recent with null). */
+   368→  moveChat: (
+   369→    chatId: string,
+   370→    projectId: string | null
+   371→  ) => Promise<{ ok: boolean; error?: string }>;
+   372→
+   373→  /** Upload files for extraction — each becomes a chip showing what
+   374→   *      the gateway read (or why it couldn't be read). */
+   375→  addAttachments: (files: File[]) => Promise<void>;
+   376→  removePendingAttachment: (id: string) => void;
+   377→
+   378→  bootstrap: () => Promise<void>;
+   379→  refreshUsage: () => Promise<void>;
+   380→  refreshChats: () => Promise<void>;
+   381→  setSidebarOpen: (v: boolean) => void;
+   382→  setSearchOpen: (v: boolean) => void;
+   383→  setSearchFilter: (v: string) => void;
+   384→  toggleSearch: () => void;
+   385→  setSearchEnabled: (v: boolean) => void;
+   386→  toggleTemporary: () => void;
+   387→  setModel: (m: string) => void;
+   388→  toggleDuel: () => void;
+   389→  setChallenger: (m: string) => void;
+   390→  setEffort: (e: EffortLevel) => void;
+   391→  /** Keep one lane of an awaiting-pick duel as the canonical
+   392→        assistant reply (persists it server-side for saved chats). */
+   393→  pickDuelWinner: (messageId: string, lane: "a" | "b") => Promise<void>;
+   394→  syncModels: () => Promise<boolean>;
+   395→  switchProvider: (providerId: string) => Promise<void>;
+   396→  addKey: (providerId: string, label: string, key: string) => Promise<void>;
+   397→  deleteKey: (keyId: string) => Promise<void>;
+   398→  toggleKey: (keyId: string, isActive: boolean) => Promise<void>;
+   399→  /** Run 42 — run ONE liveness probe on a pooled key NOW (self-
+   400→   *  service healing): refreshes the pool view from the response.
+   401→   *  Resolves the probe verdict so the UI can toast it. */
+   402→  probeKey: (
+   403→    keyId: string
+   404→  ) => Promise<{ ok: boolean; status: number; latencyMs: number; error: string | null }>;
+   405→
+   406→  newChat: (projectId?: string | null) => void;
+   407→  selectChat: (id: string) => Promise<void>;
+   408→  deleteChat: (id: string) => Promise<void>;
+   409→  /** Rename a chat (optimistic — rolls back to the server list on
+   410→      failure). Returns true when the new title stuck. */
+   411→  renameChat: (id: string, title: string) => Promise<boolean>;
+   412→  sendMessage: (content: string) => Promise<void>;
+   413→  editMessage: (messageId: string, content: string) => Promise<void>;
+   414→  /** Re-run the turn that produced the last failed assistant reply,
+   415→      optionally with a different model (error-card "switch model"). */
+   416→  retryLast: (modelOverride?: string) => Promise<void>;
+   417→  /** Regenerate the LAST assistant answer: the current answer is
+   418→      snapshotted into the message's variant history and the turn
+   419→      re-streams. Available on every completed answer (not just
+   420→      errors) — the standard chat capability. */
+   421→  regenerate: () => Promise<void>;
+   422→  /** Flip a message's active answer to the previous/next variant
+   423→      (the ‹ 2/3 › control). Persists for saved chats. */
+   424→  navigateVariant: (messageId: string, dir: -1 | 1) => Promise<void>;
+   425→  /** Run 39 — THE FORK: flip the displayed conversation to the
+   426→      previous/next sibling branch at a fork point (the ‹ k/N ›
+   427→      switcher on edited turns). Saved chats only. */
+   428→  switchBranch: (messageId: string, dir: -1 | 1) => Promise<void>;
+   429→  stopStreaming: () => void;
+   430→}
+   431→
+   432→let streamController: AbortController | null = null;
+   433→
+   434→/** Fires exactly when the usage day rolls over (01:00 Africa/Algiers),
+   435→ *  so the daily token counter visibly resets to 0 at that moment —
+   436→ *  no polling loop, one timer armed from the server's own schedule. */
+   437→let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+   438→function scheduleDailyRolloverRefresh(dailyResetsAt?: string) {
+   439→  if (rolloverTimer) {
+   440→    clearTimeout(rolloverTimer);
+   441→    rolloverTimer = null;
+   442→  }
+   443→  if (typeof dailyResetsAt !== "string") return;
+   444→  const at = new Date(dailyResetsAt).getTime();
+   445→  if (!Number.isFinite(at)) return;
+   446→  const delay = Math.max(at - Date.now() + 1000, 30_000); // never tighter than 30s
+   447→  rolloverTimer = setTimeout(() => {
+   448→    rolloverTimer = null;
+   449→    void useHermes.getState().refreshUsage();
+   450→  }, delay);
+   451→}
+   452→
+   453→function applyProviderView(
+   454→  providers: ProviderView[],
+   455→  view: ProviderView
+   456→): ProviderView[] {
+   457→  return providers.map((p) => (p.id === view.id ? view : p));
+   458→}
+   459→
+   460→export const useHermes = create<HermesState>((set, get) => ({
+   461→  user: {
+   462→    name: "hermes",
+   463→    email: "gamerislam21@gmail.com",
+   464→    plan: "Ultimate plan (unlimited)",
+   465→  },
+   466→  providers: [],
+   467→  limiter: null,
+   468→  chats: [],
+   469→  models: [],
+   470→
+   471→  // Run 15: the sidebar starts CLOSED on launch (the user asked for
+   472→  // it explicitly). It opens on click, on hover-peek over the
+   473→  // top-bar toggle, and — on mobile — stays an overlay drawer.
+   474→  sidebarOpen: false,
+   475→  searchOpen: false,
+   476→  searchFilter: "",
+   477→  searchEnabled: false,
+   478→  temporary: false,
+   479→  model: "free/glm-5.3",
+   480→  duelEnabled: false,
+   481→  challenger: null,
+   482→  effort: "medium",
+   483→  imageMode: false,
+   484→  imageSize: "square",
+   485→  // Run 40 — agent + voice defaults.
+   486→  agentArmed: false,
+   487→  voiceMode: false,
+   488→  voiceReply: null,
+   489→
+   490→  currentChatId: null,
+   491→  messages: [],
+   492→  streaming: false,
+   493→  booted: false,
+   494→  viewEpoch: 0,
+   495→  pendingAttachments: [],
+   496→  turnStyle: null,
+   497→  canvasOpen: false,
+   498→  canvasSource: null,
+   499→  highlightMessageId: null,
+   500→  galleryOpen: false,
+   501→  imageCount: 0,
+   502→  // Run 37 — projects (folders with instructions).
+   503→  projects: [],
+   504→  draftProjectId: null,
+   505→
+   506→  async addAttachments(files) {
+   507→    const existing = get().pendingAttachments;
+   508→    const room = 5 - existing.length;
+   509→    if (room <= 0) {
+   510→      return; // caller toasts about the cap
+   511→    }
+   512→    const accepted = files.slice(0, room);
+   513→    const skipped = files.length - accepted.length;
+   514→    const staged: PendingAttachment[] = accepted.map((f) => ({
+   515→      id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+   516→      name: f.name,
+   517→      kindGuess: f.type.startsWith("image/")
+   518→        ? "image"
+   519→        : f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")
+   520→          ? "pdf"
+   521→          : f.type.startsWith("text/") || f.name.includes(".")
+   522→            ? "text"
+   523→            : "unknown",
+   524→      status: "extracting",
+   525→    }));
+   526→    set({ pendingAttachments: [...existing, ...staged] });
+   527→    if (skipped > 0) return; // cap message handled by the caller
+   528→
+   529→    try {
+   530→      const form = new FormData();
+   531→      for (const f of accepted) form.append("files", f);
+   532→      const res = await fetch("/api/attachments/extract", {
+   533→        method: "POST",
+   534→        body: form,
+   535→      });
+   536→      const data = (await res.json().catch(() => ({}))) as {
+   537→        records?: AttachmentRecord[];
+   538→        errors?: { name: string; error: string }[];
+   539→        error?: string;
+   540→      };
+   541→      if (!res.ok) throw new Error(data.error || "Extraction failed");
+   542→      const records = data.records ?? [];
+   543→      const errors = data.errors ?? [];
+   544→      set((s) => ({
+   545→        pendingAttachments: s.pendingAttachments.map((p) => {
+   546→          const rec = records.find((r) => r.name === p.name);
+   547→          if (rec) {
+   548→            return {
+   549→              ...p,
+   550→              status: "ready" as const,
+   551→              kindGuess: rec.kind,
+   552→              record: rec,
+   553→            };
+   554→          }
+   555→          const err = errors.find((e) => e.name === p.name);
+   556→          if (err) {
+   557→            return { ...p, status: "error" as const, error: err.error };
+   558→          }
+   559→          // No result at all (name mismatch etc.) — treat as error.
+   560→          return {
+   561→            ...p,
+   562→            status: "error" as const,
+   563→            error: "Could not read this file.",
+   564→          };
+   565→        }),
+   566→      }));
+   567→    } catch (e) {
+   568→      // Whole upload failed — every staged file errors out.
+   569→      const msg = (e as Error).message || "Extraction failed";
+   570→      set((s) => ({
+   571→        pendingAttachments: s.pendingAttachments.map((p) =>
+   572→          staged.some((q) => q.id === p.id)
+   573→            ? { ...p, status: "error" as const, error: msg }
+   574→            : p
+   575→        ),
+   576→      }));
+   577→    }
+   578→  },
+   579→
+   580→  removePendingAttachment: (id) =>
+   581→    set((s) => ({
+   582→      pendingAttachments: s.pendingAttachments.filter((p) => p.id !== id),
+   583→    })),
+   584→
+   585→  async bootstrap() {
+   586→    try {
+   587→      const res = await fetch("/api/bootstrap");
+   588→      const data = await res.json();
+   589→      if (data.error) throw new Error(data.error);
+   590→      const models: string[] = data.activeProvider?.models ?? [];
+   591→      set({
+   592→        user: data.user ?? get().user,
+   593→        providers: data.providers ?? [],
+   594→        limiter: data.limiter ?? null,
+   595→        chats: data.chats ?? [],
+   596→        models,
+   597→        imageCount: typeof data.imageCount === "number" ? data.imageCount : 0,
+   598→        // Run 28 — memory list for the welcome indicator + dialog.
+   599→        memories: Array.isArray(data.memories)
+   600→          ? data.memories
+   601→              .filter(
+   602→                (m: unknown): m is MemoryItem =>
+   603→                  !!m && typeof (m as MemoryItem).id === "string" &&
+   604→                  typeof (m as MemoryItem).content === "string"
+   605→              )
+   606→              .map((m: MemoryItem) => ({ id: m.id, content: m.content }))
+   607→          : [],
+   608→        // Run 34 — scheduled prompts (sidebar badge + dialog).
+   609→        rituals: Array.isArray(data.rituals) ? (data.rituals as RitualItem[]) : [],
+   610→        // Run 37 — projects (sidebar section + move submenu + ⌘K).
+   611→        projects: Array.isArray(data.projects)
+   612→          ? (data.projects as ProjectItem[])
+   613→          : [],
+   614→        // Every fresh session boots on the default model (glm-5.3).
+   615→        model: models.includes(DEFAULT_MODEL)
+   616→          ? DEFAULT_MODEL
+   617→          : models[0] ?? DEFAULT_MODEL,
+   618→        // A stale challenger (from a previous provider's list) is
+   619→        // dropped — it is re-derived the next time duel is armed.
+   620→        challenger: null,
+   621→        booted: true,
+   622→      });
+   623→    } catch (e) {
+   624→      console.error("bootstrap failed", e);
+   625→      set({ booted: true });
+   626→    }
+   627→  },
+   628→
+   629→  async refreshUsage() {
+   630→    try {
+   631→      const res = await fetch("/api/usage");
+   632→      const data = await res.json();
+   633→      if (!data.error) {
+   634→        set({ providers: data.providers ?? [], limiter: data.limiter ?? null });
+   635→        scheduleDailyRolloverRefresh(data.limiter?.dailyResetsAt);
+   636→      }
+   637→    } catch {
+   638→      // non-fatal
+   639→    }
+   640→  },
+   641→
+   642→  async refreshChats() {
+   643→    try {
+   644→      const res = await fetch("/api/chats");
+   645→      const chats = await res.json();
+   646→      if (Array.isArray(chats)) set({ chats });
+   647→    } catch {
+   648→      // non-fatal
+   649→    }
+   650→  },
+   651→
+   652→  setSidebarOpen: (v) => set({ sidebarOpen: v }),
+   653→  setSearchOpen: (v) => set({ searchOpen: v, searchFilter: v ? get().searchFilter : "" }),
+   654→  setSearchFilter: (v) => set({ searchFilter: v }),
+   655→  // Arming search disarms Image mode (a forged image never runs a
+   656→  // web search — the modes are different pipelines, Run 22).
+   657→  toggleSearch: () =>
+   658→    set((s) => ({
+   659→      searchEnabled: !s.searchEnabled,
+   660→      imageMode: !s.searchEnabled ? false : s.imageMode,
+   661→    })),
+   662→  setSearchEnabled: (v) => set({ searchEnabled: v }),
+   663→  toggleTemporary: () =>
+   664→    set((s) => ({
+   665→      temporary: !s.temporary,
+   666→      // switching modes always starts a fresh conversation so persisted
+   667→      // history never mixes with ephemeral messages
+   668→      currentChatId: null,
+   669→      messages: [],
+   670→      // staged files belong to the abandoned conversation
+   671→      pendingAttachments: [],
+   672→      // Run 37 — the draft project belonged to the abandoned
+   673→      // conversation too; a fresh start is unscoped until said otherwise.
+   674→      draftProjectId: null,
+   675→      // Run 23 — a mode switch is a navigation: leave the gallery.
+   676→      galleryOpen: false,
+   677→    })),
+   678→  setModel: (m) =>
+   679→    set((s) => ({
+   680→      model: m,
+   681→      // The challenger can never be the primary — re-derive it when
+   682→      // the user switches onto the challenger's model mid-duel-arm.
+   683→      challenger:
+   684→        s.duelEnabled && s.challenger === m
+   685→          ? autoChallenger(s.models, m)
+   686→          : s.challenger,
+   687→    })),
+   688→  toggleDuel: () => {
+   689→    const s = get();
+   690→    if (!s.duelEnabled) {
+   691→      // Arming: reuse a still-valid challenger, else auto-pick a
+   692→      // contrasting one (different family when possible).
+   693→      const challenger =
+   694→        s.challenger &&
+   695→        s.challenger !== s.model &&
+   696→        s.models.includes(s.challenger)
+   697→          ? s.challenger
+   698→          : autoChallenger(s.models, s.model);
+   699→      if (!challenger) return; // nothing to duel against
+   700→      // Arming duel disarms Image mode (duels race text models).
+   701→      set({ duelEnabled: true, challenger, imageMode: false });
+   702→    } else {
+   703→      set({ duelEnabled: false });
+   704→    }
+   705→  },
+   706→  setChallenger: (m) => set({ challenger: m }),
+   707→  setEffort: (e) => set({ effort: e }),
+   708→
+   709→  // Arming Image mode disarms Search + Duel: a forged image is
+   710→  // neither grounded nor a race — the composer pill, placeholder and
+   711→  // send all switch to the forge pipeline (Run 22).
+   712→  toggleImageMode: () =>
+   713→    set((s) => ({
+   714→      imageMode: !s.imageMode,
+   715→      ...(!s.imageMode ? { searchEnabled: false, duelEnabled: false } : {}),
+   716→    })),
+   717→  setImageSize: (v) => set({ imageSize: v }),
+   718→
+   719→  async syncModels() {
+   720→    try {
+   721→      const res = await fetch("/api/models?sync=1");
+   722→      const data = await res.json();
+   723→      if (Array.isArray(data.models) && data.models.length) {
+   724→        const models: string[] = data.models;
+   725→        set((s) => ({
+   726→          models,
+   727→          model: models.includes(s.model)
+   728→            ? s.model
+   729→            : models.includes(DEFAULT_MODEL)
+   730→              ? DEFAULT_MODEL
+   731→              : models[0],
+   732→          // The list changed — a challenger that disappeared is dropped
+   733→          // (re-derived when duel is armed / at send time).
+   734→          challenger:
+   735→            s.challenger && models.includes(s.challenger) ? s.challenger : null,
+   736→        }));
+   737→        return data.synced === true;
+   738→      }
+   739→    } catch {
+   740→      // keep current list
+   741→    }
+   742→    return false;
+   743→  },
+   744→
+   745→  async switchProvider(providerId) {
+   746→    const res = await fetch("/api/providers/switch", {
+   747→      method: "POST",
+   748→      headers: { "Content-Type": "application/json" },
+   749→      body: JSON.stringify({ providerId }),
+   750→    });
+   751→    const data = await res.json();
+   752→    if (data.error) throw new Error(data.error);
+   753→    const models: string[] = data.activeProvider?.models ?? [];
+   754→    set((s) => ({
+   755→      providers: data.providers ?? s.providers,
+   756→      limiter: data.limiter ?? s.limiter,
+   757→      models,
+   758→      model: models.includes(s.model)
+   759→        ? s.model
+   760→        : models.includes(DEFAULT_MODEL)
+   761→          ? DEFAULT_MODEL
+   762→          : models[0] ?? s.model,
+   763→      // Provider switch → different model list; stale challenger dropped.
+   764→      challenger:
+   765→        s.challenger && models.includes(s.challenger) ? s.challenger : null,
+   766→    }));
+   767→  },
+   768→
+   769→  async addKey(providerId, label, key) {
+   770→    const res = await fetch(`/api/providers/${providerId}/keys`, {
+   771→      method: "POST",
+   772→      headers: { "Content-Type": "application/json" },
+   773→      body: JSON.stringify({ label, key }),
+   774→    });
+   775→    const view = await res.json();
+   776→    if (view.error) throw new Error(view.error);
+   777→    set((s) => ({ providers: applyProviderView(s.providers, view) }));
+   778→    await get().refreshUsage();
+   779→  },
+   780→
+   781→  async deleteKey(keyId) {
+   782→    const res = await fetch(`/api/keys/${keyId}`, { method: "DELETE" });
+   783→    const view = await res.json();
+   784→    if (view.error) throw new Error(view.error);
+   785→    set((s) => ({ providers: applyProviderView(s.providers, view) }));
+   786→    await get().refreshUsage();
+   787→  },
+   788→
+   789→  async toggleKey(keyId, isActive) {
+   790→    const res = await fetch(`/api/keys/${keyId}`, {
+   791→      method: "PATCH",
+   792→      headers: { "Content-Type": "application/json" },
+   793→      body: JSON.stringify({ isActive }),
+   794→    });
+   795→    const view = await res.json();
+   796→    if (view.error) throw new Error(view.error);
+   797→    set((s) => ({ providers: applyProviderView(s.providers, view) }));
+   798→    await get().refreshUsage();
+   799→  },
+   800→
+   801→  // Run 42 — self-service healing: one probe, now. The response
+   802→  // carries the refreshed provider view (the prober's verdict is
+   803→  // already merged server-side), so the ring updates instantly —
+   804→  // a healed seat flips emerald the moment the fix landed. A hard
+   805→  // failure (404 / 409) comes back WITHOUT a view → throw; a
+   806→  // completed probe returns its verdict even when it found the key
+   807→  // dead (error field = the probe's own telemetry, not a crash).
+   808→  async probeKey(keyId) {
+   809→    const res = await fetch(`/api/keys/${keyId}/probe`, { method: "POST" });
+   810→    const data = await res.json();
+   811→    if (!res.ok || !data.view) throw new Error(data.error || "Probe failed");
+   812→    set((s) => ({ providers: applyProviderView(s.providers, data.view) }));
+   813→    await get().refreshUsage();
+   814→    return {
+   815→      ok: Boolean(data.ok),
+   816→      status: Number(data.status ?? 0),
+   817→      latencyMs: Number(data.latencyMs ?? 0),
+   818→      error: data.error ?? null,
+   819→    };
+   820→  },
+   821→
+   822→  setTurnStyle(s) {
+   823→    set({ turnStyle: s });
+   824→  },
+   825→
+   826→  stagePastedSnippet(text) {
+   827→    const t = text ?? "";
+   828→    // Hard sanity ceiling — anything past this is not a "snippet".
+   829→    if (t.length > 1_000_000) {
+   830→      return {
+   831→        ok: false,
+   832→        error: `Snippet is ${(t.length / 1_000_000).toFixed(1)}M characters — too large to attach. Save it as a file and attach that instead.`,
+   833→      };
+   834→    }
+   835→    const existing = get().pendingAttachments;
+   836→    if (existing.length >= 5) {
+   837→      return {
+   838→        ok: false,
+   839→        error: "Up to 5 attachments per message — remove one first.",
+   840→      };
+   841→    }
+   842→    const lines = countLines(t);
+   843→    // Built ENTIRELY client-side: no upload, no server call — the
+   844→    // exact pasted text leaves only when the user sends the message.
+   845→    const record: AttachmentRecord = {
+   846→      name: `Pasted snippet · ${lines} lines`,
+   847→      mime: "text/plain",
+   848→      kind: "text",
+   849→      method: "text-layer",
+   850→      chars: t.length,
+   851→      totalChars: t.length,
+   852→      truncated: false,
+   853→      extract: t,
+   854→    };
+   855→    set({
+   856→      pendingAttachments: [
+   857→        ...existing,
+   858→        {
+   859→          id: `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+   860→          name: record.name,
+   861→          kindGuess: "text",
+   862→          status: "ready",
+   863→          record,
+   864→        },
+   865→      ],
+   866→    });
+   867→    return { ok: true };
+   868→  },
+   869→
+   870→  openCanvas(src) {
+   871→    set({ canvasSource: src, canvasOpen: true });
+   872→  },
+   873→
+   874→  closeCanvas() {
+   875→    set({ canvasOpen: false });
+   876→  },
+   877→
+   878→  setCanvasOpen(open) {
+   879→    set({ canvasOpen: open });
+   880→  },
+   881→
+   882→  // Run 23 — the Gallery view. Opening never disturbs the current
+   883→  // conversation (it stays selected behind the gallery until closed);
+   884→  // every conversation navigation closes it (see newChat/selectChat).
+   885→  openGallery: () => set({ galleryOpen: true }),
+   886→  closeGallery: () => set({ galleryOpen: false }),
+   887→
+   888→  // Run 26 — jump-to-message target for ⌘K content-search hits.
+   889→  flashMessage: (id) => set({ highlightMessageId: id }),
+   890→
+   891→  // Run 27 — PWA install plumbing (see interface for the contract).
+   892→  installPrompt: null,
+   893→  pwaStandalone: false,
+   894→  setInstallPrompt: (ev) => set({ installPrompt: ev }),
+   895→  setPwaStandalone: (v) => set({ pwaStandalone: v }),
+   896→
+   897→  // Run 28 — persistent memory CRUD (the gateway reads the table on
+   898→  // every turn, so these are thin state mirrors of the API; errors
+   899→  // return false and the caller toasts).
+   900→  memories: [],
+   901→  async addMemory(content) {
+   902→    try {
+   903→      const res = await fetch("/api/memory", {
+   904→        method: "POST",
+   905→        headers: { "Content-Type": "application/json" },
+   906→        body: JSON.stringify({ content }),
+   907→      });
+   908→      const data = await res.json();
+   909→      if (!res.ok) throw new Error(data.error || "Could not save.");
+   910→      set((s) => ({ memories: [...s.memories, { id: data.id, content: data.content }] }));
+   911→      return true;
+   912→    } catch {
+   913→      return false;
+   914→    }
+   915→  },
+   916→  async updateMemory(id, content) {
+   917→    try {
+   918→      const res = await fetch(`/api/memory/${id}`, {
+   919→        method: "PATCH",
+   920→        headers: { "Content-Type": "application/json" },
+   921→        body: JSON.stringify({ content }),
+   922→      });
+   923→      const data = await res.json();
+   924→      if (!res.ok) throw new Error(data.error || "Could not save.");
+   925→      set((s) => ({
+   926→        memories: s.memories.map((m) => (m.id === id ? { ...m, content } : m)),
+   927→      }));
+   928→      return true;
+   929→    } catch {
+   930→      return false;
+   931→    }
+   932→  },
+   933→  async deleteMemory(id) {
+   934→    try {
+   935→      const res = await fetch(`/api/memory/${id}`, { method: "DELETE" });
+   936→      const data = await res.json();
+   937→      if (!res.ok) throw new Error(data.error || "Could not delete.");
+   938→      set((s) => ({ memories: s.memories.filter((m) => m.id !== id) }));
+   939→      return true;
+   940→    } catch {
+   941→      return false;
+   942→    }
+   943→  },
+   944→
+   945→  // Run 34 — Rituals: scheduled prompts. Thin state mirrors of the
+   946→  // API (the scheduler engine runs server-side); failures return
+   947→  // false / {ok:false} and the caller toasts the honest error.
+   948→  rituals: [],
+   949→  async refreshRituals() {
+   950→    try {
+   951→      const res = await fetch("/api/rituals");
+   952→      if (!res.ok) return;
+   953→      const data = await res.json();
+   954→      if (Array.isArray(data.rituals)) set({ rituals: data.rituals });
+   955→    } catch {
+   956→      // non-fatal — the next poll retries
+   957→    }
+   958→  },
+   959→  async createRitual(input) {
+   960→    try {
+   961→      const res = await fetch("/api/rituals", {
+   962→        method: "POST",
+   963→        headers: { "Content-Type": "application/json" },
+   964→        body: JSON.stringify(input),
+   965→      });
+   966→      const data = await res.json();
+   967→      if (!res.ok) {
+   968→        return { ok: false, error: data.error || "Could not schedule." };
+   969→      }
+   970→      set((s) => ({
+   971→        rituals: [...s.rituals, data.ritual as RitualItem],
+   972→      }));
+   973→      // The dedicated chat joins Recent like any other (the server
+   974→      // just created it — the list only knows after a refresh).
+   975→      void get().refreshChats();
+   976→      return { ok: true };
+   977→    } catch {
+   978→      return { ok: false, error: "Could not schedule — network." };
+   979→    }
+   980→  },
+   981→  async toggleRitual(id, isActive) {
+   982→    try {
+   983→      const res = await fetch(`/api/rituals/${id}`, {
+   984→        method: "PATCH",
+   985→        headers: { "Content-Type": "application/json" },
+   986→        body: JSON.stringify({ isActive }),
+   987→      });
+   988→      const data = await res.json();
+   989→      if (!res.ok) throw new Error(data.error);
+   990→      const ritual = data.ritual as RitualItem;
+   991→      set((s) => ({
+   992→        rituals: s.rituals.map((r) => (r.id === id ? ritual : r)),
+   993→      }));
+   994→      return true;
+   995→    } catch {
+   996→      return false;
+   997→    }
+   998→  },
+   999→  async editRitual(id, patch) {
+  1000→    try {
+  1001→      const res = await fetch(`/api/rituals/${id}`, {
+  1002→        method: "PATCH",
+  1003→        headers: { "Content-Type": "application/json" },
+  1004→        body: JSON.stringify(patch),
+  1005→      });
+  1006→      const data = await res.json();
+  1007→      if (!res.ok) throw new Error(data.error);
+  1008→      const ritual = data.ritual as RitualItem;
+  1009→      set((s) => ({
+  1010→        rituals: s.rituals.map((r) => (r.id === id ? ritual : r)),
+  1011→        // A renamed ritual renames its dedicated chat — keep the
+  1012→        // sidebar in step without a full refetch.
+  1013→        chats:
+  1014→          ritual.title !== s.rituals.find((r) => r.id === id)?.title
+  1015→            ? s.chats.map((c) =>
+  1016→                c.id === ritual.chatId ? { ...c, title: ritual.title } : c
+  1017→              )
+  1018→            : s.chats,
+  1019→      }));
+  1020→      return true;
+  1021→    } catch {
+  1022→      return false;
+  1023→    }
+  1024→  },
+  1025→  async deleteRitual(id) {
+  1026→    try {
+  1027→      const res = await fetch(`/api/rituals/${id}`, { method: "DELETE" });
+  1028→      if (!res.ok) throw new Error("delete failed");
+  1029→      set((s) => ({ rituals: s.rituals.filter((r) => r.id !== id) }));
+  1030→      // The dedicated chat went with it (cascade) — refresh Recent.
+  1031→      void get().refreshChats();
+  1032→      return true;
+  1033→    } catch {
+  1034→      return false;
+  1035→    }
+  1036→  },
+  1037→  async runRitualNow(id) {
+  1038→    try {
+  1039→      const res = await fetch(`/api/rituals/${id}/run`, { method: "POST" });
+  1040→      const data = await res.json();
+  1041→      if (!res.ok) {
+  1042→        return { ok: false, error: data.error || "Run failed." };
+  1043→      }
+  1044→      // Both lists changed (status + nextRunAt; the chat gained a
+  1045→      // turn and its updatedAt bumped it up Recent).
+  1046→      void get().refreshRituals();
+  1047→      void get().refreshChats();
+  1048→      return { ok: true, status: data.status as string | undefined };
+  1049→    } catch {
+  1050→      return { ok: false, error: "Run failed — network." };
+  1051→    }
+  1052→  },
+  1053→
+  1054→  // ── Run 37 — THE PROJECTS: folder CRUD + chat moves ──
+  1055→  async refreshProjects() {
+  1056→    try {
+  1057→      const res = await fetch("/api/projects");
+  1058→      const data = await res.json();
+  1059→      if (Array.isArray(data.projects)) set({ projects: data.projects });
+  1060→    } catch {
+  1061→      // non-fatal — the sidebar keeps the last known list
+  1062→    }
+  1063→  },
+  1064→
+  1065→  async createProject(name, instructions) {
+  1066→    try {
+  1067→      const res = await fetch("/api/projects", {
+  1068→        method: "POST",
+  1069→        headers: { "Content-Type": "application/json" },
+  1070→        body: JSON.stringify({ name, instructions }),
+  1071→      });
+  1072→      const data = await res.json();
+  1073→      if (!res.ok) return { ok: false, error: data.error || "Create failed." };
+  1074→      await get().refreshProjects();
+  1075→      return { ok: true, id: data.project?.id as string | undefined };
+  1076→    } catch {
+  1077→      return { ok: false, error: "Create failed — network." };
+  1078→    }
+  1079→  },
+  1080→
+  1081→  async updateProject(id, patch) {
+  1082→    try {
+  1083→      const res = await fetch(`/api/projects/${id}`, {
+  1084→        method: "PATCH",
+  1085→        headers: { "Content-Type": "application/json" },
+  1086→        body: JSON.stringify(patch),
+  1087→      });
+  1088→      const data = await res.json();
+  1089→      if (!res.ok) return { ok: false, error: data.error || "Save failed." };
+  1090→      await get().refreshProjects();
+  1091→      return { ok: true };
+  1092→    } catch {
+  1093→      return { ok: false, error: "Save failed — network." };
+  1094→    }
+  1095→  },
+  1096→
+  1097→  async deleteProject(id) {
+  1098→    try {
+  1099→      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+  1100→      const data = await res.json();
+  1101→      if (!res.ok) return { ok: false };
+  1102→      // The chats survive (SetNull) — both lists refresh so Recent
+  1103→      // re-honests itself immediately. A deleted draft must not
+  1104→      // linger either.
+  1105→      set((s) => ({
+  1106→        draftProjectId: s.draftProjectId === id ? null : s.draftProjectId,
+  1107→      }));
+  1108→      await get().refreshProjects();
+  1109→      await get().refreshChats();
+  1110→      return { ok: true, releasedChats: data.releasedChats as number | undefined };
+  1111→    } catch {
+  1112→      return { ok: false };
+  1113→    }
+  1114→  },
+  1115→
+  1116→  async moveChat(chatId, projectId) {
+  1117→    try {
+  1118→      const res = await fetch(`/api/chats/${chatId}/move`, {
+  1119→        method: "POST",
+  1120→        headers: { "Content-Type": "application/json" },
+  1121→        body: JSON.stringify({ projectId }),
+  1122→      });
+  1123→      const data = await res.json();
+  1124→      if (!res.ok) return { ok: false, error: data.error || "Move failed." };
+  1125→      // Optimistic shape is unnecessary — both lists are small and
+  1126→      // local; one round-trip keeps them exactly true.
+  1127→      await Promise.all([get().refreshChats(), get().refreshProjects()]);
+  1128→      return { ok: true };
+  1129→    } catch {
+  1130→      return { ok: false, error: "Move failed — network." };
+  1131→    }
+  1132→  },
+  1133→
+  1134→  newChat: (projectId) =>
+  1135→    // Every new chat resets to the default model (glm-5.3) —
+  1136→    // the user can then switch freely for that conversation.
+  1137→    // Run 37 — an explicit projectId (or null) sets the DRAFT
+  1138→    // project the next send stamps onto the new chat; plain
+  1139→    // "New chat" always clears it.
+  1140→    set((s) => ({
+  1141→      currentChatId: null,
+  1142→      messages: [],
+  1143→      pendingAttachments: [],
+  1144→      galleryOpen: false,
+  1145→      highlightMessageId: null,
+  1146→      viewEpoch: s.viewEpoch + 1,
+  1147→      draftProjectId: projectId ?? null,
+  1148→      model: s.models.includes(DEFAULT_MODEL)
+  1149→        ? DEFAULT_MODEL
+  1150→        : s.models[0] ?? s.model,
+  1151→    })),
+  1152→
+  1153→  async selectChat(id) {
+  1154→    if (get().streaming) return;
+  1155→    // Re-clicking the chat you're already reading is a no-op —
+  1156→    // no refetch, and no view-transition replay.
+  1157→    if (get().currentChatId === id && !get().temporary) return;
+  1158→    try {
+  1159→      const res = await fetch(`/api/chats/${id}`);
+  1160→      if (!res.ok) return;
+  1161→      const chat = await res.json();
+  1162→      set((s) => ({
+  1163→        currentChatId: id,
+  1164→        temporary: false,
+  1165→        // Run 37 — entering a chat adopts ITS project context; the
+  1166→        // draft only ever described a chat that didn't exist yet.
+  1167→        draftProjectId: null,
+  1168→        // Run 23 — entering a conversation always leaves the gallery.
+  1169→        galleryOpen: false,
+  1170→        // Run 26 — flash target arrives separately (flashMessage AFTER
+  1171→        // the fetch resolves); a plain navigation never inherits one.
+  1172→        highlightMessageId: null,
+  1173→        // Run 22 guard: image chats store "image-forge" as their model
+  1174→        // (honest in exports/search) but the composer may never ADOPT
+  1175→        // it — a text follow-up would request a model the pool doesn't
+  1176→        // have. Keep the session's real model instead.
+  1177→        model:
+  1178→          chat.model && chat.model !== "image-forge"
+  1179→            ? chat.model
+  1180→            : s.models.includes(DEFAULT_MODEL)
+  1181→              ? DEFAULT_MODEL
+  1182→              : s.model,
+  1183→        // staged files belong to the previous conversation
+  1184→        pendingAttachments: [],
+  1185→        viewEpoch: s.viewEpoch + 1,
+  1186→        messages: (chat.messages ?? []).map(
+  1187→          (
+  1188→            // Raw rows carry duel-runner-up columns (`altContent` /
+  1189→            // `altModel`) that aren't part of UIMessage — read them
+  1190→            // as unknown and narrow below. `variants` arrives already
+  1191→            // parsed by the GET route.
+  1192→            m: UIMessage & {
+  1193→              altContent?: unknown;
+  1194→              altModel?: unknown;
+  1195→              variants?: unknown;
+  1196→              variantIndex?: unknown;
+  1197→              image?: unknown;
+  1198→            }
+  1199→          ) => ({
+  1200→            ...m,
+  1201→            sources: m.sources ?? null,
+  1202→            attachments: m.attachments ?? null,
+  1203→            // Duel runner-ups live on persisted messages (the winner
+  1204→            // IS the message content/model).
+  1205→            runnerUp:
+  1206→              typeof m.altContent === "string" && m.altContent
+  1207→                ? {
+  1208→                    content: m.altContent,
+  1209→                    model: typeof m.altModel === "string" ? m.altModel : "",
+  1210→                  }
+  1211→                : null,
+  1212→            variants:
+  1213→              Array.isArray(m.variants) && m.variants.length > 0
+  1214→                ? (m.variants as AnswerVariant[])
+  1215→                : null,
+  1216→            variantIndex:
+  1217→              typeof m.variantIndex === "number" ? m.variantIndex : null,
+  1218→            // Run 22 — forged image reference (parsed by the GET route).
+  1219→            image:
+  1220→              m.image && typeof m.image === "object"
+  1221→                ? (m.image as ImageRef)
+  1222→                : null,
+  1223→          })
+  1224→        ),
+  1225→      }));
+  1226→    } catch {
+  1227→      // non-fatal
+  1228→    }
+  1229→  },
+  1230→
+  1231→  async deleteChat(id) {
+  1232→    await fetch(`/api/chats/${id}`, { method: "DELETE" }).catch(() => {});
+  1233→    if (get().currentChatId === id) {
+  1234→      set((s) => ({
+  1235→        currentChatId: null,
+  1236→        messages: [],
+  1237→        viewEpoch: s.viewEpoch + 1,
+  1238→      }));
+  1239→    }
+  1240→    await get().refreshChats();
+  1241→    // Run 23 — the gallery badge must not count a deleted chat's
+  1242→    // images; re-ask the server for the honest number (fire-and-forget).
+  1243→    if (!get().streaming) {
+  1244→      void fetch("/api/images?count=1")
+  1245→        .then((r) => (r.ok ? r.json() : null))
+  1246→        .then((d: unknown) => {
+  1247→          const n = (d as { count?: unknown } | null)?.count;
+  1248→          if (typeof n === "number") set({ imageCount: n });
+  1249→        })
+  1250→        .catch(() => {});
+  1251→    }
+  1252→    // Run 34 — deleting a chat cascades its ritual away (one owner,
+  1253→    // zero orphans); re-sync the ritual list so the badge follows.
+  1254→    if (!get().streaming) {
+  1255→      void get().refreshRituals();
+  1256→    }
+  1257→  },
+  1258→
+  1259→  async renameChat(id, title) {
+  1260→    const t = title.trim().slice(0, 80);
+  1261→    const prev = get().chats.find((c) => c.id === id);
+  1262→    if (!t || !prev || prev.title === t) return true;
+  1263→    // Optimistic: the new title appears instantly in the sidebar…
+  1264→    set((s) => ({
+  1265→      chats: s.chats.map((c) => (c.id === id ? { ...c, title: t } : c)),
+  1266→    }));
+  1267→    try {
+  1268→      const res = await fetch(`/api/chats/${id}`, {
+  1269→        method: "PATCH",
+  1270→        headers: { "Content-Type": "application/json" },
+  1271→        body: JSON.stringify({ title: t }),
+  1272→      });
+  1273→      if (!res.ok) throw new Error("rename failed");
+  1274→      return true;
+  1275→    } catch {
+  1276→      // …and rolls back to the server's truth if the write failed.
+  1277→      await get().refreshChats();
+  1278→      return false;
+  1279→    }
+  1280→  },
+  1281→
+  1282→  async sendMessage(content) {
+  1283→    const state = get();
+  1284→    if (state.streaming || !content.trim()) return;
+  1285→    // Run 40 — an armed /agent send routes through the agentic
+  1286→    // pipeline instead (the arm is consumed by exactly this send).
+  1287→    if (state.agentArmed) {
+  1288→      set({ agentArmed: false });
+  1289→      await get().runAgent(content);
+  1290→      return;
+  1291→    }
+  1292→    // A duel still awaiting its pick? The primary lane becomes the
+  1293→    // canonical answer so the next turn's history has one voice.
+  1294→    const pending = [...state.messages].reverse().find((m) => m.duel && !m.duelPicked);
+  1295→    if (pending) {
+  1296→      await get().pickDuelWinner(pending.id, "a");
+  1297→    }
+  1298→    const s2 = get();
+  1299→    const history: ChatMessageData[] = s2.messages.map((m) => ({
+  1300→      role: m.role,
+  1301→      content: m.content,
+  1302→      ...(m.role === "user" && m.attachments?.length
+  1303→        ? { attachments: m.attachments }
+  1304→        : {}),
+  1305→    }));
+  1306→    // Files staged in the composer: only READY records are sent (a
+  1307→    // file that couldn't be read is never sent — the model must not
+  1308→    // pretend it saw it). Failed/error chips stay for the user to
+  1309→    // remove or ignore.
+  1310→    const attachments = s2.pendingAttachments
+  1311→      .filter((p) => p.status === "ready" && p.record)
+  1312→      .map((p) => p.record!);
+  1313→    const stillExtracting = s2.pendingAttachments.some(
+  1314→      (p) => p.status === "extracting"
+  1315→    );
+  1316→    if (stillExtracting) return; // InputBar disables send meanwhile
+  1317→    // Run 23 — sending while browsing the gallery returns to the
+  1318→    // conversation so the streaming answer is actually visible.
+  1319→    set({ pendingAttachments: [], galleryOpen: false });
+  1320→    // Resolve the challenger at send time — the model list may have
+  1321→    // changed since duel was armed.
+  1322→    let challenger = s2.challenger;
+  1323→    if (challenger === s2.model || !s2.models.includes(challenger ?? "")) {
+  1324→      challenger = autoChallenger(s2.models, s2.model);
+  1325→    }
+  1326→    const duel =
+  1327→      s2.duelEnabled && challenger ? { challenger } : undefined;
+  1328→    // One-shot response style (/code, /concise) — armed by the slash
+  1329→    // popover, consumed (and cleared) by THIS send.
+  1330→    const style = s2.turnStyle ?? undefined;
+  1331→    if (style) set({ turnStyle: null });
+  1332→    await streamTurn(set, get, {
+  1333→      chatId: s2.temporary ? null : s2.currentChatId,
+  1334→      history,
+  1335→      content,
+  1336→      persistUser: true,
+  1337→      duel,
+  1338→      attachments,
+  1339→      style,
+  1340→      // Run 37 — a chat born now is stamped with the draft project.
+  1341→      projectId: s2.temporary ? null : s2.draftProjectId,
+  1342→    });
+  1343→  },
+  1344→
+  1345→  /** Run 40 — arm the agent for the next message (the /agent slash
+  1346→   *  command). Arming the agent disarms Image mode (a forged image is
+  1347→   *  never an agentic task). */
+  1348→  armAgent() {
+  1349→    set((s) => ({ agentArmed: true, imageMode: false }));
+  1350→  },
+  1351→
+  1352→  /** Run 40 — the agentic send. Optimistic bubbles like every send,
+  1353→   *  live tool trace streamed into the assistant bubble, server-side
+  1354→   *  persistence identical to a normal turn (fork-safe tree rows,
+  1355→   *  per-model-call UsageEvents, honest estimates). */
+  1356→  async runAgent(content) {
+  1357→    const text = content.trim();
+  1358→    const state0 = get();
+  1359→    if (state0.streaming || !text) return;
+  1360→    // A duel still awaiting its pick? Resolve it first — the next
+  1361→    // turn's history must have one voice.
+  1362→    const pendingDuel = [...state0.messages].reverse().find((m) => m.duel && !m.duelPicked);
+  1363→    if (pendingDuel) {
+  1364→      await get().pickDuelWinner(pendingDuel.id, "a");
+  1365→    }
+  1366→    const s2 = get();
+  1367→    const temporary = s2.temporary;
+  1368→    const userId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  1369→    const assistantId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  1370→    const hadChat = s2.currentChatId != null;
+  1371→
+  1372→    set({
+  1373→      streaming: true,
+  1374→      galleryOpen: false,
+  1375→      messages: [
+  1376→        ...s2.messages,
+  1377→        { id: userId, role: "user" as const, content: text },
+  1378→        {
+  1379→          id: assistantId,
+  1380→          role: "assistant" as const,
+  1381→          content: "",
+  1382→          streaming: true,
+  1383→          model: "hermes-agent",
+  1384→        },
+  1385→      ],
+  1386→    });
+  1387→
+  1388→    const history: ChatMessageData[] = s2.messages.map((m) => ({
+  1389→      role: m.role,
+  1390→      content: m.content,
+  1391→    }));
+  1392→
+  1393→    const updateAssistant = (patch: Partial<UIMessage>) =>
+  1394→      set((s) => ({
+  1395→        messages: s.messages.map((m) =>
+  1396→          m.id === assistantId ? { ...m, ...patch } : m
+  1397→        ),
+  1398→      }));
+  1399→
+  1400→    const trace: string[] = [];
+  1401→    let sawTerminal = false;
+  1402→    const controller = new AbortController();
+  1403→    streamController = controller;
+  1404→
+  1405→    try {
+  1406→      const res = await fetch("/api/chat/send", {
+  1407→        method: "POST",
+  1408→        headers: { "Content-Type": "application/json" },
+  1409→        body: JSON.stringify({
+  1410→          chatId: temporary ? null : s2.currentChatId,
+  1411→          history,
+  1412→          content: text,
+  1413→          temporary,
+  1414→          persistUser: true,
+  1415→          agent: true,
+  1416→          model: s2.model,
+  1417→          projectId: temporary ? null : s2.draftProjectId,
+  1418→        }),
+  1419→        signal: controller.signal,
+  1420→      });
+  1421→      if (!res.ok || !res.body) {
+  1422→        const data = (await res.json().catch(() => ({}))) as { error?: string };
+  1423→        throw new Error(data.error || "The agent run failed.");
+  1424→      }
+  1425→
+  1426→      const reader = res.body.getReader();
+  1427→      const decoder = new TextDecoder();
+  1428→      let buffer = "";
+  1429→      for (;;) {
+  1430→        const { done, value } = await reader.read();
+  1431→        if (done) break;
+  1432→        buffer += decoder.decode(value, { stream: true });
+  1433→        const lines = buffer.split("\n");
+  1434→        buffer = lines.pop() ?? "";
+  1435→        for (const line of lines) {
+  1436→          const t = line.trim();
+  1437→          if (!t.startsWith("data:")) continue;
+  1438→          const payload = t.slice(5).trim();
+  1439→          if (!payload || payload === "[DONE]") continue;
+  1440→          let ev: Record<string, unknown>;
+  1441→          try {
+  1442→            ev = JSON.parse(payload) as Record<string, unknown>;
+  1443→          } catch {
+  1444→            continue;
+  1445→          }
+  1446→
+  1447→          if (ev.type === "meta") {
+  1448→            if (typeof ev.chatId === "string" && ev.chatId && !temporary) {
+  1449→              set({ currentChatId: ev.chatId as string });
+  1450→            }
+  1451→            if (typeof ev.userMessageId === "string") {
+  1452→              const serverId = ev.userMessageId as string;
+  1453→              set((s) => ({
+  1454→                messages: s.messages.map((m) =>
+  1455→                  m.id === userId ? { ...m, id: serverId } : m
+  1456→                ),
+  1457→              }));
+  1458→            }
+  1459→          } else if (ev.type === "agent_tool") {
+  1460→            if (ev.ok === null || ev.ok === undefined) {
+  1461→              trace.push(`⚙ ${String(ev.tool)} — running…`);
+  1462→            } else {
+  1463→              if (trace.length && trace[trace.length - 1].startsWith("⚙ ")) trace.pop();
+  1464→              trace.push(`${ev.ok ? "✓" : "✗"} ${String(ev.summary ?? ev.tool)}`);
+  1465→            }
+  1466→            updateAssistant({ content: trace.join("  \n") });
+  1467→          } else if (ev.type === "agent_trace") {
+  1468→            // The server's authoritative trace — overwrites the local
+  1469→            // mirror so the bubble never drifts from the ledger.
+  1470→            const arr = Array.isArray(ev.trace) ? (ev.trace as string[]) : null;
+  1471→            if (arr) {
+  1472→              trace.length = 0;
+  1473→              trace.push(...arr);
+  1474→              updateAssistant({ content: trace.join("  \n") });
+  1475→            }
+  1476→          } else if (ev.type === "done") {
+  1477→            sawTerminal = true;
+  1478→            const finalContent =
+  1479→              typeof ev.content === "string" && ev.content
+  1480→                ? ev.content
+  1481→                : trace.join("  \n");
+  1482→            updateAssistant({
+  1483→              id: (ev.assistantMessageId as string) ?? assistantId,
+  1484→              content: finalContent,
+  1485→              streaming: false,
+  1486→              model: (ev.model as string) ?? "hermes-agent",
+  1487→              tokens: (ev.tokens as number) ?? 0,
+  1488→              tokensEstimated: ev.tokensEstimated === true,
+  1489→              servedBy: (ev.servedBy as string) ?? null,
+  1490→              keyLabel: (ev.keyLabel as string) ?? null,
+  1491→              provider: (ev.providerName as string) ?? null,
+  1492→              phase: null,
+  1493→            });
+  1494→            if (typeof ev.chatId === "string" && ev.chatId && !temporary && !hadChat) {
+  1495→              set({ currentChatId: ev.chatId as string });
+  1496→            }
+  1497→          } else if (ev.type === "error") {
+  1498→            sawTerminal = true;
+  1499→            updateAssistant({
+  1500→              streaming: false,
+  1501→              error: String(ev.message ?? "The agent run failed."),
+  1502→              phase: null,
+  1503→            });
+  1504→          }
+  1505→        }
+  1506→      }
+  1507→      if (!sawTerminal) {
+  1508→        updateAssistant({ streaming: false, phase: null });
+  1509→      }
+  1510→    } catch (e) {
+  1511→      const err = e as Error;
+  1512→      if (err.name === "AbortError") {
+  1513→        updateAssistant({ streaming: false, phase: null });
+  1514→      } else {
+  1515→        updateAssistant({
+  1516→          streaming: false,
+  1517→          error: err.message || "The agent run failed.",
+  1518→          content: "",
+  1519→          phase: null,
+  1520→        });
+  1521→      }
+  1522→    } finally {
+  1523→      streamController = null;
+  1524→      set({ streaming: false });
+  1525→      if (!temporary) {
+  1526→        await get().refreshChats();
+  1527→        if (!hadChat) {
+  1528→          // A brand-new agent chat — refine its derived title too.
+  1529→          const freshId = get().currentChatId;
+  1530→          if (freshId) void refineTitle(set, freshId);
+  1531→        }
+  1532→      }
+  1533→      void get().refreshUsage();
+  1534→    }
+  1535→  },
+  1536→
+  1537→  setVoiceMode(on) {
+  1538→    set(on ? { voiceMode: true } : { voiceMode: false, voiceReply: null });
+  1539→  },
+  1540→
+  1541→  consumeVoiceReply() {
+  1542→    set({ voiceReply: null });
+  1543→  },
+  1544→
+  1545→  /** Run 22 — Image Forge send. Mirrors sendMessage's lifecycle:
+  1546→   *  optimistic user bubble (badged as an image request), a live
+  1547→   *  generating card (imagePending), abortable via Stop (the server
+  1548→   *  discards the orphan file), error card with retry, and re-rolls
+  1549→   *  that arrive with variant snapshots (earlier images kept). */
+  1550→  async sendImage(prompt, opts) {
+  1551→    const state = get();
+  1552→    const text = prompt.trim();
+  1553→    if (state.streaming || !text) return;
+  1554→    // A duel still awaiting its pick? Resolve it first, exactly like
+  1555→    // a text send (the turn history must have one voice).
+  1556→    const pending = [...state.messages].reverse().find((m) => m.duel && !m.duelPicked);
+  1557→    if (pending) {
+  1558→      await get().pickDuelWinner(pending.id, "a");
+  1559→    }
+  1560→    const s2 = get();
+  1561→    const temporary = s2.temporary;
+  1562→    const size = opts?.size ?? s2.imageSize;
+  1563→    const appendUserBubble = opts?.appendUserBubble !== false;
+  1564→    const persistUser = opts?.persistUser !== false;
+  1565→    const userId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  1566→    const assistantId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  1567→    // Did this turn walk in WITHOUT a chat? (Then a successful forge
+  1568→    // created one — its derived title deserves the refine pass.)
+  1569→    const hadChat = s2.currentChatId != null;
+  1570→
+  1571→    set({
+  1572→      streaming: true,
+  1573→      // Run 23 — a forge begun from the composer returns the view to
+  1574→      // the conversation so the generating card is actually visible.
+  1575→      galleryOpen: false,
+  1576→      messages: [
+  1577→        ...s2.messages,
+  1578→        ...(appendUserBubble
+  1579→          ? [
+  1580→              {
+  1581→                id: userId,
+  1582→                role: "user" as const,
+  1583→                content: text,
+  1584→                imageRequest: { size },
+  1585→              },
+  1586→            ]
+  1587→          : []),
+  1588→        {
+  1589→          id: assistantId,
+  1590→          role: "assistant" as const,
+  1591→          content: "",
+  1592→          streaming: true,
+  1593→          model: "image-forge",
+  1594→          imagePending: true,
+  1595→        },
+  1596→      ],
+  1597→    });
+  1598→
+  1599→    const updateAssistant = (patch: Partial<UIMessage>) => {
+  1600→      set((s) => ({
+  1601→        messages: s.messages.map((m) =>
+  1602→          m.id === assistantId ? { ...m, ...patch } : m
+  1603→        ),
+  1604→      }));
+  1605→    };
+  1606→
+  1607→    const controller = new AbortController();
+  1608→    streamController = controller;
+  1609→
+  1610→    try {
+  1611→      const res = await fetch("/api/image/generate", {
+  1612→        method: "POST",
+  1613→        headers: { "Content-Type": "application/json" },
+  1614→        signal: controller.signal,
+  1615→        body: JSON.stringify({
+  1616→          chatId: temporary ? null : s2.currentChatId,
+  1617→          prompt: text,
+  1618→          size,
+  1619→          temporary,
+  1620→          persistUser,
+  1621→          // Run 37 — a forge born now is stamped with the draft project.
+  1622→          projectId: temporary ? null : s2.draftProjectId,
+  1623→          ...(opts?.regenVariants?.length
+  1624→            ? { regenVariants: opts.regenVariants }
+  1625→            : {}),
+  1626→        }),
+  1627→      });
+  1628→      if (!res.ok) {
+  1629→        const errText = await res.text().catch(() => "");
+  1630→        let message = errText;
+  1631→        try {
+  1632→          message = (JSON.parse(errText) as { error?: string }).error ?? errText;
+  1633→        } catch {
+  1634→          // raw text fallback
+  1635→        }
+  1636→        throw new Error(message || `Image generation failed (${res.status})`);
+  1637→      }
+  1638→      const data = (await res.json()) as {
+  1639→        ok?: boolean;
+  1640→        error?: string;
+  1641→        chatId?: string | null;
+  1642→        userMessageId?: string | null;
+  1643→        assistantMessageId?: string | null;
+  1644→        content?: string;
+  1645→        image?: ImageRef;
+  1646→      };
+  1647→      if (!data.ok || !data.image) {
+  1648→        throw new Error(data.error || "Image generation failed.");
+  1649→      }
+  1650→      if (!temporary && typeof data.chatId === "string" && data.chatId) {
+  1651→        set({ currentChatId: data.chatId });
+  1652→      }
+  1653→      // Run 23 — the gallery grows by exactly this forge (temp chats
+  1654→      // never write DB rows, so they never join the gallery).
+  1655→      if (!temporary) {
+  1656→        set((s) => ({ imageCount: s.imageCount + 1 }));
+  1657→      }
+  1658→      // Re-roll: the fresh image joins the variant history (earlier
+  1659→      // images first, the new one last + active) — nothing is lost.
+  1660→      const regenVariants = opts?.regenVariants;
+  1661→      const variants = regenVariants
+  1662→        ? ([
+  1663→            ...regenVariants,
+  1664→            {
+  1665→              content: data.content ?? "",
+  1666→              model: "image-forge",
+  1667→              tokens: 0,
+  1668→              cached: false,
+  1669→              servedBy: "zai-cloud",
+  1670→              keyLabel: null,
+  1671→              effort: null,
+  1672→              image: data.image,
+  1673→            },
+  1674→          ] satisfies AnswerVariant[])
+  1675→        : undefined;
+  1676→      updateAssistant({
+  1677→        id: data.assistantMessageId ?? assistantId,
+  1678→        content: data.content ?? "",
+  1679→        image: data.image,
+  1680→        imagePending: false,
+  1681→        streaming: false,
+  1682→        model: "image-forge",
+  1683→        provider: "Z.ai cloud",
+  1684→        servedBy: "zai-cloud",
+  1685→        tokens: 0,
+  1686→        cached: false,
+  1687→        phase: null,
+  1688→        ...(variants
+  1689→          ? { variants, variantIndex: regenVariants!.length }
+  1690→          : {}),
+  1691→      });
+  1692→      // The user bubble gets its server id (edit/regen flows target it).
+  1693→      if (appendUserBubble && data.userMessageId) {
+  1694→        set((s) => ({
+  1695→          messages: s.messages.map((m) =>
+  1696→            m.id === userId ? { ...m, id: data.userMessageId! } : m
+  1697→          ),
+  1698→        }));
+  1699→      }
+  1700→    } catch (e) {
+  1701→      const err = e as Error;
+  1702→      if (err.name === "AbortError") {
+  1703→        // Stop pressed — like a stopped text turn, nothing survives.
+  1704→        updateAssistant({
+  1705→          streaming: false,
+  1706→          imagePending: false,
+  1707→          phase: null,
+  1708→          error: "Image generation stopped.",
+  1709→        });
+  1710→      } else {
+  1711→        updateAssistant({
+  1712→          streaming: false,
+  1713→          imagePending: false,
+  1714→          phase: null,
+  1715→          error: err.message || "Image generation failed.",
+  1716→          content: "",
+  1717→        });
+  1718→      }
+  1719→    } finally {
+  1720→      streamController = null;
+  1721→      set({ streaming: false });
+  1722→      if (!temporary) {
+  1723→        await get().refreshChats();
+  1724→        if (!hadChat) {
+  1725→          // A brand-new image chat — refine its derived title too.
+  1726→          const freshId = get().currentChatId;
+  1727→          if (freshId) void refineTitle(set, freshId);
+  1728→        }
+  1729→      }
+  1730→      void get().refreshUsage();
+  1731→    }
+  1732→  },
+  1733→
+  1734→  async editMessage(messageId, content) {
+  1735→    const state = get();
+  1736→    if (state.streaming || !content.trim()) return;
+  1737→    const idx = state.messages.findIndex((m) => m.id === messageId);
+  1738→    if (idx === -1) return;
+  1739→    if (state.temporary || !state.currentChatId) {
+  1740→      // Local-only timeline: truncate everything after the edited message.
+  1741→      const kept = state.messages
+  1742→        .slice(0, idx + 1)
+  1743→        .map((m) => (m.id === messageId ? { ...m, content: content.trim() } : m));
+  1744→      set({ messages: kept });
+  1745→      const history: ChatMessageData[] = kept.slice(0, -1).map((m) => ({
+  1746→        role: m.role,
+  1747→        content: m.content,
+  1748→        ...(m.role === "user" && m.attachments?.length
+  1749→          ? { attachments: m.attachments }
+  1750→          : {}),
+  1751→      }));
+  1752→      const edited = kept[kept.length - 1];
+  1753→      await streamTurn(set, get, {
+  1754→        chatId: null,
+  1755→        history,
+  1756→        content: content.trim(),
+  1757→        persistUser: false,
+  1758→        temporary: true,
+  1759→        attachments: edited?.role === "user" ? edited.attachments ?? [] : [],
+  1760→      });
+  1761→      return;
+  1762→    }
+  1763→
+  1764→    const res = await fetch("/api/chat/fork", {
+  1765→      method: "POST",
+  1766→      headers: { "Content-Type": "application/json" },
+  1767→      body: JSON.stringify({ messageId, content: content.trim() }),
+  1768→    });
+  1769→    const data = await res.json();
+  1770→    if (!data.message) return;
+  1771→    // Run 39 — THE FORK: the edit became a new sibling branch; the
+  1772→    // original turn and its whole subtree stay in the database, one
+  1773→    // ‹ › click away. The local timeline continues from the fork row.
+  1774→    const fork = data.message as UIMessage;
+  1775→    const kept: UIMessage[] = [
+  1776→      ...state.messages.slice(0, idx),
+  1777→      {
+  1778→        ...fork,
+  1779→        sources: fork.sources ?? null,
+  1780→        attachments: fork.attachments ?? null,
+  1781→      },
+  1782→    ];
+  1783→    set({ messages: kept });
+  1784→    const history: ChatMessageData[] = kept.slice(0, -1).map((m) => ({
+  1785→      role: m.role,
+  1786→      content: m.content,
+  1787→      ...(m.role === "user" && m.attachments?.length
+  1788→        ? { attachments: m.attachments }
+  1789→        : {}),
+  1790→    }));
+  1791→    const edited = kept[kept.length - 1];
+  1792→    await streamTurn(set, get, {
+  1793→      chatId: state.currentChatId,
+  1794→      history,
+  1795→      content: content.trim(),
+  1796→      persistUser: false,
+  1797→      attachments: edited?.role === "user" ? edited.attachments ?? [] : [],
+  1798→    });
+  1799→  },
+  1800→
+  1801→  // Run 39 — THE FORK: move the displayed conversation to a sibling
+  1802→  // branch at a fork point. The server re-resolves the active path
+  1803→  // (leaf walk) and persists the choice in chat.activeLeafId, so a
+  1804→  // reload keeps exactly the branch the user flipped to.
+  1805→  async switchBranch(messageId, dir) {
+  1806→    const s = get();
+  1807→    if (s.streaming || s.temporary || !s.currentChatId) return;
+  1808→    const msg = s.messages.find((m) => m.id === messageId);
+  1809→    if (!msg?.siblingCount || msg.siblingCount < 2) return;
+  1810→    const res = await fetch("/api/chat/branch", {
+  1811→      method: "POST",
+  1812→      headers: { "Content-Type": "application/json" },
+  1813→      body: JSON.stringify({ chatId: s.currentChatId, messageId, dir }),
+  1814→    });
+  1815→    if (!res.ok) return;
+  1816→    const data = await res.json();
+  1817→    if (!Array.isArray(data.messages)) return;
+  1818→    set({
+  1819→      messages: (data.messages as UIMessage[]).map((m) => ({
+  1820→        ...m,
+  1821→        sources: m.sources ?? null,
+  1822→        attachments: m.attachments ?? null,
+  1823→      })),
+  1824→      highlightMessageId: null,
+  1825→      // Run 39 — the flip wholesale-replaces the timeline; assistant
+  1826→      // rows are slot-keyed (append-only contract), so a surviving
+  1827→      // instance would keep the previous branch's typewriter state.
+  1828→      // Bumping the view epoch remounts the reading surface fresh —
+  1829→      // the same calm settle every navigation gets.
+  1830→      viewEpoch: s.viewEpoch + 1,
+  1831→    });
+  1832→  },
+  1833→
+  1834→  async retryLast(modelOverride) {
+  1835→    const state = get();
+  1836→    if (state.streaming) return;
+  1837→
+  1838→    // The most recent failed assistant reply.
+  1839→    let failedIdx = -1;
+  1840→    for (let i = state.messages.length - 1; i >= 0; i--) {
+  1841→      const m = state.messages[i];
+  1842→      if (m.role === "assistant" && m.error) {
+  1843→        failedIdx = i;
+  1844→        break;
+  1845→      }
+  1846→    }
+  1847→    if (failedIdx === -1) return;
+  1848→
+  1849→    // The user message that failed turn was answering.
+  1850→    let userIdx = -1;
+  1851→    for (let i = failedIdx - 1; i >= 0; i--) {
+  1852→      if (state.messages[i].role === "user") {
+  1853→        userIdx = i;
+  1854→        break;
+  1855→      }
+  1856→    }
+  1857→    if (userIdx === -1) return;
+  1858→    const userMsg = state.messages[userIdx];
+  1859→
+  1860→    // Run 22 — the failed turn was an Image Forge request: retry
+  1861→    // re-forges the image (same prompt, same dimensions) instead of
+  1862→    // streaming a text answer. The imageRequest flag lives on the
+  1863→    // in-memory bubble — failed turns are never persisted, so no
+  1864→    // server round-trip is needed to know this was an image turn.
+  1865→    if (userMsg.imageRequest) {
+  1866→      set({ messages: state.messages.slice(0, failedIdx) });
+  1867→      await get().sendImage(userMsg.content, {
+  1868→        appendUserBubble: false,
+  1869→        persistUser: userMsg.id.startsWith("u-"),
+  1870→        size: userMsg.imageRequest.size,
+  1871→      });
+  1872→      return;
+  1873→    }
+  1874→
+  1875→    const history: ChatMessageData[] = state.messages
+  1876→      .slice(0, userIdx)
+  1877→      .map((m) => ({
+  1878→        role: m.role,
+  1879→        content: m.content,
+  1880→        ...(m.role === "user" && m.attachments?.length
+  1881→          ? { attachments: m.attachments }
+  1882→          : {}),
+  1883→      }));
+  1884→
+  1885→    // Drop the failed bubble from the timeline.
+  1886→    set({ messages: state.messages.slice(0, failedIdx) });
+  1887→
+  1888→    // If the user message never received a server id, the turn died
+  1889→    // before persistence — persist it on retry. Otherwise it is
+  1890→    // already in the DB and must not be duplicated.
+  1891→    const persisted = !userMsg.id.startsWith("u-");
+  1892→    await streamTurn(set, get, {
+  1893→      chatId: state.temporary ? null : state.currentChatId,
+  1894→      history,
+  1895→      content: userMsg.content,
+  1896→      persistUser: !persisted,
+  1897→      appendUserBubble: false, // the original user bubble stays
+  1898→      temporary: state.temporary,
+  1899→      model: modelOverride,
+  1900→      // The retried turn sees the same files again.
+  1901→      attachments: userMsg.attachments ?? [],
+  1902→    });
+  1903→  },
+  1904→
+  1905→  /** Run 21 — REGENERATE: re-run the turn that produced the LAST
+  1906→   *  assistant answer, snapshotting the current answer into the
+  1907→   *  message's variant history first. The standard chat capability —
+  1908→   *  a bad answer is one click from a better one, and every previous
+  1909→   *  answer stays reachable (with its honest per-answer receipt). */
+  1910→  async regenerate() {
+  1911→    const state = get();
+  1912→    if (state.streaming) return;
+  1913→    const msgs = state.messages;
+  1914→    // Regenerate only ever targets the timeline's last message, and
+  1915→    // only when it's a settled, standalone assistant answer (errors
+  1916→    // have their own Retry card; duels have their own lanes).
+  1917→    const last = msgs[msgs.length - 1];
+  1918→    if (
+  1919→      !last ||
+  1920→      last.role !== "assistant" ||
+  1921→      last.streaming ||
+  1922→      last.error ||
+  1923→      last.duel ||
+  1924→      last.runnerUp ||
+  1925→      (!last.content.trim() && !last.image)
+  1926→    ) {
+  1927→      return;
+  1928→    }
+  1929→    // The user message that turn was answering.
+  1930→    let userIdx = -1;
+  1931→    for (let i = msgs.length - 2; i >= 0; i--) {
+  1932→      if (msgs[i].role === "user") {
+  1933→        userIdx = i;
+  1934→        break;
+  1935→      }
+  1936→    }
+  1937→    if (userIdx === -1) return;
+  1938→    const userMsg = msgs[userIdx];
+  1939→
+  1940→    // ── Run 22 — IMAGE RE-ROLL: the last answer is a forged image.
+  1941→    // The current image is snapshotted into the variant history
+  1942→    // (nothing is ever lost — re-rolls are the point of image gen),
+  1943→    // the old row is truncated server-side, and the same prompt is
+  1944→    // re-forged with the same dimensions. ──
+  1945→    if (last.image) {
+  1946→      const regenVariants: AnswerVariant[] = [
+  1947→        ...(last.variants ?? []),
+  1948→        {
+  1949→          content: last.content,
+  1950→          model: last.model ?? "image-forge",
+  1951→          tokens: 0,
+  1952→          cached: false,
+  1953→          servedBy: last.servedBy ?? null,
+  1954→          keyLabel: last.keyLabel ?? null,
+  1955→          effort: last.effort ?? null,
+  1956→          image: last.image,
+  1957→        },
+  1958→      ];
+  1959→      const userPersisted = !userMsg.id.startsWith("u-");
+  1960→      if (!state.temporary && state.currentChatId && userPersisted) {
+  1961→        // Run 39 — THE FORK: nothing is deleted. The old image row
+  1962→        // stays in the tree as a sibling branch; the leaf rewinds to
+  1963→        // the user row so the re-forged image chains as its child.
+  1964→        await fetch("/api/chat/leaf", {
+  1965→          method: "POST",
+  1966→          headers: { "Content-Type": "application/json" },
+  1967→          body: JSON.stringify({ chatId: state.currentChatId, messageId: userMsg.id }),
+  1968→        }).catch(() => {});
+  1969→      }
+  1970→      set({ messages: msgs.slice(0, userIdx + 1) });
+  1971→      const size =
+  1972→        userMsg.imageRequest?.size ??
+  1973→        sizeFromDims(last.image.width, last.image.height) ??
+  1974→        state.imageSize;
+  1975→      await get().sendImage(userMsg.content, {
+  1976→        appendUserBubble: false,
+  1977→        persistUser: userMsg.id.startsWith("u-"),
+  1978→        size,
+  1979→        regenVariants,
+  1980→      });
+  1981→      return;
+  1982→    }
+  1983→
+  1984→    // Snapshot every earlier answer of this turn (existing variant
+  1985→    // history + the current one), full provenance included.
+  1986→    const regenVariants: AnswerVariant[] = [
+  1987→      ...(last.variants ?? []),
+  1988→      {
+  1989→        content: last.content,
+  1990→        model: last.model ?? "",
+  1991→        tokens: last.tokens ?? 0,
+  1992→        cached: Boolean(last.cached),
+  1993→        servedBy: last.servedBy ?? null,
+  1994→        keyLabel: last.keyLabel ?? null,
+  1995→        effort: last.effort ?? null,
+  1996→      },
+  1997→    ];
+  1998→
+  1999→    const history: ChatMessageData[] = msgs
+  2000→      .slice(0, userIdx)
+
+[showing lines 1-2000 of 2721; use offset=2001 with limit to continue reading]

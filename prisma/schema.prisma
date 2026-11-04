@@ -32,6 +32,14 @@ model Provider {
   // exactly one seat per successfully served request, survives
   // restarts (SQLite), and resets to 0 when the provider is switched.
   rotationCursor  Int     @default(0)
+  // Run 42 — THE FAIR RING: the KEY-ANCHORED cursor. A positional
+  // index shifts meaning whenever the pool changes (add / remove /
+  // toggle), silently re-pointing the rotation at another key. The
+  // anchor stores the ID of the key that serves NEXT instead: the
+  // cursor survives every pool mutation with its meaning intact.
+  // Resolved to a seat at pick time; the positional cursor stays in
+  // sync as the display/legacy fallback.
+  cursorKeyId     String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

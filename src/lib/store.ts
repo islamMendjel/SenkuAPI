@@ -17,6 +17,7 @@ import type {
   ImageSize,
   LimiterStatus,
   ProviderView,
+  RehearsalResult,
   RitualView,
   SearchSource,
   TurnStyle,
@@ -396,6 +397,17 @@ interface HermesState {
   addKey: (providerId: string, label: string, key: string) => Promise<void>;
   deleteKey: (keyId: string) => Promise<void>;
   toggleKey: (keyId: string, isActive: boolean) => Promise<void>;
+  /** Run 42 — run ONE liveness probe on a pooled key NOW (self-
+   *  service healing): refreshes the pool view from the response.
+   *  Resolves the probe verdict so the UI can toast it. */
+  probeKey: (
+    keyId: string
+  ) => Promise<{ ok: boolean; status: number; latencyMs: number; error: string | null }>;
+  /** Run 43 — THE RING REHEARSAL: dry-run the active provider's
+   *  rotation N turns into the future with the real pick logic.
+   *  Server-side the live cursor is snapshotted and restored (under
+   *  the pick lock), so this mutates nothing — pure foresight. */
+  rehearseRing: (turns?: number) => Promise<RehearsalResult>;
 
   newChat: (projectId?: string | null) => void;
   selectChat: (id: string) => Promise<void>;
@@ -790,6 +802,44 @@ export const useHermes = create<HermesState>((set, get) => ({
     if (view.error) throw new Error(view.error);
     set((s) => ({ providers: applyProviderView(s.providers, view) }));
     await get().refreshUsage();
+  },
+
+  // Run 42 — self-service healing: one probe, now. The response
+  // carries the refreshed provider view (the prober's verdict is
+  // already merged server-side), so the ring updates instantly —
+  // a healed seat flips emerald the moment the fix landed. A hard
+  // failure (404 / 409) comes back WITHOUT a view → throw; a
+  // completed probe returns its verdict even when it found the key
+  // dead (error field = the probe's own telemetry, not a crash).
+  async probeKey(keyId) {
+    const res = await fetch(`/api/keys/${keyId}/probe`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.view) throw new Error(data.error || "Probe failed");
+    set((s) => ({ providers: applyProviderView(s.providers, data.view) }));
+    await get().refreshUsage();
+    return {
+      ok: Boolean(data.ok),
+      status: Number(data.status ?? 0),
+      latencyMs: Number(data.latencyMs ?? 0),
+      error: data.error ?? null,
+    };
+  },
+
+  // Run 43 — THE RING REHEARSAL: foresight without side effects.
+  // The server walks the real pick logic N turns under the pick
+  // lock and restores the cursor before responding, so there is
+  // deliberately NO state write here — the result feeds the Orrery's
+  // local playback, and the live "next" badge stays exactly as it
+  // was. A failure throws; the caller toasts it.
+  async rehearseRing(turns = 10) {
+    const res = await fetch("/api/usage/rehearse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turns }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data as RehearsalResult;
   },
 
   setTurnStyle(s) {
