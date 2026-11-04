@@ -86,7 +86,7 @@ function seatTone(state: string): string {
 
 function seatText(k: {
   label: string;
-  live?: { state: string; lastLatencyMs: number | null } | null;
+  live?: { state: string; lastLatencyMs: number | null; lastProbeStatus: number | null } | null;
 }): string {
   const s = k.live?.state ?? "unproven";
   const base =
@@ -95,7 +95,9 @@ function seatText(k: {
       : s === "checkin"
         ? "needs a daily check-in"
         : s === "cooling"
-          ? "cooling down"
+          ? k.live?.lastProbeStatus === 401 || k.live?.lastProbeStatus === 403
+            ? "credential rejected — replace the key"
+            : "cooling down"
           : s === "down"
             ? "not responding"
             : "probing…";
@@ -119,11 +121,6 @@ function PoolCount({ limiter }: { limiter: LimiterStatus }) {
       <span className="font-semibold text-zinc-200">
         {serving ?? limiter.activeKeys}
       </span>{" "}
-      {serving !== null && (
-        <span className="text-zinc-600" aria-hidden>
-          /
-        </span>{" "}
-      )}
       {label}
     </span>
   );

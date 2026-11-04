@@ -14,7 +14,12 @@
 //   • Any success clears all strikes for that key.
 // State is intentionally in-memory (single-process personal gateway,
 // consistent with the local-memory caching policy): a restart simply
-// re-probes every key once.
+// re-probes every key once. The maps live on globalThis because Next
+// dev can evaluate this module in MORE THAN ONE module registry
+// (the instrumentation hook vs the route handlers) and hot reloads
+// re-evaluate it — the breaker's truth must be ONE map per process
+// either way, or the prober and the router would disagree about
+// which keys are quarantined (Run 41).
 
 export type FailureKind = "auth" | "transient" | "checkin";
 
@@ -33,14 +38,17 @@ interface KeyState {
   kind?: FailureKind;
 }
 
-const states = new Map<string, KeyState>();
+const states = ((globalThis as { __hermesKeyStates?: Map<string, KeyState> })
+  .__hermesKeyStates ??= new Map<string, KeyState>());
 
 // ── Run 41: per-boot serve ledger ────────────────────────────
 // Every POOLED success (chat pipeline + both /v1 bridges confirm
 // through noteKeySuccess) ticks this counter. It is the honest
 // "who actually served" evidence the UI and the fairness readout
-// display — in-memory by design, scoped to this process boot.
-const serveCounts = new Map<string, number>();
+// display — in-memory by design, scoped to this process boot
+// (globalThis so every module registry reads the same ledger).
+const serveCounts = ((globalThis as { __hermesServeCounts?: Map<string, number> })
+  .__hermesServeCounts ??= new Map<string, number>());
 
 function bumpServe(keyId: string): void {
   serveCounts.set(keyId, (serveCounts.get(keyId) ?? 0) + 1);

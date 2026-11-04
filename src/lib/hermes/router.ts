@@ -97,6 +97,13 @@ export interface PickResult {
   tried: number;
   /** Seat (canonical index) of the picked key — null when none. */
   seat: number | null;
+  /** Run 41 — true when the returned key is a LAST RESORT: every
+   *  not-yet-tried key is breaker-quarantined and this one was
+   *  handed out only because the ring refuses to run dry while a
+   *  probe might still recover it. Dispatchers use this to stop
+   * grinding through the whole dead pool when the failure is
+   * deterministic (auth / check-in) — one probe is the contract. */
+  lastResort?: boolean;
 }
 
 /**
@@ -163,8 +170,11 @@ async function pickKeyLocked(
   }
 
   // Prefer keys that are not cooling down; if ALL fresh keys are
-  // quarantined, probe them anyway (last resort, see docblock).
+  // quarantined, probe them anyway (last resort, see docblock) —
+  // flagged so the dispatchers can enforce "one deterministic
+  // probe", not a grind through every dead seat (Run 41).
   const ready = fresh.filter((k) => !isKeyCooling(k.id));
+  const lastResort = ready.length === 0;
   const pool = ready.length ? ready : fresh;
   // Fresh keys are a subsequence of the canonical ring — precompute
   // each pool member's SEAT so the cursor lands on true ring
@@ -201,6 +211,7 @@ async function pickKeyLocked(
         reason: "ok",
         tried,
         seat: candidateSeat,
+        ...(lastResort ? { lastResort: true } : {}),
       };
     }
   }

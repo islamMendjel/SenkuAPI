@@ -3996,3 +3996,118 @@ reader. And the agent's assistant bubble renders its own trace as
 plain Markdown lines (`⚙ / ✓`) above the answer — the same visual
 grammar the timeline already uses for provenance, one more line of
 honesty per tool run.
+
+## Run 41 — 2026-11-04: THE LIVING POOL — a round robin that heals itself and never lies
+
+**The lie this run kills:** the welcome screen said "4 keys live"
+and the Orrery said "4 keys in rotation" with a dead key marked
+NEXT — while the upstream truth was 2 keys 402-blocked (and by
+afternoon, 2 more 403-suspended). A pool that reports inventory as
+health is a pool the owner cannot trust exactly when it matters.
+
+**What shipped (backend — the perfect round robin):**
+- **Billing-aware breaker.** 402 ("Daily check-in required") is now
+  its own failure kind `checkin` — 1 strike = 10-minute quarantine
+  — distinct from auth (401/403) and transient. Wired through the
+  chat pipeline (executor → dispatch), both `/v1` bridges
+  (classifyStatus → withKeyFailover), so every path that touches a
+  pooled key speaks the same taxonomy.
+- **The background prober** (`src/lib/hermes/pool.ts`, armed at
+  boot by `instrumentation.ts` + belt-and-suspenders from
+  `limiterStatus`). Every 30s it asks each key the cheapest
+  liveness question that exists (max_tokens: 1): 200 → the key
+  (re)joins the rotation instantly (`noteKeySuccess`), 402 →
+  quarantined as check-in BEFORE any client pays for the
+  discovery, 401/403 → quarantined as auth. Healthy keys get a
+  keep-alive probe every 10 minutes so the UI never goes stale.
+  Discipline: the prober never quarantines a key the breaker
+  currently holds healthy, and probes never inflate the serve
+  ledger (`countServe: false`).
+- **Cross-registry truth.** Next dev evaluates modules in more
+  than one registry (instrumentation hook vs route handlers) — the
+  breaker states, serve ledger and probe records now live on
+  `globalThis`, so the prober and the router can never disagree
+  about which keys are quarantined (and state survives HMR).
+- **One last-resort probe, enforced.** When the ENTIRE pool is
+  quarantined, pickKey flags the handed-out key `lastResort`; if
+  it then fails deterministically (auth / check-in) both
+  dispatchers stop immediately — straight to the Z.ai cloud instead
+  of grinding N × 3–14s dead round-trips first. (The router's
+  docblock always promised "probe one"; now the code keeps the
+  promise.)
+- **Atomic seat reservation.** The pick critical section (read
+  cursor → scan → advance) runs under a per-provider promise-chain
+  mutex, so concurrent stream starts (chat + bridge + agent at
+  once) each reserve a DISTINCT seat — the ring stays perfectly
+  even exactly when traffic is heaviest.
+- **Per-boot serve ledger.** Every pooled success (chat + both
+  bridges) ticks `servedThisBoot` — the honest "who actually
+  served" number behind the UI's evidence tags.
+
+**What shipped (frontend — the bold change, truth as design):**
+- **The Living Medallion.** The homepage logo's pulse-ring now
+  carries one orbiting dot per active key, each dot the key's REAL
+  color right now (emerald = probe-verified live, amber pulsing =
+  needs its daily check-in, rose = breaker-held / rejected, zinc =
+  unproven). The medallion is a button into the Orrery; its tone
+  goes amber the moment any key stops serving — the homepage stops
+  asserting health and starts SHOWING it.
+- **Honest pulse line.** "0 of 2 keys serving" replaces "4 keys
+  live" — with the count served by the prober, `null` rendered as
+  "pooled" (never a fake digit) until the first probe pass lands.
+- **The truth-telling Orrery.** Seats carry per-state tags: amber
+  pulsing "check-in" (the actionable one — the key self-heals the
+  moment the owner checks in at the provider dashboard), rose
+  "rejected" for credential deaths (401/403 — replace the key, it
+  will not cool back), rose countdown for transient cooldowns,
+  emerald probe latency for serving keys, and the pool line reads
+  "N of M keys serving · rotation even". Tooltips and the sr-only
+  ring narration speak the full live phrase (state, latency,
+  serves this boot, last error).
+- **KeyRow verdicts.** Each key row ends with its live verdict in
+  a tone that encodes the required ACTION, e.g. "needs daily
+  check-in — self-heals once checked in" (amber) or "credential
+  rejected — replace the key" (rose).
+
+**Correction shipped alongside:** deleted 42 orphaned files
+(`src/components/senku/` + `src/lib/senku/`) — the entire
+pre-Hermes product iteration, zero importers, 21 phantom tsc
+errors polluting every baseline. Typecheck restored to the true
+6 pre-existing errors.
+
+**Verified (browser E2E, dev server on :3000):**
+- Prober classifications match direct upstream probes 1:1 (403
+  "Account suspended" → auth-quarantine, 402 "Daily check-in
+  required" → checkin-quarantine; the morning's two 200 keys
+  rendered emerald "serving" with ms-accurate probe latency before
+  the upstream degraded them).
+- Live drama, honestly tracked: upstream shifted under our feet —
+  Test key & Pool #2 went 403-suspended mid-run; the UI followed
+  within one probe cycle; the owner deleted the two dead keys and
+  the medallion/pulse/Orrery re-rendered "0 of 2 keys serving"
+  instantly. Zero restarts, zero stale claims.
+- Golden path through a FULLY-DEAD pool: chat turn → one
+  last-resort probe → cloud failover → "pong" with honest
+  provenance ("APInex · cloud failover"), well inside the old
+  N-round-trip budget.
+- Welcome: medallion warn tone ON with 2 amber pulsing orbit
+  dots; pulse line "1k today · 769k all-time · 0 of 2 keys
+  serving · APInex". Orrery: both seats amber "check-in", pool
+  line "0 of 2 keys serving · drift ±100%", NEXT on the cursor
+  seat, KeyRows carry the amber check-in verdict.
+- `/v1/models` → 200 (Run 39 bridge intact). Mobile 390px: no
+  horizontal overflow. Zero browser errors, zero server errors,
+  zero hydration warnings.
+- **Baselines:** lint 0 errors (2 pre-existing warnings); tsc
+  exactly the 6 pre-existing errors. Test chat deleted afterward
+  (28 remain). Zero TODOs shipped.
+
+**Sibling notes:** the check-in quarantine is deliberately the
+same 10 minutes as auth — both are deterministic account-state
+truths that only the owner (or time) changes, and the prober (not
+client traffic) is what re-tests them at expiry. The `lastResort`
+flag travels on PickResult so every current and future pool
+consumer (chat dispatch, both bridges, the agent) gets the
+one-probe contract for free. And the fairness "drift ±100%" on a
+never-served pool is correct math, not a bug — it evens out the
+moment the healed keys start serving.

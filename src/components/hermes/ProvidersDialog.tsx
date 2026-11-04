@@ -44,6 +44,32 @@ function fmtCountdown(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+// Run 41 — THE LIVING POOL: one honest phrase per key, built from
+// the prober's own records. Spoken by tooltips and screen readers
+// alike — the state, the evidence (latency / error), and the
+// per-boot serve ledger.
+function livePhrase(k: KeyView): string {
+  const live = k.live;
+  if (!live) return "";
+  const s =
+    live.state === "serving"
+      ? `probe-verified live${live.lastLatencyMs != null ? ` · ${live.lastLatencyMs}ms probe` : ""}`
+      : live.state === "checkin"
+        ? "needs its daily dashboard check-in (402) — it rejoins the pool automatically once checked in"
+        : live.state === "cooling"
+          ? live.lastProbeStatus === 401 || live.lastProbeStatus === 403
+            ? "credential rejected (suspended or rotated) — replace the key; auto re-probed every 10 min"
+            : "breaker cooldown"
+          : live.state === "down"
+            ? `not responding${live.lastError ? ` (${live.lastError})` : ""}`
+            : "awaiting first probe";
+  const serves =
+    live.serves > 0
+      ? ` · ${live.serves} serve${live.serves === 1 ? "" : "s"} this boot`
+      : "";
+  return ` · ${s}${serves}`;
+}
+
 const TIER_TAG: Record<string, string> = {
   monthly: "mo cap",
   daily: "day cap",
@@ -146,16 +172,41 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
           const isNext = predicted?.id === k.id;
           const cooling = cooldownLeft(k.coolingUntil, now);
           const blocked = k.blockedTier ?? null;
+          const live = k.live ?? null;
 
+          // Run 41 — the seat tells the key's REAL story: amber pulse
+          // = waiting on the owner's daily check-in (it self-heals
+          // the moment the dashboard check-in lands — the prober
+          // revives it, no restart needed); rose = breaker/down;
+          // emerald = probe-verified live right now.
           let ringCls = "border-zinc-600 bg-[#232326] text-zinc-300";
           let tag: { text: string; cls: string } | null = null;
+          let pulseSeat = false;
           if (!k.isActive) {
             ringCls = "border-zinc-700/60 bg-[#1a1a1c] text-zinc-600";
             tag = { text: "off", cls: "text-zinc-500" };
-          } else if (cooling !== null) {
+          } else if (live?.state === "checkin") {
             ringCls =
-              "border-rose-400/60 bg-rose-400/10 text-rose-300";
-            tag = { text: fmtCountdown(cooling), cls: "text-rose-300/90" };
+              "border-amber-400/70 bg-amber-400/10 text-amber-200";
+            tag = { text: "check-in", cls: "text-amber-300/90" };
+            pulseSeat = true;
+          } else if (cooling !== null) {
+            // A credential rejection (401/403 — suspended or rotated)
+            // is NOT a cooldown the key will outlive: the tag says
+            // "rejected" instead of a countdown that implies return.
+            if (live?.lastProbeStatus === 401 || live?.lastProbeStatus === 403) {
+              ringCls =
+                "border-rose-500/50 bg-rose-500/[0.08] text-rose-300";
+              tag = { text: "rejected", cls: "text-rose-300/90" };
+            } else {
+              ringCls =
+                "border-rose-400/60 bg-rose-400/10 text-rose-300";
+              tag = { text: fmtCountdown(cooling), cls: "text-rose-300/90" };
+            }
+          } else if (live?.state === "down") {
+            ringCls =
+              "border-rose-500/40 bg-rose-500/[0.07] text-rose-300/90";
+            tag = { text: "down", cls: "text-rose-300/80" };
           } else if (blocked) {
             ringCls =
               "border-amber-400/40 bg-amber-400/[0.07] text-amber-200/80";
@@ -163,6 +214,20 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
           } else if (isNext) {
             ringCls =
               "border-amber-300 bg-amber-300/15 text-amber-100 shadow-[0_0_18px_rgba(252,211,77,0.35)]";
+            // NEXT on a probe-verified key keeps its evidence tag —
+            // the ring can say "next" AND "412ms live" at once.
+            if (live?.state === "serving" && live.lastLatencyMs != null) {
+              tag = { text: `${live.lastLatencyMs}ms`, cls: "text-emerald-300/80" };
+            }
+          } else if (live?.state === "serving") {
+            ringCls =
+              "border-emerald-500/45 bg-emerald-500/[0.07] text-emerald-200";
+            tag =
+              live.lastLatencyMs != null
+                ? { text: `${live.lastLatencyMs}ms`, cls: "text-emerald-300/80" }
+                : { text: "live", cls: "text-emerald-300/80" };
+          } else if (live?.state === "unproven") {
+            tag = { text: "probing…", cls: "text-zinc-500" };
           }
 
           return (
@@ -174,12 +239,12 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
                 top: `${top}%`,
                 transform: "translate(-50%, -50%)",
               }}
-              title={`${k.label} · ${k.masked}${k.lastUsedAt ? ` · last served ${new Date(k.lastUsedAt).toLocaleDateString()}` : " · never served"}`}
+              title={`${k.label} · ${k.masked}${livePhrase(k)}${k.lastUsedAt ? ` · last served ${new Date(k.lastUsedAt).toLocaleDateString()}` : " · never served"}`}
             >
               <div
                 className={`flex h-9 w-9 items-center justify-center rounded-full border font-mono text-[12px] font-semibold transition-all duration-500 ${ringCls} ${
                   isNext ? "scale-110" : ""
-                }`}
+                } ${pulseSeat ? "animate-pulse" : ""}`}
               >
                 {seat + 1}
               </div>
@@ -200,23 +265,45 @@ function Orrery({ provider, now }: { provider: ProviderView; now: number }) {
         })}
       </div>
 
-      <p
-        className="mt-4 flex items-center justify-center gap-1.5 pb-1.5 text-[11px] text-zinc-500"
-        title="Spread of month-to-date spend across the pool's active keys. The perfected rotation advances one seat per served request, so this evens out as traffic flows."
-      >
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${fairness.even ? "bg-emerald-400" : "bg-amber-400"}`}
-          aria-hidden
-        />
-        {keys.filter((k) => k.isActive).length} keys in rotation ·{" "}
-        <span className={fairness.even ? "text-emerald-300/90" : "text-amber-300/90"}>
-          {fairness.label}
-        </span>
-      </p>
+      {/* Run 41 — the pool line tells the SERVING truth, not the
+          inventory: "2 of 4 keys serving" while the prober holds
+          the dead seats. The dot's tone follows pool health; the
+          fairness readout keeps proving the rotation stays even. */}
+      {(() => {
+        const activeCount = keys.filter((k) => k.isActive).length;
+        const serving = keys.filter(
+          (k) => k.isActive && k.live?.state === "serving"
+        ).length;
+        const allLive = activeCount > 0 && serving === activeCount;
+        return (
+          <p
+            className="mt-4 flex items-center justify-center gap-1.5 pb-1.5 text-[11px] text-zinc-500"
+            title={`${serving} of ${activeCount} active keys are probe-verified live right now (background prober, 30s cadence). Spread of month-to-date spend across the pool's active keys — the perfected rotation advances one seat per served request, so this evens out as traffic flows.`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                allLive ? "bg-emerald-400" : "bg-amber-400"
+              }`}
+              aria-hidden
+            />
+            {serving} of {activeCount} keys serving ·{" "}
+            <span className={fairness.even ? "text-emerald-300/90" : "text-amber-300/90"}>
+              {fairness.label}
+            </span>
+          </p>
+        );
+      })()}
       <span className="sr-only">
         Round-robin ring: seat {cursor + 1} of {n} serves next.
         {keys
-          .map((k) => `Seat ${(k.seat ?? 0) + 1} ${k.label}: ${k.isActive ? "active" : "off"}${k.coolingUntil ? ", cooling down" : ""}${k.blockedTier ? `, blocked by ${k.blockedTier} tier` : ""}.`)
+          .map(
+            (k) =>
+              `Seat ${(k.seat ?? 0) + 1} ${k.label}: ${
+                k.isActive ? "active" : "off"
+              }${livePhrase(k)}${k.coolingUntil ? ", cooling down" : ""}${
+                k.blockedTier ? `, blocked by ${k.blockedTier} tier` : ""
+              }.`
+          )
           .join(" ")}
       </span>
     </div>
@@ -377,14 +464,42 @@ function KeyRow({
 }) {
   const cooling = cooldownLeft(k.coolingUntil, now);
   const blocked = k.blockedTier ?? null;
-  const state =
-    !k.isActive
-      ? "off"
-      : cooling !== null
-        ? `cooling ${fmtCountdown(cooling)}`
-        : blocked
-          ? TIER_TAG[blocked]
-          : null;
+  const live = k.live ?? null;
+  // Run 41 — the row speaks the key's live truth, with a tone per
+  // verdict: amber = an owner ACTION (daily check-in), rose =
+  // cooling / not responding, emerald = probe-verified serving.
+  let state: string | null = null;
+  let stateCls = "";
+  if (!k.isActive) {
+    state = "off";
+  } else if (live?.state === "checkin") {
+    state = "needs daily check-in — self-heals once checked in";
+    stateCls = " text-amber-300/90";
+  } else if (cooling !== null) {
+    state =
+      live?.lastProbeStatus === 401 || live?.lastProbeStatus === 403
+        ? "credential rejected — replace the key"
+        : `cooling ${fmtCountdown(cooling)}`;
+    stateCls = " text-rose-300/80";
+  } else if (live?.state === "down") {
+    state = "not responding";
+    stateCls = " text-rose-300/80";
+  } else if (blocked) {
+    state = TIER_TAG[blocked];
+    stateCls = " text-amber-200/70";
+  } else if (live?.state === "serving") {
+    state = `serving${
+      live.lastLatencyMs != null ? ` · ${live.lastLatencyMs}ms probe` : ""
+    }${
+      live.serves > 0
+        ? ` · ${live.serves} serve${live.serves === 1 ? "" : "s"} this boot`
+        : ""
+    }`;
+    stateCls = " text-emerald-300/80";
+  } else if (live?.state === "unproven") {
+    state = "probing…";
+    stateCls = " text-zinc-500";
+  }
   return (
     <div className="flex items-center gap-2.5 rounded-lg border border-zinc-800/80 bg-[#18181b] px-2.5 py-2">
       <div className="min-w-0 flex-1">
@@ -397,18 +512,7 @@ function KeyRow({
             ? ` · used ${new Date(k.lastUsedAt).toLocaleDateString()}`
             : " · never used"}
           {state && (
-            <span
-              className={
-                cooling !== null
-                  ? " text-rose-300/80"
-                  : blocked
-                    ? " text-amber-200/70"
-                    : ""
-              }
-            >
-              {" "}
-              · {state}
-            </span>
+            <span className={stateCls}> · {state}</span>
           )}
         </p>
       </div>

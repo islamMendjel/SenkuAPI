@@ -13,7 +13,7 @@ import {
   HIGH_PACE_THRESHOLD,
   MONTHLY_POOL_PER_KEY,
 } from "./constants";
-import { servingCount } from "./pool";
+import { servingCount, startPoolProber } from "./pool";
 import type { LimiterStatus, PaceStatus, TierInfo } from "./types";
 
 // ── Usage day (Run 14) ─────────────────────────────────────
@@ -201,6 +201,13 @@ export async function limiterStatus(provider: {
   tokenLimitPerKey: number;
   tokenMultiplier: number;
 }): Promise<LimiterStatus> {
+  // Run 41 — belt and suspenders: the pool prober is armed at boot
+  // by instrumentation.ts, but arming it here too guarantees the
+  // tick loop exists even if the instrumentation hook never fired
+  // in this process. The globalThis guard inside makes this a no-op
+  // when the loop is already running — exactly one prober per
+  // process, whatever path created it.
+  startPoolProber();
   const keys = await db.apiKey.findMany({
     where: { providerId: provider.id, isActive: true },
     orderBy: { createdAt: "asc" },

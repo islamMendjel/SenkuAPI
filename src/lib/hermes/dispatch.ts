@@ -154,6 +154,19 @@ export async function dispatchCompletion(
           : "transient"
     );
 
+    // Run 41 — a fully-quarantined pool probed as a LAST RESORT
+    // that fails DETERMINISTICALLY (credential rejected / check-in
+    // demanded) must not grind through every remaining dead seat:
+    // one probe is the contract, and the answer cannot change
+    // within this turn — straight to the cloud so the user still
+    // gets an answer fast instead of after N × round-trips.
+    if (
+      picked.lastResort &&
+      (attempt.reason === "auth" || attempt.reason === "checkin")
+    ) {
+      break;
+    }
+
     // 429/503 with a Retry-After hint: wait it out (bounded ≤3 s by
     // the executor's parser) before hammering the pool again — but
     // never when the client is already gone, and never unbounded.

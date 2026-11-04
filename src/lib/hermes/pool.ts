@@ -65,7 +65,15 @@ const FIRST_TICK_DELAY_MS = 1_500;
 
 let ticking = false;
 
-const records = new Map<string, PoolKeyRecord>();
+// The records live on globalThis (Run 41): Next dev evaluates this
+// module in more than one module registry — the instrumentation
+// hook arms the tick loop, while the route handlers read
+// poolKeyRecords() — and they MUST see the same probe truth, or
+// the UI would report "unproven" forever while the prober happily
+// probes. Hot reloads re-evaluate the module too; the records
+// survive with the process, like the breaker's state.
+const records = ((globalThis as { __hermesPoolRecords?: Map<string, PoolKeyRecord> })
+  .__hermesPoolRecords ??= new Map<string, PoolKeyRecord>());
 
 function recordFor(keyId: string): PoolKeyRecord {
   let r = records.get(keyId);

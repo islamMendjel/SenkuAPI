@@ -161,6 +161,16 @@ export async function withKeyFailover<T>(
     if (!attempt.retry) return { exhausted: true, attempts: tried.size };
 
     noteKeyFailure(picked.key.id, attempt.reason);
+    // Run 41 — the last-resort probe of a fully-quarantined pool
+    // failed DETERMINISTICALLY (auth / check-in): stop here — one
+    // probe is the contract, the caller surfaces the upstream error
+    // immediately instead of after grinding every dead seat.
+    if (
+      picked.lastResort &&
+      (attempt.reason === "auth" || attempt.reason === "checkin")
+    ) {
+      return { exhausted: true, attempts: tried.size };
+    }
     if (attempt.status === 429 || attempt.status === 503) {
       // The upstream told us when it will breathe again — wait a
       // bounded moment so the next key isn't hammered in the same
