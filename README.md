@@ -1,6 +1,9 @@
 <div align="center">
-
+<!--
 <img src="https://senku.space-z.ai/senku-sparkle.png" alt="Senku Logo" width="80" />
+-->
+
+<img src="https://raw.githubusercontent.com/islamMendjel/SenkuAPI/refs/heads/main/public/senku-sparkle.png" alt="Senku Logo" width="80" />
 
 # Senku
 
